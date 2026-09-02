@@ -1,0 +1,12 @@
+{
+  "name": "zhaoyun-adou-realtime",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter @adou/server --filter @adou/client dev",
+    "build": "pnpm --filter @adou/client build && pnpm --filter @adou/server check",
+    "test": "pnpm --filter @adou/shared test",
+    "check": "pnpm -r check"
+  }
+}
