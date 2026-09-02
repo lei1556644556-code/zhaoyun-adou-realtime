@@ -30,6 +30,31 @@ button { touch-action: manipulation; }
 .site-shell { width: min(1380px, 100%); min-height: 100dvh; margin: 0 auto; padding: clamp(12px, 2vw, 28px); }
 .eyebrow { margin: 0 0 9px; color: #7c4b38; font-size: 12px; font-weight: 900; letter-spacing: .14em; }
 
+.auth-screen {
+  min-height: calc(100dvh - clamp(24px, 4vw, 56px));
+  display: grid;
+  grid-template-columns: minmax(320px, 1.12fr) minmax(390px, .88fr);
+  overflow: hidden;
+  border: 1px solid rgba(233, 210, 157, .5);
+  border-radius: 18px;
+  background: rgba(245, 238, 220, .98);
+  box-shadow: 0 30px 100px rgba(0,0,0,.42);
+}
+.auth-art { position: relative; min-height: 650px; overflow: hidden; background: #263f36; }
+.auth-art::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent 52%, rgba(245,238,220,.98)); }
+.auth-art img { width: 100%; height: 100%; object-fit: cover; object-position: 48% 50%; filter: saturate(.95) contrast(1.04); }
+.auth-panel { align-self: center; width: min(520px, 100%); padding: clamp(34px, 5.2vw, 76px); }
+.auth-panel h1 { margin: 0; font: 900 clamp(48px, 5.2vw, 76px)/1 "STKaiti", "KaiTi", serif; color: #315348; letter-spacing: -.06em; }
+.auth-lead { margin: 20px 0 25px; color: #667069; font-size: 15px; line-height: 1.75; }
+.auth-tabs { display: grid; grid-template-columns: 1fr 1fr; margin-bottom: 20px; border-bottom: 1px solid rgba(69,107,93,.2); }
+.auth-tabs button { border: 0; border-bottom: 3px solid transparent; padding: 12px; background: transparent; color: #85857c; cursor: pointer; font-weight: 900; }
+.auth-tabs button.is-active { border-color: #a6533f; color: #314f45; }
+.auth-form { display: grid; gap: 9px; }
+.auth-form .field-label:not(:first-child) { margin-top: 7px; }
+.auth-submit { width: 100%; margin-top: 13px; }
+.auth-submit:disabled { opacity: .58; cursor: wait; }
+.auth-message { min-height: 42px; margin: 16px 0 0; color: #777a70; font-size: 13px; line-height: 1.6; }
+
 .lobby {
   min-height: calc(100dvh - clamp(24px, 4vw, 56px));
   display: grid;
@@ -61,6 +86,14 @@ button { touch-action: manipulation; }
 .btn-quiet { border-color: rgba(75,89,78,.3); background: #e7dfcc; color: #4e594f; }
 .primary-actions .btn { flex: 1; }
 .lobby-note { min-height: 40px; margin: 18px 0 0; color: #777a70; font-size: 13px; line-height: 1.6; }
+.account-strip { display: flex; align-items: center; gap: 14px; margin: 0 0 20px; padding: 12px 14px; border: 1px solid rgba(62,92,79,.18); border-radius: 10px; background: rgba(255,255,255,.5); }
+.account-strip div { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.account-strip span { color: #7b8079; font-size: 11px; }
+.account-strip strong { overflow: hidden; color: #36594c; font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }
+.account-strip i { color: #4e8668; font-size: 12px; font-style: normal; }
+.account-strip i[data-tone="syncing"] { color: #a77939; }
+.account-strip i[data-tone="error"] { color: #b5473e; }
+.account-strip button { border: 0; padding: 7px 9px; background: transparent; color: #836052; cursor: pointer; font-size: 12px; }
 
 .battle-shell { --game-width: 640px; max-width: 1080px; margin: 0 auto; }
 .battle-toolbar { min-height: 52px; display: flex; align-items: center; gap: 18px; margin-bottom: 10px; padding: 8px 14px; border: 1px solid rgba(226,202,150,.4); border-radius: 10px; background: rgba(248,242,226,.96); box-shadow: 0 10px 30px rgba(0,0,0,.18); }
@@ -110,6 +143,10 @@ button { touch-action: manipulation; }
 
 @media (max-width: 880px) {
   .site-shell { padding: 8px; }
+  .auth-screen { grid-template-columns: 1fr; }
+  .auth-art { min-height: 310px; }
+  .auth-art::after { background: linear-gradient(0deg, rgba(245,238,220,.98), transparent 70%); }
+  .auth-panel { margin: -38px auto 0; padding: 22px 24px 34px; position: relative; z-index: 1; }
   .lobby { grid-template-columns: 1fr; min-height: auto; }
   .lobby-art { min-height: 290px; }
   .lobby-art::after { background: linear-gradient(0deg, rgba(245,238,220,.96), transparent 62%); }
@@ -122,6 +159,11 @@ button { touch-action: manipulation; }
 
 @media (max-width: 600px) {
   .site-shell { padding: 0; }
+  .auth-screen { min-height: 100dvh; border: 0; border-radius: 0; }
+  .auth-art { min-height: 230px; }
+  .auth-panel { margin-top: -26px; padding: 16px 20px 28px; }
+  .auth-panel h1 { font-size: 52px; }
+  .auth-lead { margin: 13px 0 17px; font-size: 13px; }
   .lobby { min-height: 100dvh; border: 0; border-radius: 0; }
   .lobby-art { min-height: 245px; }
   .lobby-copy { padding: 16px 18px 26px; }

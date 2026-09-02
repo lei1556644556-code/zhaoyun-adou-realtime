@@ -51,21 +51,23 @@ export const HERO_PAIRS: Record<string, string> = {
   "黄+祖": "黄祖", "祖+黄": "黄祖", "刘+备": "刘备", "备+刘": "刘备",
 };
 
+export type HeroRarity = "gold" | "purple";
+
 export const GENERALS: Record<string, {
-  weapon: string; attack: number; intervalMs: number; range: number; maxLevel: number; skill: string;
+  weapon: string; attack: number; intervalMs: number; range: number; maxLevel: number; rarity: HeroRarity; skill: string;
 }> = {
-  赵云: { weapon: "枪", attack: 2, intervalMs: 800, range: 2.5, maxLevel: 5, skill: "30次普攻后七进七出，往返突进7次" },
-  张飞: { weapon: "枪", attack: 10, intervalMs: 1000, range: 2.5, maxLevel: 5, skill: "15次普攻后范围眩晕2秒" },
-  马超: { weapon: "枪", attack: 10, intervalMs: 1000, range: 2.5, maxLevel: 5, skill: "普攻30%眩晕0.5秒；Boss 10%/0.2秒" },
-  关羽: { weapon: "刀", attack: 20, intervalMs: 1000, range: 2.5, maxLevel: 5, skill: "20次普攻后连续5次跳斩，50%范围溅射" },
-  黄忠: { weapon: "弓", attack: 6, intervalMs: 800, range: 4.5, maxLevel: 5, skill: "30次普攻后火箭烈，单箭2倍攻击" },
-  关平: { weapon: "刀", attack: 3, intervalMs: 1000, range: 2.5, maxLevel: 3, skill: "15次普攻后范围眩晕1秒" },
-  关兴: { weapon: "刀", attack: 7, intervalMs: 1000, range: 2.5, maxLevel: 3, skill: "10%概率眩晕普通敌人0.3秒" },
-  张苞: { weapon: "枪", attack: 7, intervalMs: 1000, range: 2.5, maxLevel: 3, skill: "10%概率眩晕普通敌人0.3秒" },
-  张翼: { weapon: "骑/剑", attack: 7, intervalMs: 1000, range: 2.5, maxLevel: 3, skill: "20次普攻后下一次跳斩，50%范围溅射" },
-  黄盖: { weapon: "骑/剑", attack: 8, intervalMs: 1000, range: 2.5, maxLevel: 3, skill: "无额外武将技能" },
-  刘备: { weapon: "骑/剑", attack: 10, intervalMs: 800, range: 2.5, maxLevel: 5, skill: "20次普攻后圣剑，5倍攻击并击倒" },
-  黄祖: { weapon: "弓", attack: 6, intervalMs: 800, range: 3.5, maxLevel: 3, skill: "30次普攻后箭雨" },
+  赵云: { weapon: "枪", attack: 2, intervalMs: 800, range: 2.5, maxLevel: 5, rarity: "gold", skill: "30次普攻后七进七出，往返突进7次" },
+  张飞: { weapon: "枪", attack: 10, intervalMs: 1000, range: 2.5, maxLevel: 5, rarity: "gold", skill: "15次普攻后范围眩晕2秒" },
+  马超: { weapon: "枪", attack: 10, intervalMs: 1000, range: 2.5, maxLevel: 5, rarity: "gold", skill: "普攻30%眩晕0.5秒；Boss 10%/0.2秒" },
+  关羽: { weapon: "刀", attack: 20, intervalMs: 1000, range: 2.5, maxLevel: 5, rarity: "gold", skill: "20次普攻后连续5次跳斩，50%范围溅射" },
+  黄忠: { weapon: "弓", attack: 6, intervalMs: 800, range: 4.5, maxLevel: 5, rarity: "gold", skill: "30次普攻后火箭烈，单箭2倍攻击" },
+  关平: { weapon: "刀", attack: 3, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", skill: "15次普攻后范围眩晕1秒" },
+  关兴: { weapon: "刀", attack: 7, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", skill: "10%概率眩晕普通敌人0.3秒" },
+  张苞: { weapon: "枪", attack: 7, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", skill: "10%概率眩晕普通敌人0.3秒" },
+  张翼: { weapon: "骑/剑", attack: 7, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", skill: "20次普攻后下一次跳斩，50%范围溅射" },
+  黄盖: { weapon: "骑/剑", attack: 8, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", skill: "无额外武将技能" },
+  刘备: { weapon: "骑/剑", attack: 10, intervalMs: 800, range: 2.5, maxLevel: 5, rarity: "gold", skill: "20次普攻后圣剑，5倍攻击并击倒" },
+  黄祖: { weapon: "弓", attack: 6, intervalMs: 800, range: 3.5, maxLevel: 3, rarity: "purple", skill: "30次普攻后箭雨" },
 };
 
 export const LEVEL_ATTACK = [1, 1.5, 2.1, 2.73, 3.276] as const;

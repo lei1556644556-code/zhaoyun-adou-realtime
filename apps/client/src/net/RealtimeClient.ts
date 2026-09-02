@@ -12,9 +12,11 @@ export class RealtimeClient extends EventTarget {
   stateVersion = 0;
   private connectedOnce = false;
   private resuming = false;
+  private storageKey: string;
 
-  constructor(serverUrl: string) {
+  constructor(serverUrl: string, storageKey = "adou-session") {
     super();
+    this.storageKey = storageKey;
     this.socket = io(serverUrl, { transports: ["websocket", "polling"], autoConnect: true });
     this.socket.on("connect", () => {
       this.emit("network", { connected: true });
@@ -49,7 +51,7 @@ export class RealtimeClient extends EventTarget {
   private remember(result: JoinedPayload) {
     if (!result.ok || result.slot === undefined || !result.roomId || !result.token) return result;
     this.slot = result.slot; this.roomId = result.roomId; this.token = result.token;
-    localStorage.setItem("adou-session", JSON.stringify({ roomId: this.roomId, token: this.token }));
+    localStorage.setItem(this.storageKey, JSON.stringify({ roomId: this.roomId, token: this.token }));
     return result;
   }
 

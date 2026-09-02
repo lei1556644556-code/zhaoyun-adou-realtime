@@ -3,20 +3,43 @@ import { GAME_CONFIG, MAP_LAYOUTS, type GameCommand, type MatchSnapshot, type Pl
 import { createGame } from "./game/BattleScene";
 import { PracticeEngine } from "./game/PracticeEngine";
 import { RealtimeClient } from "./net/RealtimeClient";
+import { SupabaseService, type CloudProgress, type PlayerProfile } from "./auth/SupabaseService";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("Missing #app");
 
 app.innerHTML = `
   <main class="site-shell">
-    <section class="lobby" id="lobby">
+    <section class="auth-screen" id="auth-screen">
+      <div class="auth-art" aria-hidden="true"><img src="assets/backgrounds/lobby-zhaoyun-adou.webp" alt="" /></div>
+      <div class="auth-panel">
+        <p class="eyebrow">云端战令 · 跨设备续战</p>
+        <h1>赵云与阿斗</h1>
+        <p class="auth-lead">创建你的战场账号。密码由 Supabase Auth 加密保管，游戏进度只对当前账号开放。</p>
+        <div class="auth-tabs" role="tablist" aria-label="账号操作">
+          <button class="is-active" id="auth-login-tab" type="button" role="tab" aria-selected="true">登录</button>
+          <button id="auth-register-tab" type="button" role="tab" aria-selected="false">创建账号</button>
+        </div>
+        <form class="auth-form" id="auth-form">
+          <label class="field-label" for="auth-username">账号</label>
+          <input class="text-input" id="auth-username" minlength="2" maxlength="16" autocomplete="username" placeholder="2–16位中英文、数字或下划线" required />
+          <label class="field-label" for="auth-password">密码</label>
+          <input class="text-input" id="auth-password" type="password" minlength="6" maxlength="72" autocomplete="current-password" placeholder="至少6位" required />
+          <label class="field-label auth-confirm-row" for="auth-confirm" hidden>确认密码</label>
+          <input class="text-input auth-confirm-row" id="auth-confirm" type="password" minlength="6" maxlength="72" autocomplete="new-password" placeholder="再次输入密码" hidden />
+          <button class="btn btn-primary auth-submit" id="auth-submit" type="submit">进入战场</button>
+        </form>
+        <p class="auth-message" id="auth-message" aria-live="polite">首次游玩请先创建账号；以后可在电脑或手机继续进度。</p>
+      </div>
+    </section>
+
+    <section class="lobby" id="lobby" hidden>
       <div class="lobby-art" aria-hidden="true"><img src="assets/backgrounds/lobby-zhaoyun-adou.webp" alt="" /></div>
       <div class="lobby-copy">
         <p class="eyebrow">1.0.9 规则复刻 · 新增实时对战</p>
         <h1><span>合字成将 · 护住阿斗</span>赵云与阿斗</h1>
         <p class="lead">五连征兵、营地拖放、铲子开格、同字升级与合字成将均按安装包基线运行。先选人机熟悉规则，或直接创建房间、输入房号、随机匹配。</p>
-        <label class="field-label" for="player-name">玩家名</label>
-        <input class="text-input" id="player-name" maxlength="16" value="常山侠客" autocomplete="nickname" />
+        <div class="account-strip"><div><span>当前战令</span><strong id="player-name">未登录</strong></div><i id="cloud-status">云端同步中</i><button id="logout" type="button">退出账号</button></div>
         <div class="primary-actions">
           <button class="btn btn-primary" id="practice">人机对战</button>
           <button class="btn btn-accent" id="quick">随机匹配</button>
@@ -72,9 +95,11 @@ app.innerHTML = `
   </main>`;
 
 const lobby = get<HTMLElement>("lobby");
+const authScreen = get<HTMLElement>("auth-screen");
 const battleShell = get<HTMLElement>("battle-shell");
 const lobbyNote = get<HTMLElement>("lobby-note");
 const game = createGame("game");
+const cloud = new SupabaseService();
 let snapshot: MatchSnapshot | null = null;
 let slot: PlayerSlot = 0;
 let practice: PracticeEngine | null = null;
@@ -85,11 +110,14 @@ let roomPlayers: Array<{ slot: PlayerSlot; name: string }> = [];
 let activeMode: "practice" | "online" | null = null;
 let lastPracticeSaveAt = 0;
 let battlefieldZoom = readStoredZoom();
+let currentProfile: PlayerProfile | null = null;
+let authMode: "login" | "register" = "login";
+let cloudSaveTimer = 0;
+let cloudSaveInFlight: Promise<void> | null = null;
 
 const ACTIVE_MODE_KEY = "adou-active-mode-v1";
 const PRACTICE_SAVE_KEY = "adou-practice-save-v1";
 const ONLINE_SESSION_KEY = "adou-session";
-const PLAYER_NAME_KEY = "adou-player-name";
 const BATTLEFIELD_ZOOM_KEY = "adou-battlefield-zoom-v1";
 
 function get<T extends HTMLElement>(id: string) {
@@ -97,7 +125,8 @@ function get<T extends HTMLElement>(id: string) {
   if (!element) throw new Error(`Missing #${id}`);
   return element as T;
 }
-function playerName() { return get<HTMLInputElement>("player-name").value.trim() || "常山侠客"; }
+function playerName() { return currentProfile?.username ?? "常山侠客"; }
+function scopedStorageKey(base: string) { return `${base}:${currentProfile?.userId ?? "guest"}`; }
 function roomServerUrl() {
   const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1";
   return import.meta.env.VITE_SERVER_URL || (isLocal ? `${location.protocol}//${location.hostname}:3001` : location.origin);
@@ -143,10 +172,10 @@ function changeBattlefieldZoom(delta: number) {
 
 function readPracticeSave() {
   try {
-    const saved = JSON.parse(localStorage.getItem(PRACTICE_SAVE_KEY) ?? "null") as { version?: number; snapshot?: MatchSnapshot } | null;
+    const saved = JSON.parse(localStorage.getItem(scopedStorageKey(PRACTICE_SAVE_KEY)) ?? "null") as { version?: number; savedAt?: number; snapshot?: MatchSnapshot } | null;
     const value = saved?.snapshot;
     if (saved?.version !== 1 || !value || !Array.isArray(value.players) || value.players.length !== 2) return null;
-    return value;
+    return { savedAt: saved.savedAt ?? 0, snapshot: value };
   } catch { return null; }
 }
 
@@ -155,7 +184,50 @@ function savePractice(force = false) {
   const now = Date.now();
   if (!force && now - lastPracticeSaveAt < 500) return;
   lastPracticeSaveAt = now;
-  localStorage.setItem(PRACTICE_SAVE_KEY, JSON.stringify({ version: 1, savedAt: now, snapshot }));
+  localStorage.setItem(scopedStorageKey(PRACTICE_SAVE_KEY), JSON.stringify({ version: 1, savedAt: now, snapshot }));
+  scheduleCloudSave(force);
+}
+
+function currentCloudProgress(): CloudProgress {
+  return {
+    version: 1,
+    savedAt: Date.now(),
+    activeMode,
+    ...(activeMode === "practice" && snapshot ? { practiceSnapshot: snapshot } : {}),
+  };
+}
+
+function setCloudStatus(message: string, tone: "syncing" | "ok" | "error" = "ok") {
+  const status = get("cloud-status");
+  status.textContent = message;
+  status.dataset.tone = tone;
+}
+
+function scheduleCloudSave(force = false) {
+  if (!currentProfile) return;
+  if (!force && cloudSaveTimer) return;
+  window.clearTimeout(cloudSaveTimer);
+  cloudSaveTimer = 0;
+  setCloudStatus("正在同步", "syncing");
+  const run = async () => {
+    cloudSaveTimer = 0;
+    if (!currentProfile) return;
+    const profile = currentProfile;
+    const progress = currentCloudProgress();
+    try {
+      if (cloudSaveInFlight) await cloudSaveInFlight;
+      cloudSaveInFlight = cloud.saveProgress(profile, progress);
+      await cloudSaveInFlight;
+      setCloudStatus("云端已同步", "ok");
+    } catch (error) {
+      setCloudStatus("同步失败", "error");
+      showToast(error instanceof Error ? error.message : "云存档同步失败");
+    } finally {
+      cloudSaveInFlight = null;
+    }
+  };
+  if (force) void run();
+  else cloudSaveTimer = window.setTimeout(() => void run(), 2400);
 }
 
 function enterBattle(mode: string, network: boolean) {
@@ -179,8 +251,8 @@ function startPractice(saved?: MatchSnapshot) {
   online?.close(); online = null;
   practice?.stop(); practice = new PracticeEngine(saved); slot = 0;
   activeMode = "practice";
-  localStorage.setItem(ACTIVE_MODE_KEY, activeMode);
-  localStorage.removeItem(ONLINE_SESSION_KEY);
+  localStorage.setItem(scopedStorageKey(ACTIVE_MODE_KEY), activeMode);
+  localStorage.removeItem(scopedStorageKey(ONLINE_SESSION_KEY));
   commandSink = (command) => practice?.send(command);
   practice.addEventListener("snapshot", (event) => updateSnapshot((event as CustomEvent<MatchSnapshot>).detail));
   practice.addEventListener("notice", (event) => showToast((event as CustomEvent<{ message: string }>).detail.message));
@@ -188,6 +260,7 @@ function startPractice(saved?: MatchSnapshot) {
   get("opponent-name").textContent = "演武军士";
   enterBattle(saved ? "人机对战 · 已恢复" : "人机对战", false);
   practice.start();
+  scheduleCloudSave();
 }
 
 function bindOnline(client: RealtimeClient) {
@@ -209,8 +282,7 @@ function bindOnline(client: RealtimeClient) {
 async function onlineAction(kind: "create" | "join" | "quick") {
   practice?.stop(); practice = null;
   online?.close();
-  localStorage.setItem(PLAYER_NAME_KEY, playerName());
-  online = new RealtimeClient(roomServerUrl()); bindOnline(online);
+  online = new RealtimeClient(roomServerUrl(), scopedStorageKey(ONLINE_SESSION_KEY)); bindOnline(online);
   lobbyNote.textContent = "正在连接房间服务器……";
   const result = kind === "create" ? await online.create(playerName())
     : kind === "quick" ? await online.quick(playerName())
@@ -220,7 +292,8 @@ async function onlineAction(kind: "create" | "join" | "quick") {
   }
   slot = result.slot; commandSink = (command) => online?.send(command);
   activeMode = "online";
-  localStorage.setItem(ACTIVE_MODE_KEY, activeMode);
+  localStorage.setItem(scopedStorageKey(ACTIVE_MODE_KEY), activeMode);
+  scheduleCloudSave();
   enterBattle(kind === "quick" ? "随机匹配" : "真人房间", true);
   get("room-banner").hidden = false; get("room-id").textContent = result.roomId;
   get("last-event").textContent = "等待另一位玩家进入";
@@ -278,28 +351,37 @@ get("zoom-fit").addEventListener("click", () => {
   localStorage.setItem(BATTLEFIELD_ZOOM_KEY, "1");
   applyBattlefieldScale();
 });
-get("exit-match").addEventListener("click", () => {
+get("exit-match").addEventListener("click", async () => {
   practice?.stop(); online?.close();
-  localStorage.removeItem(ACTIVE_MODE_KEY);
-  localStorage.removeItem(PRACTICE_SAVE_KEY);
-  localStorage.removeItem(ONLINE_SESSION_KEY);
-  location.href = location.pathname;
+  practice = null; online = null; commandSink = null; snapshot = null; activeMode = null;
+  localStorage.removeItem(scopedStorageKey(ACTIVE_MODE_KEY));
+  localStorage.removeItem(scopedStorageKey(PRACTICE_SAVE_KEY));
+  localStorage.removeItem(scopedStorageKey(ONLINE_SESSION_KEY));
+  if (currentProfile) {
+    try { await cloud.saveProgress(currentProfile, currentCloudProgress()); }
+    catch { showToast("本局已退出，云端状态将在下次操作时同步"); }
+  }
+  battleShell.hidden = true;
+  lobby.hidden = false;
+  window.scrollTo({ top: 0, behavior: "instant" });
 });
 
-async function restoreActiveSession() {
-  const savedName = localStorage.getItem(PLAYER_NAME_KEY);
-  if (savedName) get<HTMLInputElement>("player-name").value = savedName;
-  const mode = localStorage.getItem(ACTIVE_MODE_KEY);
+async function restoreActiveSession(remoteProgress: CloudProgress | null) {
+  const localSave = readPracticeSave();
+  const remoteSave = remoteProgress?.practiceSnapshot
+    ? { savedAt: remoteProgress.savedAt, snapshot: remoteProgress.practiceSnapshot }
+    : null;
+  const newestPractice = remoteSave && (!localSave || remoteSave.savedAt >= localSave.savedAt) ? remoteSave : localSave;
+  const mode = remoteProgress?.activeMode ?? localStorage.getItem(scopedStorageKey(ACTIVE_MODE_KEY));
   if (mode === "practice") {
-    const saved = readPracticeSave();
-    if (saved) { startPractice(saved); return; }
-    localStorage.removeItem(ACTIVE_MODE_KEY);
+    if (newestPractice) { startPractice(newestPractice.snapshot); return; }
+    localStorage.removeItem(scopedStorageKey(ACTIVE_MODE_KEY));
   }
   if (mode !== "online") return;
   try {
-    const saved = JSON.parse(localStorage.getItem(ONLINE_SESSION_KEY) ?? "null") as { roomId?: string; token?: string } | null;
+    const saved = JSON.parse(localStorage.getItem(scopedStorageKey(ONLINE_SESSION_KEY)) ?? "null") as { roomId?: string; token?: string } | null;
     if (!saved?.roomId || !saved.token) throw new Error("没有可恢复的房间凭证");
-    online = new RealtimeClient(roomServerUrl()); bindOnline(online);
+    online = new RealtimeClient(roomServerUrl(), scopedStorageKey(ONLINE_SESSION_KEY)); bindOnline(online);
     const result = await online.resume(saved.roomId, saved.token);
     if (!result.ok || result.slot === undefined || !result.roomId) throw new Error(result.message ?? "房间已失效");
     slot = result.slot; activeMode = "online"; commandSink = (command) => online?.send(command);
@@ -307,13 +389,73 @@ async function restoreActiveSession() {
     get("room-banner").hidden = false; get("room-id").textContent = result.roomId;
     get("last-event").textContent = "已恢复原房间进度";
   } catch (error) {
-    localStorage.removeItem(ACTIVE_MODE_KEY);
-    localStorage.removeItem(ONLINE_SESSION_KEY);
+    localStorage.removeItem(scopedStorageKey(ACTIVE_MODE_KEY));
+    localStorage.removeItem(scopedStorageKey(ONLINE_SESSION_KEY));
     lobbyNote.textContent = `原房间无法恢复：${error instanceof Error ? error.message : "未知错误"}`;
   }
 }
 
-get<HTMLInputElement>("player-name").addEventListener("change", () => localStorage.setItem(PLAYER_NAME_KEY, playerName()));
+function setAuthMode(mode: "login" | "register") {
+  authMode = mode;
+  const registering = mode === "register";
+  get("auth-login-tab").classList.toggle("is-active", !registering);
+  get("auth-register-tab").classList.toggle("is-active", registering);
+  get("auth-login-tab").setAttribute("aria-selected", String(!registering));
+  get("auth-register-tab").setAttribute("aria-selected", String(registering));
+  document.querySelectorAll<HTMLElement>(".auth-confirm-row").forEach((element) => { element.hidden = !registering; });
+  get<HTMLInputElement>("auth-password").autocomplete = registering ? "new-password" : "current-password";
+  get("auth-submit").textContent = registering ? "创建战令并进入" : "进入战场";
+  get("auth-message").textContent = registering
+    ? "账号创建后会立即登录，进度将按账号隔离保存。"
+    : "输入你的账号密码；刷新或换设备登录后可继续进度。";
+}
+
+async function enterAccount(profile: PlayerProfile) {
+  currentProfile = profile;
+  get("player-name").textContent = profile.username;
+  setCloudStatus("云端已连接", "ok");
+  authScreen.hidden = true;
+  lobby.hidden = false;
+  await restoreActiveSession(profile.progress);
+}
+
+get("auth-login-tab").addEventListener("click", () => setAuthMode("login"));
+get("auth-register-tab").addEventListener("click", () => setAuthMode("register"));
+get<HTMLFormElement>("auth-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submit = get<HTMLButtonElement>("auth-submit");
+  const message = get("auth-message");
+  const username = get<HTMLInputElement>("auth-username").value;
+  const password = get<HTMLInputElement>("auth-password").value;
+  const confirm = get<HTMLInputElement>("auth-confirm").value;
+  if (authMode === "register" && password !== confirm) { message.textContent = "两次输入的密码不一致"; return; }
+  submit.disabled = true;
+  message.textContent = authMode === "register" ? "正在创建账号……" : "正在验证账号……";
+  try {
+    const profile = authMode === "register"
+      ? await cloud.signUp(username, password)
+      : await cloud.signIn(username, password);
+    get<HTMLInputElement>("auth-password").value = "";
+    get<HTMLInputElement>("auth-confirm").value = "";
+    await enterAccount(profile);
+  } catch (error) {
+    message.textContent = error instanceof Error ? error.message : "登录失败，请稍后重试";
+  } finally { submit.disabled = false; }
+});
+
+get("logout").addEventListener("click", async () => {
+  const button = get<HTMLButtonElement>("logout");
+  button.disabled = true;
+  savePractice(true);
+  if (cloudSaveInFlight) await cloudSaveInFlight.catch(() => undefined);
+  practice?.stop(); online?.close();
+  try { await cloud.signOut(); }
+  catch (error) { showToast(error instanceof Error ? error.message : "退出账号失败"); button.disabled = false; return; }
+  practice = null; online = null; commandSink = null; snapshot = null; activeMode = null; currentProfile = null;
+  lobby.hidden = true; battleShell.hidden = true; authScreen.hidden = false;
+  button.disabled = false;
+});
+
 window.addEventListener("beforeunload", () => savePractice(true));
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") savePractice(true); });
 window.addEventListener("resize", applyBattlefieldScale);
@@ -322,4 +464,16 @@ new ResizeObserver(applyBattlefieldScale).observe(document.querySelector<HTMLEle
 
 const invitedRoom = new URLSearchParams(location.search).get("room");
 if (invitedRoom) get<HTMLInputElement>("room-code").value = invitedRoom.toUpperCase();
-void restoreActiveSession();
+
+async function initializeAuth() {
+  try {
+    const session = await cloud.session();
+    if (!session) return;
+    const profile = await cloud.loadProfile(session);
+    await enterAccount(profile);
+  } catch (error) {
+    get("auth-message").textContent = error instanceof Error ? error.message : "无法连接账号服务";
+  }
+}
+
+void initializeAuth();

@@ -1,7 +1,7 @@
 import Phaser from "phaser";
 import {
   GAME_CONFIG, GENERALS, MAP_LAYOUTS, SOLDIERS, cellCode, cellCoords, cellIndex, pathPoint,
-  type CombatEffectEvent, type MatchSnapshot, type PlayerBattleState, type PlayerSlot,
+  type CombatEffectEvent, type HeroRarity, type MatchSnapshot, type PlayerBattleState, type PlayerSlot,
 } from "@adou/shared";
 import { allImageAssets, HERO_ASSET_KEYS, IMAGE_ASSETS, TROOP_ASSET_KEYS } from "./assets";
 
@@ -97,10 +97,25 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private onSnapshot(snapshot: MatchSnapshot, slot: PlayerSlot) {
+    const previous = this.snapshot;
+    const previousRoom = this.snapshot?.roomId;
     this.snapshot = snapshot;
     this.slot = slot;
     this.renderState();
     this.playCombatEvents(snapshot.combatEvents ?? []);
+    if (previous && previousRoom === snapshot.roomId) this.playSynthesisDiff(previous.players[slot], snapshot.players[slot]);
+  }
+
+  private playSynthesisDiff(before: PlayerBattleState, after: PlayerBattleState) {
+    const prior = new Map([...before.units, ...before.reserve].map((item) => [item.id, { kind: item.kind, level: item.level }]));
+    const result = [...after.units, ...after.reserve].find((item) => {
+      const previous = prior.get(item.id);
+      return previous && (item.level > previous.level || (item.kind !== previous.kind && Boolean(GENERALS[item.kind])));
+    });
+    if (!result) return;
+    const general = GENERALS[result.kind];
+    if (general) this.playHeroFusion(result.kind, result.level, general.rarity);
+    else this.playUpgradeBurst(result.kind, result.level);
   }
 
   private renderState() {
@@ -212,6 +227,111 @@ export class BattleScene extends Phaser.Scene {
     void mine; void opponent;
   }
 
+  private ownPiecePoint(kind: string, level: number) {
+    if (!this.snapshot) return { x: WIDTH / 2, y: MAP_TOP + 560 };
+    const mine = this.snapshot.players[this.slot];
+    const unit = mine.units.find((candidate) => candidate.kind === kind && candidate.level === level)
+      ?? mine.units.find((candidate) => candidate.kind === kind);
+    if (unit) return this.effectCellPoint(unit.cell, unit.secondaryCell, false);
+    const reserve = mine.reserve.find((candidate) => candidate.kind === kind && candidate.level === level)
+      ?? mine.reserve.find((candidate) => candidate.kind === kind);
+    if (reserve) {
+      const first = CAMP_X + reserve.slot * CAMP_CELL + CAMP_CELL / 2;
+      const second = reserve.secondarySlot === undefined
+        ? first
+        : CAMP_X + reserve.secondarySlot * CAMP_CELL + CAMP_CELL / 2;
+      return { x: (first + second) / 2, y: CAMP_Y + CAMP_CELL / 2 };
+    }
+    return { x: WIDTH / 2, y: MAP_TOP + 560 };
+  }
+
+  private levelColor(level: number) {
+    return [0xf4ecd2, 0x70b784, 0x72b9d5, 0xb786ef, 0xf3c45f][Math.max(0, Math.min(4, level - 1))] ?? 0xf4ecd2;
+  }
+
+  private playUpgradeBurst(kind: string, level: number) {
+    const point = this.ownPiecePoint(kind, level);
+    const color = this.levelColor(level);
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const ring = this.add.circle(point.x, point.y, 32, color, 0.16).setStrokeStyle(7, color, 1);
+    const core = this.add.circle(point.x, point.y, 24, 0xfff5c8, 0.82);
+    const title = this.add.text(point.x, point.y - 46, `升 至 Lv.${level}`, {
+      fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "25px", color: "#fff8d9", fontStyle: "bold",
+      stroke: "#51352e", strokeThickness: 6,
+    }).setOrigin(0.5);
+    this.effectsLayer.add([ring, core, title]);
+    ring.setScale(0.35); core.setScale(0.25); title.setScale(0.75);
+    this.tweens.add({ targets: [ring, core], scale: level >= 4 ? 2.4 : 1.9, alpha: 0, duration: reducedMotion ? 100 : 520, ease: "Cubic.easeOut" });
+    this.tweens.add({
+      targets: title, y: point.y - 85, scale: 1, alpha: { from: 1, to: 0 },
+      duration: reducedMotion ? 180 : 720, ease: "Back.easeOut",
+      onComplete: () => { ring.destroy(); core.destroy(); title.destroy(); },
+    });
+    const count = reducedMotion ? 4 : 10 + level * 2;
+    for (let index = 0; index < count; index += 1) {
+      const angle = Math.PI * 2 * index / count;
+      const spark = this.add.rectangle(point.x, point.y, level >= 4 ? 7 : 5, 18, index % 2 ? color : 0xfff0a6, 1).setRotation(angle);
+      this.effectsLayer.add(spark);
+      this.tweens.add({
+        targets: spark,
+        x: point.x + Math.cos(angle) * (48 + level * 8),
+        y: point.y + Math.sin(angle) * (48 + level * 8),
+        scaleY: 0.1, alpha: 0, duration: reducedMotion ? 120 : 400 + index * 10,
+        ease: "Quad.easeOut", onComplete: () => spark.destroy(),
+      });
+    }
+    if (level >= 4 && !reducedMotion) this.cameras.main.shake(100, 0.0018);
+  }
+
+  private playHeroFusion(kind: string, level: number, rarity: HeroRarity) {
+    const gold = rarity === "gold";
+    const primary = gold ? 0xf4c75f : 0xb986f1;
+    const deep = gold ? 0x7d352b : 0x4f326f;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    this.playUpgradeBurst(kind, level);
+    const panel = this.add.container(WIDTH / 2, 610);
+    const shade = this.add.rectangle(0, 0, 570, 260, 0x172922, 0.94).setStrokeStyle(5, primary, 1);
+    const inner = this.add.rectangle(0, 0, 544, 234, deep, 0.68).setStrokeStyle(2, 0xfff0bc, 0.65);
+    const rays = this.add.graphics();
+    for (let index = 0; index < 20; index += 1) {
+      const angle = Math.PI * 2 * index / 20;
+      rays.lineStyle(index % 2 ? 3 : 7, primary, index % 2 ? 0.34 : 0.18)
+        .lineBetween(Math.cos(angle) * 52, Math.sin(angle) * 52, Math.cos(angle) * 210, Math.sin(angle) * 210);
+    }
+    const halo = this.add.circle(-145, 0, 75, primary, 0.18).setStrokeStyle(5, primary, 1);
+    const portraitKey = HERO_ASSET_KEYS[kind];
+    const portrait = portraitKey ? this.add.image(-145, 0, portraitKey).setDisplaySize(146, 146) : null;
+    const rarityText = this.add.text(-145, -91, gold ? "金色武将" : "紫色武将", {
+      fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "18px", color: gold ? "#ffe69a" : "#e5c8ff", fontStyle: "bold",
+      stroke: "#38241f", strokeThickness: 4,
+    }).setOrigin(0.5);
+    const heroName = this.add.text(76, -34, kind, {
+      fontFamily: '"STKaiti", "KaiTi", serif', fontSize: "68px", color: "#fff5cc", fontStyle: "bold",
+      stroke: gold ? "#7e3727" : "#4c2b68", strokeThickness: 8,
+    }).setOrigin(0.5);
+    const levelText = this.add.text(76, 45, `合成成功  ·  Lv.${level}`, {
+      fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "22px", color: gold ? "#ffd97e" : "#d9b5ff", fontStyle: "bold",
+    }).setOrigin(0.5);
+    panel.add([shade, inner, rays, halo]);
+    if (portrait) panel.add(portrait);
+    panel.add([rarityText, heroName, levelText]);
+    panel.setScale(0.55).setAlpha(0);
+    this.effectsLayer.add(panel);
+    this.tweens.add({
+      targets: panel, alpha: 1, scale: 1,
+      duration: reducedMotion ? 80 : 280, ease: "Back.easeOut",
+      onComplete: () => this.tweens.add({
+        targets: panel, alpha: 0, scale: 1.06, delay: reducedMotion ? 180 : 900,
+        duration: reducedMotion ? 100 : 260, ease: "Quad.easeIn", onComplete: () => panel.destroy(),
+      }),
+    });
+    if (!reducedMotion) {
+      this.tweens.add({ targets: rays, rotation: Math.PI / 5, duration: 1200, ease: "Sine.easeInOut" });
+      this.cameras.main.flash(170, gold ? 255 : 196, gold ? 224 : 165, gold ? 134 : 255, false);
+      this.cameras.main.shake(150, 0.0022);
+    }
+  }
+
   private playCombatEvents(events: CombatEffectEvent[]) {
     for (const event of events.slice(0, 28)) {
       if (this.playedEffectIds.has(event.id)) continue;
@@ -233,27 +353,74 @@ export class BattleScene extends Phaser.Scene {
     const style = this.attackStyle(event.unitKind);
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const angle = Phaser.Math.Angle.Between(source.x, source.y, target.x, target.y);
-    const trail = this.add.graphics();
-    trail.lineStyle(event.special ? 9 : style.width + 4, style.color, event.special ? 0.22 : 0.12).lineBetween(source.x, source.y, target.x, target.y);
-    trail.lineStyle(style.width, style.accent, 0.78).lineBetween(source.x, source.y, target.x, target.y);
-    this.effectsLayer.add(trail);
-    this.tweens.add({ targets: trail, alpha: 0, duration: reducedMotion ? 80 : 260, onComplete: () => trail.destroy() });
+    const artKey = HERO_ASSET_KEYS[event.unitKind] ?? TROOP_ASSET_KEYS[event.unitKind];
+    if (artKey) {
+      const attacker = this.add.image(source.x, source.y, artKey).setDisplaySize(GENERALS[event.unitKind] ? 82 : 66, GENERALS[event.unitKind] ? 82 : 66).setAlpha(0.9);
+      const lunge = event.special ? 28 : 18;
+      this.effectsLayer.add(attacker);
+      this.tweens.add({
+        targets: attacker,
+        x: source.x + Math.cos(angle) * lunge,
+        y: source.y + Math.sin(angle) * lunge,
+        scale: event.special ? 1.25 : 1.1,
+        duration: reducedMotion ? 45 : 95,
+        yoyo: true,
+        ease: "Quad.easeOut",
+        onComplete: () => attacker.destroy(),
+      });
+    }
 
-    const sourceFlash = this.add.circle(source.x, source.y, event.special ? 18 : 10, style.color, 0.82).setStrokeStyle(3, style.accent, 0.95);
-    sourceFlash.setScale(0.4);
+    const sourceFlash = this.add.circle(source.x, source.y, event.special ? 22 : 14, style.color, 0.28).setStrokeStyle(4, style.accent, 0.92);
     this.effectsLayer.add(sourceFlash);
-    this.tweens.add({
-      targets: sourceFlash, scale: event.special ? 2.2 : 1.65, alpha: 0,
-      duration: reducedMotion ? 90 : 240, ease: "Quad.easeOut", onComplete: () => sourceFlash.destroy(),
-    });
+    this.tweens.add({ targets: sourceFlash, scale: 1.8, alpha: 0, duration: reducedMotion ? 80 : 220, onComplete: () => sourceFlash.destroy() });
 
-    let projectile: Phaser.GameObjects.Shape;
-    if (style.variant === "arrow") projectile = this.add.triangle(source.x, source.y, -13, -5, 14, 0, -13, 5, style.accent, 1);
-    else if (style.variant === "spear") projectile = this.add.rectangle(source.x, source.y, event.special ? 40 : 29, event.special ? 8 : 5, style.accent, 1).setStrokeStyle(2, style.color, 1);
-    else if (style.variant === "charge") projectile = this.add.circle(source.x, source.y, event.special ? 13 : 9, style.color, 1).setStrokeStyle(3, style.accent, 1);
-    else projectile = this.add.triangle(source.x, source.y, -11, -9, 15, 0, -11, 9, style.color, 1).setStrokeStyle(2, style.accent, 1);
-    projectile.setRotation(angle);
+    const projectile = this.add.container(source.x, source.y).setRotation(angle);
+    if (style.variant === "arrow") {
+      projectile.add([
+        this.add.rectangle(-2, 0, event.special ? 46 : 34, event.special ? 5 : 3, 0x7b4028, 1),
+        this.add.triangle(18, 0, -7, -7, 9, 0, -7, 7, style.accent, 1),
+        this.add.triangle(-20, 0, -5, -8, 7, 0, -5, 0, 0xe7e3cf, 0.9),
+        this.add.triangle(-20, 0, -5, 8, 7, 0, -5, 0, 0xe7e3cf, 0.9),
+      ]);
+    } else if (style.variant === "spear") {
+      projectile.add([
+        this.add.ellipse(-13, 0, event.special ? 68 : 48, event.special ? 18 : 11, style.color, 0.24),
+        this.add.rectangle(-4, 0, event.special ? 62 : 44, event.special ? 7 : 4, style.accent, 1),
+        this.add.triangle(27, 0, -12, -10, 14, 0, -12, 10, 0xffffff, 1),
+      ]);
+    } else if (style.variant === "charge") {
+      const chargeKey = artKey ?? IMAGE_ASSETS.troops.骑.key;
+      projectile.add([
+        this.add.ellipse(-3, 14, event.special ? 64 : 49, 16, 0x3c2b26, 0.42),
+        this.add.circle(0, 0, event.special ? 28 : 22, style.color, 0.72).setStrokeStyle(4, style.accent, 1),
+        this.add.image(0, 0, chargeKey).setDisplaySize(event.special ? 58 : 47, event.special ? 58 : 47),
+      ]);
+    } else {
+      const crescent = this.add.graphics();
+      crescent.lineStyle(event.special ? 14 : 10, style.accent, 1).beginPath().arc(0, 0, event.special ? 28 : 21, -1.2, 1.2).strokePath();
+      projectile.add([this.add.circle(0, 0, event.special ? 24 : 17, style.color, 0.32), crescent]);
+    }
     this.effectsLayer.add(projectile);
+
+    if (!reducedMotion && style.variant === "charge") {
+      for (let index = 1; index <= 5; index += 1) {
+        const t = index / 6;
+        const dust = this.add.circle(Phaser.Math.Linear(source.x, target.x, t), Phaser.Math.Linear(source.y, target.y, t) + 14, 8 + (index % 2) * 4, 0xc8aa78, 0.42);
+        this.effectsLayer.add(dust);
+        dust.setScale(0.4);
+        this.tweens.add({ targets: dust, scale: 1.8, alpha: 0, delay: index * 24, duration: 260, onComplete: () => dust.destroy() });
+      }
+    }
+    if (!reducedMotion && style.variant === "spear") {
+      for (let index = 0; index < 3; index += 1) {
+        const after = this.add.ellipse(source.x, source.y, 34 - index * 6, 8 - index, style.color, 0.24).setRotation(angle);
+        this.effectsLayer.add(after);
+        this.tweens.add({
+          targets: after, x: target.x, y: target.y, alpha: 0, delay: 20 + index * 28,
+          duration: style.duration + index * 28, onComplete: () => after.destroy(),
+        });
+      }
+    }
     this.tweens.add({
       targets: projectile, x: target.x, y: target.y,
       duration: reducedMotion ? 70 : style.duration, ease: "Quad.easeIn",
@@ -284,6 +451,27 @@ export class BattleScene extends Phaser.Scene {
       slash.lineStyle(event.special ? 12 : 8, style.accent, 0.95).beginPath().arc(0, 0, event.special ? 37 : 28, -1.05, 1.05).strokePath();
       this.effectsLayer.add(slash);
       this.tweens.add({ targets: slash, rotation: slash.rotation + 1.4, scale: 1.35, alpha: 0, duration: reducedMotion ? 90 : 280, onComplete: () => slash.destroy() });
+    } else if (style.variant === "arrow") {
+      for (let index = -1; index <= 1; index += 1) {
+        const arrow = this.add.triangle(x + index * 8, y + index * 4, -9, -5, 10, 0, -9, 5, style.accent, 0.92).setRotation(angle + index * 0.18);
+        this.effectsLayer.add(arrow);
+        this.tweens.add({ targets: arrow, alpha: 0, y: arrow.y + 12, delay: 100, duration: reducedMotion ? 90 : 330, onComplete: () => arrow.destroy() });
+      }
+    } else if (style.variant === "spear") {
+      const pierce = this.add.ellipse(x, y, event.special ? 104 : 76, event.special ? 25 : 17, style.accent, 0.62).setRotation(angle);
+      const core = this.add.circle(x, y, event.special ? 18 : 12, 0xffffff, 0.9);
+      this.effectsLayer.add([pierce, core]);
+      this.tweens.add({ targets: pierce, scaleX: 1.7, scaleY: 0.1, alpha: 0, duration: reducedMotion ? 90 : 260, onComplete: () => pierce.destroy() });
+      this.tweens.add({ targets: core, scale: 2.4, alpha: 0, duration: reducedMotion ? 90 : 220, onComplete: () => core.destroy() });
+    } else if (style.variant === "charge") {
+      for (let index = 0; index < (reducedMotion ? 3 : 7); index += 1) {
+        const puff = this.add.circle(x + (index - 3) * 6, y + 10 + (index % 3) * 4, 9 + (index % 2) * 5, index % 2 ? 0xd0b27d : 0x8f6847, 0.58);
+        this.effectsLayer.add(puff);
+        this.tweens.add({
+          targets: puff, x: puff.x + (index - 3) * 8, y: puff.y - 20 - (index % 3) * 8,
+          scale: 1.8, alpha: 0, duration: reducedMotion ? 100 : 310 + index * 18, onComplete: () => puff.destroy(),
+        });
+      }
     }
 
     const particleCount = reducedMotion ? 3 : event.special ? 12 : Math.min(9, 5 + event.hitCount);
@@ -345,16 +533,24 @@ export class BattleScene extends Phaser.Scene {
     }
     for (const item of mine.reserve) {
       if (this.draggingType === "reserve" && item.id === this.draggingId) continue;
-      if (item.secondarySlot !== undefined && GENERALS[item.kind]) {
+      const general = GENERALS[item.kind];
+      if (item.secondarySlot !== undefined && general) {
+        const rarity = general.rarity;
+        const rarityColor = rarity === "gold" ? 0xf2c75c : 0xb584ec;
+        const rarityFill = rarity === "gold" ? 0x754b2d : 0x53396f;
         const parts = item.parts ?? [item.kind[0] ?? "", item.kind[1] ?? ""];
         const firstX = CAMP_X + item.slot * CAMP_CELL + CAMP_CELL / 2;
         const secondX = CAMP_X + item.secondarySlot * CAMP_CELL + CAMP_CELL / 2;
-        add(this.add.rectangle((firstX + secondX) / 2, CAMP_Y + CAMP_CELL / 2, Math.abs(secondX - firstX) + 70, 70, 0x765166, 0.94)
-          .setStrokeStyle(4, 0xe9c56f, 1));
+        add(this.add.rectangle((firstX + secondX) / 2, CAMP_Y + CAMP_CELL / 2, Math.abs(secondX - firstX) + 76, 76, rarityFill, 0.96)
+          .setStrokeStyle(5, rarityColor, 1));
         const heroKey = HERO_ASSET_KEYS[item.kind];
-        if (heroKey) add(this.add.image((firstX + secondX) / 2, CAMP_Y + CAMP_CELL / 2 + 1, heroKey).setDisplaySize(72, 72).setAlpha(0.62));
+        if (heroKey) add(this.add.image((firstX + secondX) / 2, CAMP_Y + CAMP_CELL / 2 + 1, heroKey).setDisplaySize(92, 92).setAlpha(0.84));
+        add(this.add.text((firstX + secondX) / 2, CAMP_Y + 13, rarity === "gold" ? "金" : "紫", {
+          fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "15px", color: rarity === "gold" ? "#ffe49a" : "#efd9ff",
+          fontStyle: "bold", stroke: "#372820", strokeThickness: 3,
+        }).setOrigin(0.5));
         ([item.slot, item.secondarySlot] as const).forEach((slot, partIndex) => {
-          const token = this.createToken(CAMP_X + slot * CAMP_CELL + CAMP_CELL / 2, CAMP_Y + CAMP_CELL / 2, parts[partIndex] ?? "", item.level, false, true);
+          const token = this.createToken(CAMP_X + slot * CAMP_CELL + CAMP_CELL / 2, CAMP_Y + CAMP_CELL / 2, parts[partIndex] ?? "", item.level, false, true, rarity);
           this.enableDrag(token, "reserve", item.id, item.kind);
           add(token);
         });
@@ -398,6 +594,8 @@ export class BattleScene extends Phaser.Scene {
 
   private drawGeneral(unit: PlayerBattleState["units"][number], mirror: boolean, draggable: boolean) {
     if (unit.secondaryCell === undefined) return;
+    const general = GENERALS[unit.kind];
+    if (!general) return;
     const position = (cell: number) => {
       const point = cellCoords(cell);
       const y = mirror ? GAME_CONFIG.rows - 1 - point.y : point.y;
@@ -411,47 +609,66 @@ export class BattleScene extends Phaser.Scene {
       const centerX = (points[0].x + points[1].x) / 2;
       const centerY = (points[0].y + points[1].y) / 2;
       const horizontal = points[0].y === points[1].y;
-      this.stateLayer.add(this.add.rectangle(centerX, centerY, horizontal ? 150 : 70, horizontal ? 70 : 150, mirror ? 0x526d72 : 0x765166, 0.92)
-        .setStrokeStyle(4, 0xe9c56f, 1));
+      const rarity = general.rarity;
+      const rarityColor = rarity === "gold" ? 0xf2c75c : 0xb584ec;
+      const rarityFill = rarity === "gold" ? 0x754b2d : 0x53396f;
+      this.stateLayer.add(this.add.rectangle(centerX, centerY, horizontal ? 156 : 76, horizontal ? 76 : 156, mirror ? 0x48666b : rarityFill, 0.96)
+        .setStrokeStyle(5, rarityColor, 1));
       const heroKey = HERO_ASSET_KEYS[unit.kind];
       if (heroKey) {
-        const portrait = this.add.image(centerX, centerY + 1, heroKey).setDisplaySize(78, 78).setAlpha(0.66);
+        const portrait = this.add.image(centerX, centerY + 1, heroKey).setDisplaySize(94, 94).setAlpha(0.86);
         if (mirror) portrait.setTint(0xc9dfdf);
         this.stateLayer.add(portrait);
       }
+      this.stateLayer.add(this.add.text(centerX, centerY - (horizontal ? 30 : 67), rarity === "gold" ? "金" : "紫", {
+        fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "15px", color: rarity === "gold" ? "#ffe49a" : "#efd9ff",
+        fontStyle: "bold", stroke: "#372820", strokeThickness: 3,
+      }).setOrigin(0.5));
     }
     ([0, 1] as const).forEach((partIndex) => {
       if (splitting && this.draggingPartIndex === partIndex) return;
       const point = points[partIndex];
-      const token = this.createToken(point.x, point.y, parts[partIndex], unit.level, mirror, true);
+      const token = this.createToken(point.x, point.y, parts[partIndex], unit.level, mirror, true, general.rarity);
       if (draggable) this.enableDrag(token, "generalPart", unit.id, parts[partIndex], partIndex);
       this.stateLayer.add(token);
     });
   }
 
-  private createToken(x: number, y: number, kind: string, level: number, opponent: boolean, generalPart = false) {
-    const container = this.add.container(x, y);
+  private createToken(x: number, y: number, kind: string, level: number, opponent: boolean, generalPart = false, rarity?: HeroRarity) {
+    const seed = [...kind].reduce((sum, character) => sum + character.charCodeAt(0), 0);
+    const bob = this.snapshot && !this.isDragging ? Math.sin((this.snapshot.tick + seed) * 0.2) * 1.6 : 0;
+    const container = this.add.container(x, y + bob).setRotation(this.snapshot && !this.isDragging ? Math.sin((this.snapshot.tick + seed) * 0.13) * 0.018 : 0);
     const isHero = Boolean(GENERALS[kind]) || generalPart;
     const isSoldier = Boolean(SOLDIERS[kind as keyof typeof SOLDIERS]);
     const artKey = TROOP_ASSET_KEYS[kind] ?? (kind === "铲子" ? IMAGE_ASSETS.ui.shovel.key : HERO_ASSET_KEYS[kind]);
-    const disc = this.add.circle(0, 0, isHero ? 33 : 29, opponent ? 0x4d6b6b : isHero ? 0xa8513f : isSoldier ? 0x52765b : 0x78634d, 1)
-      .setStrokeStyle(isHero ? 4 : 3, isHero ? 0xf0c86e : 0xf7edcd, 1);
+    const rarityColor = rarity === "gold" ? 0xf3c45f : rarity === "purple" ? 0xb98aef : this.levelColor(level);
+    const heroFill = rarity === "gold" ? 0x7c4530 : rarity === "purple" ? 0x593c72 : 0xa8513f;
+    if (level >= 2 && kind !== "铲子") {
+      const outer = this.add.circle(0, 0, isHero ? 38 : 37, rarityColor, level >= 4 ? 0.13 : 0.06).setStrokeStyle(level >= 4 ? 5 : 3, rarityColor, 0.96);
+      container.add(outer);
+      if (level >= 3) for (let index = 0; index < 4; index += 1) {
+        const angle = Math.PI / 2 * index;
+        container.add(this.add.circle(Math.cos(angle) * 38, Math.sin(angle) * 38, level >= 5 ? 4.5 : 3.2, rarityColor, 1));
+      }
+    }
+    const disc = this.add.circle(0, 0, isHero ? 35 : 33, opponent ? 0x4d6b6b : isHero ? heroFill : isSoldier ? 0x52765b : 0x78634d, 1)
+      .setStrokeStyle(isHero ? 4.5 : 3.5, isHero ? rarityColor : 0xf7edcd, 1);
     container.add(disc);
-    if (artKey) container.add(this.add.image(0, 2, artKey).setDisplaySize(isHero ? 62 : 56, isHero ? 62 : 56).setAlpha(0.92));
+    if (artKey) container.add(this.add.image(0, 2, artKey).setDisplaySize(isHero ? 70 : 66, isHero ? 70 : 66).setAlpha(0.96));
     const compactLabel = Boolean(artKey);
-    if (compactLabel) container.add(this.add.circle(-21, -20, 12, opponent ? 0x38575a : 0x3e5548, 0.96).setStrokeStyle(1.5, 0xf7edcd, 0.9));
-    const fontSize = compactLabel ? 17 : kind.length > 1 ? 23 : 35;
-    const label = this.add.text(compactLabel ? -21 : 0, compactLabel ? -21 : -2, kind === "铲子" ? "铲" : kind, {
+    if (compactLabel) container.add(this.add.circle(-25, -24, 14.5, opponent ? 0x38575a : 0x344c41, 0.98).setStrokeStyle(2, rarityColor, 0.95));
+    const fontSize = compactLabel ? 20 : kind.length > 1 ? 27 : generalPart ? 43 : 40;
+    const label = this.add.text(compactLabel ? -25 : 0, compactLabel ? -25 : -2, kind === "铲子" ? "铲" : kind, {
       fontFamily: '"STKaiti", "KaiTi", "Microsoft YaHei", serif', fontSize: `${fontSize}px`, color: "#fff8dc", fontStyle: "bold",
-      stroke: compactLabel ? "#263b32" : "#000000", strokeThickness: compactLabel ? 2 : 0,
+      stroke: compactLabel ? "#263b32" : "#2b312d", strokeThickness: compactLabel ? 3 : 2,
     }).setOrigin(0.5);
     container.add(label);
     if (kind !== "铲子" && (isHero || isSoldier)) {
-      const badge = this.add.circle(24, 23, 13, 0xb24738, 1).setStrokeStyle(2, 0xffe9ad, 1);
-      const levelText = this.add.text(24, 23, String(level), { fontFamily: '"Arial", sans-serif', fontSize: "15px", color: "#ffffff", fontStyle: "bold" }).setOrigin(0.5);
+      const badge = this.add.circle(26, 25, 15, level >= 4 ? rarityColor : 0xb24738, 1).setStrokeStyle(2.5, 0xffefbc, 1);
+      const levelText = this.add.text(26, 25, String(level), { fontFamily: '"Arial", sans-serif', fontSize: "18px", color: level >= 4 ? "#39291f" : "#ffffff", fontStyle: "bold" }).setOrigin(0.5);
       container.add([badge, levelText]);
     }
-    container.setSize(72, 72);
+    container.setSize(78, 78);
     return container;
   }
 
@@ -467,17 +684,20 @@ export class BattleScene extends Phaser.Scene {
       const point = pathPoint(this.snapshot.mapIndex, enemy.progress);
       const y = mirror ? GAME_CONFIG.rows - 1 - point.y : point.y;
       const x = mirror ? GAME_CONFIG.columns - 1 - point.x : point.x;
-      const px = (x + 0.5) * CELL; const py = MAP_TOP + (y + 0.5) * CELL;
       const seed = [...enemy.id].reduce((total, character) => total + character.charCodeAt(0), 0);
+      const step = Math.sin((this.snapshot.tick + seed) * 0.34);
+      const px = (x + 0.5) * CELL + Math.cos((this.snapshot.tick + seed) * 0.16) * 1.8;
+      const py = MAP_TOP + (y + 0.5) * CELL + step * (enemy.boss ? 2.2 : 3.2);
       const regularKeys = [IMAGE_ASSETS.enemies.rebel.key, IMAGE_ASSETS.enemies.brute.key, IMAGE_ASSETS.enemies.scout.key, IMAGE_ASSETS.enemies.captain.key];
       const bossKeys = [IMAGE_ASSETS.enemies.bossHorned.key, IMAGE_ASSETS.enemies.bossBanner.key];
       const imageKey = enemy.boss ? bossKeys[seed % bossKeys.length]! : regularKeys[seed % regularKeys.length]!;
-      const size = enemy.boss ? 67 : 45;
-      const radius = enemy.boss ? 29 : 19;
+      const size = enemy.boss ? 74 : 53;
+      const radius = enemy.boss ? 31 : 23;
       const shadow = this.add.ellipse(px, py + radius * 0.7, enemy.boss ? 54 : 34, enemy.boss ? 16 : 10, 0x1f302b, 0.4);
       const frame = this.add.circle(px, py, radius, enemy.boss ? 0x8f2f2d : mirror ? 0x475c66 : 0x5e3c35, 0.88)
         .setStrokeStyle(enemy.boss ? 3 : 2, enemy.boss ? 0xffd06e : 0xf0e5cf, 0.96);
       const body = this.add.image(px, py + 1, imageKey).setDisplaySize(size, size);
+      body.setRotation(step * (enemy.boss ? 0.018 : 0.035));
       if (mirror) body.setTint(0xd4e5e3);
       const barBack = this.add.rectangle(px, py - radius - 9, enemy.boss ? 54 : 38, 6, 0x482c28, 1);
       const ratio = Math.max(0, enemy.hp / enemy.maxHp);
