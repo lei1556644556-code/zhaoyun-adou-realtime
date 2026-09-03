@@ -109,6 +109,9 @@ button { touch-action: manipulation; }
 .network-pill i { width: 8px; height: 8px; border-radius: 50%; background: #d2a653; box-shadow: 0 0 8px #d2a653; }
 .network-pill.is-online i { background: #4fac77; box-shadow: 0 0 8px #4fac77; }
 .network-pill.is-offline i { background: #c14f45; box-shadow: 0 0 8px #c14f45; }
+.piece-mode-toggle { min-height: 32px; border: 1px solid rgba(74,91,80,.24); border-radius: 7px; padding: 0 11px; background: rgba(222,210,185,.42); color: #4f6057; cursor: pointer; font-size: 12px; font-weight: 900; white-space: nowrap; }
+.piece-mode-toggle:hover { background: rgba(69,107,93,.12); }
+.piece-mode-toggle[aria-pressed="true"] { border-color: rgba(163,91,61,.38); background: rgba(176,101,69,.14); color: #8d4e39; }
 .zoom-controls { display: inline-flex; align-items: stretch; overflow: hidden; flex: 0 0 auto; min-height: 32px; border: 1px solid rgba(74,91,80,.24); border-radius: 7px; background: rgba(222,210,185,.42); }
 .zoom-controls button { min-width: 32px; border: 0; padding: 0 9px; background: transparent; color: #4f6057; cursor: pointer; font-weight: 900; }
 .zoom-controls button + button { border-left: 1px solid rgba(74,91,80,.2); }
@@ -201,6 +204,7 @@ button { touch-action: manipulation; }
   .toolbar-room strong { font-size: 15px; }
   .toolbar-room button { display: none; }
   .network-pill b { display: none; }
+  .piece-mode-toggle { padding-inline: 8px; }
   .zoom-controls { margin-left: auto; }
   #zoom-fit { min-width: 63px; padding-inline: 6px; }
   .exit-match { padding-inline: 8px; font-size: 12px; }

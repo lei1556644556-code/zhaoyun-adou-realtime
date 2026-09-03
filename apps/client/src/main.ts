@@ -42,7 +42,6 @@ app.innerHTML = `
       <div class="lobby-copy">
         <p class="eyebrow">1.0.9 规则复刻 · 新增实时对战</p>
         <h1><span>合字成将 · 护住阿斗</span>赵云与阿斗</h1>
-        <p class="lead">五连征兵、营地拖放、铲子开格、同字升级与合字成将均按安装包基线运行。先选人机熟悉规则，或直接创建房间、输入房号、随机匹配。</p>
         <div class="account-strip"><div><span>当前战令</span><strong id="player-name">未登录</strong></div><i id="cloud-status">云端同步中</i><button id="logout" type="button">退出账号</button></div>
         <div class="primary-actions">
           <button class="btn btn-primary" id="practice">人机对战</button>
@@ -55,7 +54,7 @@ app.innerHTML = `
             <button class="btn btn-quiet" id="join-room">加入</button>
           </div>
         </div>
-        <p class="lobby-note" id="lobby-note">本机直接试玩请选择“人机对战”；真人模式需要同时运行仓库内的房间服务器。</p>
+        <p class="lobby-note" id="lobby-note">创建房间后把6位房号发给好友，也可以直接随机匹配。</p>
       </div>
     </section>
 
@@ -64,6 +63,7 @@ app.innerHTML = `
         <div><b id="mode-label">人机对战</b><span id="network-label">本地权威演算</span></div>
         <div class="toolbar-room" id="room-banner" hidden><span>房号</span><strong id="room-id">------</strong><button id="copy-room">复制邀请</button></div>
         <span class="network-pill" id="network-pill"><i></i><b>已就绪</b></span>
+        <button class="piece-mode-toggle" id="piece-mode-toggle" type="button" aria-pressed="false" title="切换棋子显示方式">形象版</button>
         <div class="zoom-controls" aria-label="战场缩放">
           <button id="zoom-out" type="button" aria-label="缩小战场" title="缩小战场">−</button>
           <button id="zoom-fit" type="button" aria-label="适应窗口" title="恢复为整屏显示">适屏 <span id="zoom-value">100%</span></button>
@@ -136,6 +136,7 @@ let roomPlayers: Array<{ slot: PlayerSlot; name: string }> = [];
 let activeMode: "practice" | "online" | null = null;
 let lastPracticeSaveAt = 0;
 let battlefieldZoom = readStoredZoom();
+let pieceDisplayMode: "text" | "image" = localStorage.getItem("adou-piece-display-mode-v1") === "text" ? "text" : "image";
 let currentProfile: PlayerProfile | null = null;
 let authMode: "login" | "register" = "login";
 let cloudSaveTimer = 0;
@@ -145,6 +146,7 @@ const ACTIVE_MODE_KEY = "adou-active-mode-v1";
 const PRACTICE_SAVE_KEY = "adou-practice-save-v1";
 const ONLINE_SESSION_KEY = "adou-session";
 const BATTLEFIELD_ZOOM_KEY = "adou-battlefield-zoom-v1";
+const PIECE_DISPLAY_MODE_KEY = "adou-piece-display-mode-v1";
 
 function get<T extends HTMLElement>(id: string) {
   const element = document.getElementById(id);
@@ -203,12 +205,17 @@ function showUnitInspector(kind: string, level: number) {
 function hideUnitInspector() {
   get<HTMLElement>("unit-inspector").hidden = true;
 }
+
+function applyPieceDisplayMode() {
+  const textMode = pieceDisplayMode === "text";
+  const button = get<HTMLButtonElement>("piece-mode-toggle");
+  button.textContent = textMode ? "字棋版" : "形象版";
+  button.setAttribute("aria-pressed", String(textMode));
+  button.title = textMode ? "当前为原版字棋显示，点击切换形象版" : "当前为形象显示，点击切换原版字棋版";
+  game.events.emit("battle:piece-mode", pieceDisplayMode);
+}
 function playerName() { return currentProfile?.username ?? "常山侠客"; }
 function scopedStorageKey(base: string) { return `${base}:${currentProfile?.userId ?? "guest"}`; }
-function roomServerUrl() {
-  const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1";
-  return import.meta.env.VITE_SERVER_URL || (isLocal ? `${location.protocol}//${location.hostname}:3001` : location.origin);
-}
 
 function readStoredZoom() {
   const value = Number(localStorage.getItem("adou-battlefield-zoom-v1"));
@@ -312,8 +319,9 @@ function enterBattle(mode: string, network: boolean) {
   lobby.hidden = true; battleShell.hidden = false;
   window.scrollTo({ top: 0, left: 0, behavior: "instant" });
   get("mode-label").textContent = mode;
-  get("network-label").textContent = network ? "服务器权威演算" : "本地权威演算";
+  get("network-label").textContent = network ? "房主权威演算 · Supabase 实时同步" : "本地权威演算";
   get("network-pill").classList.toggle("is-online", network);
+  applyPieceDisplayMode();
   requestAnimationFrame(() => {
     applyBattlefieldScale();
     requestAnimationFrame(applyBattlefieldScale);
@@ -360,11 +368,20 @@ function bindOnline(client: RealtimeClient) {
 async function onlineAction(kind: "create" | "join" | "quick") {
   practice?.stop(); practice = null;
   online?.close();
-  online = new RealtimeClient(roomServerUrl(), scopedStorageKey(ONLINE_SESSION_KEY)); bindOnline(online);
-  lobbyNote.textContent = "正在连接房间服务器……";
-  const result = kind === "create" ? await online.create(playerName())
-    : kind === "quick" ? await online.quick(playerName())
-    : await online.join(get<HTMLInputElement>("room-code").value.trim().toUpperCase(), playerName());
+  online = new RealtimeClient(scopedStorageKey(ONLINE_SESSION_KEY)); bindOnline(online);
+  lobbyNote.textContent = "正在连接 Supabase 实时房间……";
+  let result;
+  try {
+    result = kind === "create" ? await online.create(playerName())
+      : kind === "quick" ? await online.quick(playerName())
+      : await online.join(get<HTMLInputElement>("room-code").value.trim().toUpperCase(), playerName());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "实时房间连接失败";
+    lobbyNote.textContent = message;
+    showToast(message);
+    online.close();
+    return;
+  }
   if (!result.ok || result.slot === undefined || !result.roomId) {
     lobbyNote.textContent = result.message ?? "进入房间失败"; showToast(lobbyNote.textContent); return;
   }
@@ -430,6 +447,11 @@ get("zoom-fit").addEventListener("click", () => {
   localStorage.setItem(BATTLEFIELD_ZOOM_KEY, "1");
   applyBattlefieldScale();
 });
+get("piece-mode-toggle").addEventListener("click", () => {
+  pieceDisplayMode = pieceDisplayMode === "text" ? "image" : "text";
+  localStorage.setItem(PIECE_DISPLAY_MODE_KEY, pieceDisplayMode);
+  applyPieceDisplayMode();
+});
 get("unit-inspector-close").addEventListener("click", hideUnitInspector);
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") hideUnitInspector(); });
 get("exit-match").addEventListener("click", async () => {
@@ -463,7 +485,7 @@ async function restoreActiveSession(remoteProgress: CloudProgress | null) {
   try {
     const saved = JSON.parse(localStorage.getItem(scopedStorageKey(ONLINE_SESSION_KEY)) ?? "null") as { roomId?: string; token?: string } | null;
     if (!saved?.roomId || !saved.token) throw new Error("没有可恢复的房间凭证");
-    online = new RealtimeClient(roomServerUrl(), scopedStorageKey(ONLINE_SESSION_KEY)); bindOnline(online);
+    online = new RealtimeClient(scopedStorageKey(ONLINE_SESSION_KEY)); bindOnline(online);
     const result = await online.resume(saved.roomId, saved.token);
     if (!result.ok || result.slot === undefined || !result.roomId) throw new Error(result.message ?? "房间已失效");
     slot = result.slot; activeMode = "online"; commandSink = (command) => online?.send(command);

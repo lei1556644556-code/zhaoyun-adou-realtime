@@ -14,6 +14,8 @@ const CAMP_Y = 1050;
 const CAMP_CELL = 90;
 
 type DragSource = "reserve" | "unit" | "generalPart";
+type PieceDisplayMode = "text" | "image";
+const PIECE_DISPLAY_MODE_KEY = "adou-piece-display-mode-v1";
 
 export class BattleScene extends Phaser.Scene {
   private snapshot: MatchSnapshot | null = null;
@@ -29,6 +31,7 @@ export class BattleScene extends Phaser.Scene {
   private draggingType: DragSource | null = null;
   private draggingPartIndex: 0 | 1 | null = null;
   private mapSignature = "";
+  private pieceDisplayMode: PieceDisplayMode = localStorage.getItem(PIECE_DISPLAY_MODE_KEY) === "text" ? "text" : "image";
 
   constructor() { super("battle"); }
 
@@ -74,9 +77,16 @@ export class BattleScene extends Phaser.Scene {
       else this.renderState();
     });
     this.game.events.on("battle:snapshot", this.onSnapshot, this);
+    this.game.events.on("battle:piece-mode", this.onPieceDisplayMode, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.game.events.off("battle:snapshot", this.onSnapshot, this);
+      this.game.events.off("battle:piece-mode", this.onPieceDisplayMode, this);
     });
+  }
+
+  private onPieceDisplayMode(mode: PieceDisplayMode) {
+    this.pieceDisplayMode = mode;
+    this.renderState();
   }
 
   private drawBackdrop() {
@@ -354,23 +364,6 @@ export class BattleScene extends Phaser.Scene {
     const style = this.attackStyle(event.unitKind);
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const angle = Phaser.Math.Angle.Between(source.x, source.y, target.x, target.y);
-    const artKey = HERO_ASSET_KEYS[event.unitKind] ?? TROOP_ASSET_KEYS[event.unitKind];
-    if (artKey) {
-      const attacker = this.add.image(source.x, source.y, artKey).setDisplaySize(GENERALS[event.unitKind] ? 82 : 66, GENERALS[event.unitKind] ? 82 : 66).setAlpha(0.9);
-      const lunge = event.special ? 28 : 18;
-      this.effectsLayer.add(attacker);
-      this.tweens.add({
-        targets: attacker,
-        x: source.x + Math.cos(angle) * lunge,
-        y: source.y + Math.sin(angle) * lunge,
-        scale: event.special ? 1.25 : 1.1,
-        duration: reducedMotion ? 45 : 95,
-        yoyo: true,
-        ease: "Quad.easeOut",
-        onComplete: () => attacker.destroy(),
-      });
-    }
-
     const sourceFlash = this.add.circle(source.x, source.y, event.special ? 22 : 14, style.color, 0.28).setStrokeStyle(4, style.accent, 0.92);
     this.effectsLayer.add(sourceFlash);
     this.tweens.add({ targets: sourceFlash, scale: 1.8, alpha: 0, duration: reducedMotion ? 80 : 220, onComplete: () => sourceFlash.destroy() });
@@ -390,11 +383,12 @@ export class BattleScene extends Phaser.Scene {
         this.add.triangle(27, 0, -12, -10, 14, 0, -12, 10, 0xffffff, 1),
       ]);
     } else if (style.variant === "charge") {
-      const chargeKey = artKey ?? IMAGE_ASSETS.troops.骑.key;
       projectile.add([
         this.add.ellipse(-3, 14, event.special ? 64 : 49, 16, 0x3c2b26, 0.42),
         this.add.circle(0, 0, event.special ? 28 : 22, style.color, 0.72).setStrokeStyle(4, style.accent, 1),
-        this.add.image(0, 0, chargeKey).setDisplaySize(event.special ? 58 : 47, event.special ? 58 : 47),
+        this.add.triangle(6, 0, -18, -17, 22, 0, -18, 17, style.accent, 0.95),
+        this.add.rectangle(-19, -10, event.special ? 22 : 16, 5, 0xffe6b0, 0.9),
+        this.add.rectangle(-19, 10, event.special ? 22 : 16, 5, 0xffe6b0, 0.9),
       ]);
     } else {
       const crescent = this.add.graphics();
@@ -544,7 +538,7 @@ export class BattleScene extends Phaser.Scene {
         const secondX = CAMP_X + item.secondarySlot * CAMP_CELL + CAMP_CELL / 2;
         add(this.add.rectangle((firstX + secondX) / 2, CAMP_Y + CAMP_CELL / 2, Math.abs(secondX - firstX) + 76, 76, rarityFill, 0.96)
           .setStrokeStyle(5, rarityColor, 1));
-        const heroKey = HERO_ASSET_KEYS[item.kind];
+        const heroKey = this.pieceDisplayMode === "image" ? HERO_ASSET_KEYS[item.kind] : undefined;
         if (heroKey) add(this.add.image((firstX + secondX) / 2, CAMP_Y + CAMP_CELL / 2 + 1, heroKey).setDisplaySize(92, 92).setAlpha(0.84));
         add(this.add.text((firstX + secondX) / 2, CAMP_Y + 13, rarity === "gold" ? "金" : "紫", {
           fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "15px", color: rarity === "gold" ? "#ffe49a" : "#efd9ff",
@@ -616,7 +610,7 @@ export class BattleScene extends Phaser.Scene {
       const rarityFill = rarity === "gold" ? 0x754b2d : 0x53396f;
       this.stateLayer.add(this.add.rectangle(centerX, centerY, horizontal ? 156 : 76, horizontal ? 76 : 156, mirror ? 0x48666b : rarityFill, 0.96)
         .setStrokeStyle(5, rarityColor, 1));
-      const heroKey = HERO_ASSET_KEYS[unit.kind];
+      const heroKey = this.pieceDisplayMode === "image" ? HERO_ASSET_KEYS[unit.kind] : undefined;
       if (heroKey) {
         const portrait = this.add.image(centerX, centerY + 1, heroKey).setDisplaySize(94, 94).setAlpha(0.86);
         if (mirror) portrait.setTint(0xc9dfdf);
@@ -643,7 +637,9 @@ export class BattleScene extends Phaser.Scene {
     const container = this.add.container(x, y + bob).setRotation(this.snapshot && !this.isDragging ? Math.sin((this.snapshot.tick + seed) * 0.13) * 0.018 : 0);
     const isHero = Boolean(GENERALS[kind]) || generalPart;
     const isSoldier = Boolean(SOLDIERS[kind as keyof typeof SOLDIERS]);
-    const artKey = TROOP_ASSET_KEYS[kind] ?? (kind === "铲子" ? IMAGE_ASSETS.ui.shovel.key : HERO_ASSET_KEYS[kind]);
+    const artKey = this.pieceDisplayMode === "image"
+      ? TROOP_ASSET_KEYS[kind] ?? (kind === "铲子" ? IMAGE_ASSETS.ui.shovel.key : HERO_ASSET_KEYS[kind])
+      : undefined;
     const rarityColor = rarity === "gold" ? 0xf3c45f : rarity === "purple" ? 0xb98aef : this.levelColor(level);
     const heroFill = rarity === "gold" ? 0x7c4530 : rarity === "purple" ? 0x593c72 : 0xa8513f;
     if (level >= 2 && kind !== "铲子") {
@@ -659,9 +655,9 @@ export class BattleScene extends Phaser.Scene {
     container.add(disc);
     if (artKey) container.add(this.add.image(0, 2, artKey).setDisplaySize(isHero ? 70 : 66, isHero ? 70 : 66).setAlpha(0.96));
     const compactLabel = Boolean(artKey);
-    if (compactLabel) container.add(this.add.circle(-25, -24, 14.5, opponent ? 0x38575a : 0x344c41, 0.98).setStrokeStyle(2, rarityColor, 0.95));
-    const fontSize = compactLabel ? 20 : kind.length > 1 ? 27 : generalPart ? 43 : 40;
-    const label = this.add.text(compactLabel ? -25 : 0, compactLabel ? -25 : -2, kind === "铲子" ? "铲" : kind, {
+    if (compactLabel) container.add(this.add.circle(-24, -23, 17, opponent ? 0x38575a : 0x344c41, 0.98).setStrokeStyle(2.5, rarityColor, 0.95));
+    const fontSize = compactLabel ? 24 : kind.length > 1 ? 29 : generalPart ? 45 : 43;
+    const label = this.add.text(compactLabel ? -24 : 0, compactLabel ? -24 : -2, kind === "铲子" ? "铲" : kind, {
       fontFamily: '"STKaiti", "KaiTi", "Microsoft YaHei", serif', fontSize: `${fontSize}px`, color: "#fff8dc", fontStyle: "bold",
       stroke: compactLabel ? "#263b32" : "#2b312d", strokeThickness: compactLabel ? 3 : 2,
     }).setOrigin(0.5);
@@ -721,7 +717,12 @@ export class BattleScene extends Phaser.Scene {
       const shadow = this.add.ellipse(px, py + radius * 0.7, enemy.boss ? 54 : 34, enemy.boss ? 16 : 10, 0x1f302b, 0.4);
       const frame = this.add.circle(px, py, radius, enemy.boss ? 0x8f2f2d : mirror ? 0x475c66 : 0x5e3c35, 0.88)
         .setStrokeStyle(enemy.boss ? 3 : 2, enemy.boss ? 0xffd06e : 0xf0e5cf, 0.96);
-      const body = this.add.image(px, py + 1, imageKey).setDisplaySize(size, size);
+      const body = this.pieceDisplayMode === "image"
+        ? this.add.image(px, py + 1, imageKey).setDisplaySize(size, size)
+        : this.add.text(px, py, enemy.boss ? "将" : "兵", {
+            fontFamily: '"STKaiti", "KaiTi", serif', fontSize: enemy.boss ? "44px" : "31px",
+            color: "#fff0c6", fontStyle: "bold", stroke: "#3b2522", strokeThickness: enemy.boss ? 5 : 3,
+          }).setOrigin(0.5);
       body.setRotation(step * (enemy.boss ? 0.018 : 0.035));
       if (mirror) body.setTint(0xd4e5e3);
       const barBack = this.add.rectangle(px, py - radius - 9, enemy.boss ? 54 : 38, 6, 0x482c28, 1);
