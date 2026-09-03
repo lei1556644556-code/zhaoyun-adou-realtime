@@ -284,7 +284,7 @@ describe("1.0.9 authoritative simulation", () => {
     expect(attackRangeIntersectsCell({ x: 0, y: 0 }, { x: 2.489, y: 0 }, 2)).toBe(false);
   });
 
-  it("uses the early-account effective shovel pool of 13/111", () => {
+  it("uses the early-account effective shovel pool of 13/110", () => {
     let shovels = 0;
     let total = 0;
     for (let seed = 1; seed <= 2_000; seed += 1) {
