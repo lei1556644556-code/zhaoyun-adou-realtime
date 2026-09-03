@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VITE_DEPLOY_ENV: preview
+      VITE_SUPABASE_URL: https://preview-not-configured.invalid
+      VITE_SUPABASE_PUBLISHABLE_KEY: preview-not-configured
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-preview-${{ github.sha }}
+          path: apps/client/dist
+          if-no-files-found: error
+          retention-days: 14

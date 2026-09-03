@@ -50,11 +50,16 @@ pnpm dev
 pnpm test
 pnpm check
 pnpm build
+pnpm verify
 ```
+
+`pnpm verify` 是合并门禁：校验版本与迁移台账、运行测试和类型检查、生成隔离的 Preview 产物，并冒烟检查独立房间服务器。
 
 ## 发布试玩链接
 
-仓库包含 GitHub Pages 工作流。推送到 GitHub 后，在 Settings → Pages 中选择 **GitHub Actions**，即可发布同时支持人机与 Supabase 实时房间的试玩版。
+仓库包含 GitHub Pages 工作流。先在 Settings → Pages 中选择 **GitHub Actions**，并按 `docs/operations/ENVIRONMENTS.md` 配置生产仓库变量。生产发布不会随 main 自动发生；维护者需手动运行 `Deploy GitHub Pages`，输入已通过验收的完整 commit SHA 或 `vX.Y.Z` 标签。工作流会对该 ref 重新执行发布门禁，旧标签也是静态客户端的回滚入口。
+
+PR 和 main 的 `CI` 工作流会生成隔离的静态 Preview artifact，但默认不连接生产后端。完整账号和双人预览需要独立 Preview Supabase 项目。详细集成顺序、迁移和回滚见 `docs/operations/`。
 
 ## Supabase 初始化
 
@@ -64,7 +69,7 @@ pnpm build
 supabase/migrations/20260902133000_player_accounts.sql
 ```
 
-迁移会创建独立的 `zhaoyun_adou_profiles` 云存档表并启用 RLS：每个登录用户只能读取、插入和更新自己的记录，匿名用户无表权限。使用独立表名可避免与 Supabase 项目中其他应用的玩家资料表冲突。客户端支持用环境变量覆盖项目配置：
+迁移会创建独立的 `zhaoyun_adou_profiles` 云存档表并启用 RLS：每个登录用户只能读取、插入和更新自己的记录，匿名用户无表权限。使用独立表名可避免与 Supabase 项目中其他应用的玩家资料表冲突。客户端由环境变量提供项目配置。开发者可复制到 `apps/client/.env.development.local`；正式 Pages 发布由仓库变量注入：
 
 ```bash
 VITE_SUPABASE_URL=https://你的项目.supabase.co

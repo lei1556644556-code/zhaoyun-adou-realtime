@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "migrations": [
+    {
+      "id": "20260902133000_player_accounts",
+      "introducedIn": "0.1.0",
+      "owner": "05-account-economy-cloud-save",
+      "requiredBefore": "client-production",
+      "rollback": "forward-only-preserve-data"
+    }
+  ]
+}

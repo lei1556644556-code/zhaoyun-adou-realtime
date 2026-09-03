@@ -3,10 +3,19 @@
   "private": true,
   "version": "0.1.0",
   "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": ">=24 <25"
+  },
   "scripts": {
     "dev": "pnpm -r --parallel --filter @adou/server --filter @adou/client dev",
     "build": "pnpm --filter @adou/client build && pnpm --filter @adou/server check",
+    "build:preview": "pnpm --filter @adou/client build:preview && pnpm --filter @adou/server check",
+    "build:production": "pnpm --filter @adou/client build:production && pnpm --filter @adou/server check",
+    "preview": "pnpm --filter @adou/client preview",
     "test": "pnpm --filter @adou/shared test",
-    "check": "pnpm -r check"
+    "check": "pnpm -r check",
+    "smoke:server": "pnpm --filter @adou/server exec tsx ../../tools/smoke-server.ts",
+    "release:check": "node tools/validate-release.mjs",
+    "verify": "pnpm release:check && pnpm test && pnpm check && pnpm build:preview && pnpm smoke:server"
   }
 }

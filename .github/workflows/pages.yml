@@ -1,9 +1,12 @@
-name: Deploy static practice build to GitHub Pages
+name: Deploy GitHub Pages
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "已通过验收的完整 commit SHA 或 v* 发布标签；回滚时填写旧标签"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -11,8 +14,8 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
-  cancel-in-progress: true
+  group: pages-production
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -20,8 +23,16 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VITE_DEPLOY_ENV: production
+      VITE_SUPABASE_URL: ${{ vars.PRODUCTION_SUPABASE_URL }}
+      VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.PRODUCTION_SUPABASE_PUBLISHABLE_KEY }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: 11.19.0
@@ -30,7 +41,10 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @adou/client build
+      - name: Re-run release gates for the exact deployment ref
+        run: pnpm verify
+      - name: Build production client
+        run: pnpm build:production
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

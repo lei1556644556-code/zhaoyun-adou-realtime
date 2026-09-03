@@ -9,6 +9,7 @@ import { IMAGE_ASSETS } from "./game/assets";
 import { createGame } from "./game/BattleScene";
 import { PracticeEngine } from "./game/PracticeEngine";
 import { RealtimeClient } from "./net/RealtimeClient";
+import { loadRuntimeConfig } from "./app/runtimeConfig";
 import {
   SupabaseService, type AccountEconomy, type CloudProgress, type OwnedProp, type PlayerProfile, type ShopOffer,
 } from "./auth/SupabaseService";
@@ -153,7 +154,8 @@ const authScreen = get<HTMLElement>("auth-screen");
 const battleShell = get<HTMLElement>("battle-shell");
 const lobbyNote = get<HTMLElement>("lobby-note");
 const game = createGame("game");
-const cloud = new SupabaseService();
+const runtimeConfig = loadRuntimeConfig();
+const cloud = new SupabaseService(runtimeConfig.supabase);
 let snapshot: MatchSnapshot | null = null;
 let slot: PlayerSlot = 0;
 let practice: PracticeEngine | null = null;
@@ -571,7 +573,7 @@ async function onlineAction(kind: "create" | "join" | "quick") {
   practice?.stop(); practice = null;
   loadoutSentKey = "";
   online?.close();
-  online = new RealtimeClient(scopedStorageKey(ONLINE_SESSION_KEY)); bindOnline(online);
+  online = new RealtimeClient(scopedStorageKey(ONLINE_SESSION_KEY), runtimeConfig.supabase); bindOnline(online);
   lobbyNote.textContent = "正在连接 Supabase 实时房间……";
   let result;
   try {
@@ -914,7 +916,7 @@ async function restoreActiveSession(remoteProgress: CloudProgress | null) {
   try {
     const saved = JSON.parse(localStorage.getItem(scopedStorageKey(ONLINE_SESSION_KEY)) ?? "null") as { roomId?: string; token?: string } | null;
     if (!saved?.roomId || !saved.token) throw new Error("没有可恢复的房间凭证");
-    online = new RealtimeClient(scopedStorageKey(ONLINE_SESSION_KEY)); bindOnline(online);
+    online = new RealtimeClient(scopedStorageKey(ONLINE_SESSION_KEY), runtimeConfig.supabase); bindOnline(online);
     const result = await online.resume(saved.roomId, saved.token);
     if (!result.ok || result.slot === undefined || !result.roomId) throw new Error(result.message ?? "房间已失效");
     slot = result.slot; activeMode = "online"; commandSink = (command) => online?.send(command);

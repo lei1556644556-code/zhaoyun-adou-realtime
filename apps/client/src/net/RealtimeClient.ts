@@ -1,11 +1,9 @@
-import { createClient, type RealtimeChannel } from "@supabase/supabase-js";
+import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js";
 import {
   GAME_CONFIG, applyCommand, cloneSnapshot, createMatch, stepMatch,
   type CommandEnvelope, type MatchSnapshot, type PlayerSlot,
 } from "@adou/shared";
 
-const DEFAULT_SUPABASE_URL = "https://dkaabuxszrbnnrajnoaa.supabase.co";
-const DEFAULT_SUPABASE_KEY = "sb_publishable_8UjZAjC-Ts2NiP8_NpmFdA_jv-CEzhd";
 const ROOM_PREFIX = "adou-room-v1-";
 const QUICK_CHANNEL = "adou-matchmaking-v1";
 
@@ -48,11 +46,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export class RealtimeClient extends EventTarget {
-  private readonly client = createClient(
-    import.meta.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL,
-    import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || DEFAULT_SUPABASE_KEY,
-    { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } },
-  );
+  private readonly client: SupabaseClient;
   private readonly clientId = crypto.randomUUID();
   private readonly storageKey: string;
   private readonly intentionalClosures = new WeakSet<RealtimeChannel>();
@@ -79,9 +73,12 @@ export class RealtimeClient extends EventTarget {
   token = "";
   stateVersion = 0;
 
-  constructor(storageKey = "adou-session") {
+  constructor(storageKey: string, connection: { url: string; publishableKey: string }) {
     super();
     this.storageKey = storageKey;
+    this.client = createClient(connection.url, connection.publishableKey, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
   }
 
   private emit(type: string, detail: unknown) {

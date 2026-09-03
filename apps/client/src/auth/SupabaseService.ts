@@ -1,8 +1,6 @@
 import { createClient, type Session, type SupabaseClient } from "@supabase/supabase-js";
 import type { MatchSnapshot, PropLoadout } from "@adou/shared";
 
-const DEFAULT_SUPABASE_URL = "https://dkaabuxszrbnnrajnoaa.supabase.co";
-const DEFAULT_SUPABASE_KEY = "sb_publishable_8UjZAjC-Ts2NiP8_NpmFdA_jv-CEzhd";
 const PROFILE_TABLE = "zhaoyun_adou_profiles";
 
 export interface OwnedProp {
@@ -84,10 +82,8 @@ function readableAuthError(message: string) {
 export class SupabaseService {
   private client: SupabaseClient;
 
-  constructor() {
-    const url = import.meta.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
-    const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || DEFAULT_SUPABASE_KEY;
-    this.client = createClient(url, key, {
+  constructor(connection: { url: string; publishableKey: string }) {
+    this.client = createClient(connection.url, connection.publishableKey, {
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
     });
   }
