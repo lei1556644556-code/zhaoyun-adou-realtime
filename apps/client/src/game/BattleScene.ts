@@ -41,6 +41,8 @@ type EnemyVisual = {
   root: Phaser.GameObjects.Container;
   figure: Phaser.GameObjects.Container;
   body: Phaser.GameObjects.Image | Phaser.GameObjects.Text;
+  baseSize: number;
+  imageBody: boolean;
   healthBar: Phaser.GameObjects.Rectangle;
   healthBarWidth: number;
   seed: number;
@@ -1238,13 +1240,14 @@ export class BattleScene extends Phaser.Scene {
     const shadow = this.add.ellipse(0, radius * 0.7, enemy.boss ? 54 : 34, enemy.boss ? 16 : 10, 0x1f302b, 0.4);
     const frame = this.add.circle(0, 0, radius, enemy.boss ? 0x8f2f2d : mirror ? 0x475c66 : 0x5e3c35, 0.88)
       .setStrokeStyle(enemy.boss ? 3 : 2, enemy.boss ? 0xffd06e : 0xf0e5cf, 0.96);
-    const body = this.pieceDisplayMode === "image"
-      ? this.add.image(0, 1, imageKey).setDisplaySize(size, size)
+    const imageBody = this.pieceDisplayMode === "image";
+    const scaleMultiplier = enemy.scaleMultiplier ?? 1;
+    const body = imageBody
+      ? this.add.image(0, 1, imageKey).setDisplaySize(size * scaleMultiplier, size * scaleMultiplier)
       : this.add.text(0, 0, enemy.boss ? "将" : "兵", {
           fontFamily: '"STKaiti", "KaiTi", serif', fontSize: enemy.boss ? "44px" : "31px",
           color: "#fff0c6", fontStyle: "bold", stroke: "#3b2522", strokeThickness: enemy.boss ? 5 : 3,
-        }).setOrigin(0.5);
-    body.setScale(enemy.scaleMultiplier ?? 1);
+        }).setOrigin(0.5).setScale(scaleMultiplier);
     if (mirror) body.setTint(0xd4e5e3);
     figure.add([shadow, frame, body]);
     const barBack = this.add.rectangle(0, -radius - 9, healthBarWidth, 6, 0x482c28, 1);
@@ -1253,7 +1256,7 @@ export class BattleScene extends Phaser.Scene {
       .setOrigin(0, 0.5);
     root.add([figure, barBack, healthBar]);
     this.enemyLayer.add(root);
-    return { root, figure, body, healthBar, healthBarWidth, seed, boss: enemy.boss } satisfies EnemyVisual;
+    return { root, figure, body, baseSize: size, imageBody, healthBar, healthBarWidth, seed, boss: enemy.boss } satisfies EnemyVisual;
   }
 
   private syncEnemies(previous?: MatchSnapshot | null) {
@@ -1275,7 +1278,15 @@ export class BattleScene extends Phaser.Scene {
         visual = this.createEnemyVisual(enemy, side.mirror, start.x, start.y);
         this.enemyVisuals.set(key, visual);
       }
-      visual.body.setScale(enemy.scaleMultiplier ?? 1);
+      const scaleMultiplier = enemy.scaleMultiplier ?? 1;
+      if (visual.imageBody) {
+        (visual.body as Phaser.GameObjects.Image).setDisplaySize(
+          visual.baseSize * scaleMultiplier,
+          visual.baseSize * scaleMultiplier,
+        );
+      } else {
+        visual.body.setScale(scaleMultiplier);
+      }
       const ratio = Math.max(0, Math.min(1, enemy.hp / enemy.maxHp));
       visual.healthBar.setDisplaySize(Math.max(0.01, visual.healthBarWidth * ratio), 6);
       this.tweens.killTweensOf(visual.root);

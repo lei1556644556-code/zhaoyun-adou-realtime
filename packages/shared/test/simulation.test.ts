@@ -254,6 +254,30 @@ describe("1.0.9 authoritative simulation", () => {
     expect(match.players[0].units.every((unit) => unit.secondaryCell === undefined)).toBe(true);
   });
 
+  it("swaps a pulled general character directly with a single-cell soldier", () => {
+    const match = createMatch("SPLIT-SWAP-SOLDIER", 117);
+    const firstCell = cellIndex(2, 7);
+    const secondCell = cellIndex(3, 7);
+    const soldierCell = cellIndex(4, 7);
+    match.players[0].units = [
+      {
+        id: "general", kind: "张飞", level: 2, cell: firstCell, secondaryCell: secondCell,
+        parts: ["张", "飞"], cooldownMs: 0, attackCount: 0,
+      },
+      { id: "soldier", kind: "骑", level: 3, cell: soldierCell, cooldownMs: 0, attackCount: 0 },
+    ];
+
+    expect(applyCommand(match, 0, {
+      type: "SPLIT_GENERAL", unitId: "general", partIndex: 0, targetCell: soldierCell,
+    }).ok).toBe(true);
+    expect(match.events.map((event) => event.type)).toEqual(["general-split", "units-swapped"]);
+    expect(match.players[0].units).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "soldier", kind: "骑", level: 3, cell: firstCell }),
+      expect.objectContaining({ kind: "飞", level: 2, cell: secondCell }),
+      expect.objectContaining({ kind: "张", level: 2, cell: soldierCell }),
+    ]));
+  });
+
   it("moves and merges pieces inside the camp", () => {
     const match = createMatch("TEST", 15);
     match.players[0].reserve = [

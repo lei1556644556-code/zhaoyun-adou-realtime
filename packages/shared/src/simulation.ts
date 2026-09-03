@@ -849,7 +849,11 @@ function splitGeneral(snapshot: MatchSnapshot, player: PlayerBattleState, unitId
   if (!general || general.secondaryCell === undefined || !GENERALS[general.kind]) return "该单位不是可拆分武将";
   const cells: [number, number] = [general.cell, general.secondaryCell];
   if (cells.includes(targetCell)) return null;
-  if (unitAtCell(player, targetCell)) return "拆字目标格必须为空";
+  const target = unitAtCell(player, targetCell);
+  if (target?.secondaryCell !== undefined) return "拆出的姓名字只能与单格单位交换";
+  if (target && ((target.bossLockedMs ?? 0) !== 0 || (target.bossChaosMs ?? 0) > 0 || target.bossKnockedDown)) {
+    return "目标单位正受 Boss 控制，暂时无法交互";
+  }
   const parts = general.parts ?? [general.kind[0] ?? "", general.kind[1] ?? ""];
   const otherIndex: 0 | 1 = partIndex === 0 ? 1 : 0;
   const idBase = `${general.id}-split-${snapshot.stateVersion + 1}`;
@@ -861,14 +865,27 @@ function splitGeneral(snapshot: MatchSnapshot, player: PlayerBattleState, unitId
   const movedPart = makePart(partIndex, targetCell);
   player.units = player.units.filter((unit) => unit.id !== general.id);
   const partsAfterSplit = [stationaryPart, movedPart];
+  if (target) target.cell = cells[partIndex];
   player.units.push(...partsAfterSplit);
-  player.lastEvent = `拆分「${general.kind}」为「${parts[0]}」「${parts[1]}」`;
+  player.lastEvent = target
+    ? `拆字「${parts[partIndex]}」与「${target.kind}」交换`
+    : `拆分「${general.kind}」为「${parts[0]}」「${parts[1]}」`;
   emitBattleEvent(snapshot, {
     type: "general-split", slot: player.slot, generalId: general.id,
     parts: partsAfterSplit.map((part) => ({ id: part.id, kind: part.kind, cell: part.cell })),
   });
-  autoCombineHorizontalGeneral(snapshot, player, movedPart.id);
-  autoCombineHorizontalGeneral(snapshot, player, stationaryPart.id);
+  if (target) {
+    emitBattleEvent(snapshot, {
+      type: "units-swapped", slot: player.slot,
+      placements: [{ id: movedPart.id, cells: [movedPart.cell] }, { id: target.id, cells: [target.cell] }],
+    });
+  }
+  // A direct part-to-unit drop is an explicit swap. Do not immediately undo the
+  // player's placement by auto-combining the two newly split characters again.
+  if (!target) {
+    autoCombineHorizontalGeneral(snapshot, player, movedPart.id);
+    autoCombineHorizontalGeneral(snapshot, player, stationaryPart.id);
+  }
   return null;
 }
 
