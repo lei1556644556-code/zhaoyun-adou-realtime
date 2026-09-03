@@ -10,7 +10,8 @@
     "build:production": "node ../../tools/validate-client-env.mjs production && tsc --noEmit && vite build --mode production && node ../../tools/write-release-manifest.mjs dist && node ../../tools/check-client-bundle.mjs dist",
     "preview": "vite preview --host 0.0.0.0",
     "check": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:presentation": "vitest run src/presentation/__tests__/presentation.test.mjs"
   },
   "dependencies": {
     "@adou/shared": "workspace:*",
