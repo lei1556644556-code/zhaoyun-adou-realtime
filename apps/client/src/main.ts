@@ -3,7 +3,7 @@ import {
   ACTIVE_PROP_IDS, GAME_CONFIG, GENERAL_LEVEL_ATTACK, GENERAL_LEVEL_SPEED, GENERALS, HERO_PAIRS, MAP_LAYOUTS,
   PASSIVE_PROP_IDS, PROPS, PROP_RARITY_COLORS, PROP_RARITY_NAMES, SOLDIER_LEVEL_ATTACK,
   SOLDIER_LEVEL_SPEED, SOLDIERS,
-  shovelSupplyCount,
+  bulldozerSupplyAvailable, shovelSupplyCount,
   type ActivePropId, type GameCommand, type MatchSnapshot, type PlayerSlot, type PropLoadout,
 } from "@adou/shared";
 import { IMAGE_ASSETS } from "./game/assets";
@@ -15,6 +15,7 @@ import {
 } from "./game/battleInteraction";
 import { PracticeEngine } from "./game/PracticeEngine";
 import { RealtimeClient } from "./net/RealtimeClient";
+import { AuthoritativeRealtimeClient } from "./net/AuthoritativeRealtimeClient";
 import { loadRuntimeConfig } from "./app/runtimeConfig";
 import {
   SupabaseService, type AccountEconomy, type CloudProgress, type PlayerProfile, type ShopOffer,
@@ -173,7 +174,8 @@ const cloud = new SupabaseService(runtimeConfig.supabase);
 let snapshot: MatchSnapshot | null = null;
 let slot: PlayerSlot = 0;
 let practice: PracticeEngine | null = null;
-let online: RealtimeClient | null = null;
+type OnlineClient = RealtimeClient | AuthoritativeRealtimeClient;
+let online: OnlineClient | null = null;
 let commandSink: ((command: GameCommand) => void) | null = null;
 let toastTimer = 0;
 let roomPlayers: Array<{ slot: PlayerSlot; name: string }> = [];
@@ -295,7 +297,8 @@ function renderActiveProps() {
   const mine = snapshot?.players[slot];
   const active = mine?.props?.loadout.active ?? propLoadout.active;
   const supplyCount = mine && snapshot ? shovelSupplyCount(snapshot, mine) : 0;
-  const structureKey = `${supplyCount > 0 ? "supply" : ""}:${active.join(",")}`;
+  const bulldozerReady = Boolean(mine && snapshot && bulldozerSupplyAvailable(snapshot, mine));
+  const structureKey = `${supplyCount > 0 ? "supply" : ""}:${bulldozerReady ? "bulldozer" : ""}:${active.join(",")}`;
   if (bar.dataset.structureKey !== structureKey) {
     const buttons: HTMLElement[] = [];
     if (supplyCount > 0) {
@@ -305,6 +308,14 @@ function renderActiveProps() {
       supply.style.setProperty("--prop-color", "#e99431");
       supply.innerHTML = "<i>铲</i><b></b><small>直接领取·原广告</small>";
       buttons.push(supply);
+    }
+    if (bulldozerReady) {
+      const bulldozer = document.createElement("button");
+      bulldozer.type = "button";
+      bulldozer.dataset.claimBulldozer = "";
+      bulldozer.style.setProperty("--prop-color", "#c46c3d");
+      bulldozer.innerHTML = "<i>车</i><b>推土车</b><small>直接出动·原广告</small>";
+      buttons.push(bulldozer);
     }
     for (const id of active) {
       const prop = PROPS[id]!;
@@ -615,7 +626,9 @@ function enterBattle(mode: string, network: boolean) {
   lobby.hidden = true; battleShell.hidden = false;
   window.scrollTo({ top: 0, left: 0, behavior: "instant" });
   get("mode-label").textContent = mode;
-  get("network-label").textContent = network ? "房主权威演算 · Supabase 实时同步" : "本地权威演算";
+  get("network-label").textContent = network
+    ? runtimeConfig.serverUrl ? "常驻服务器权威演算" : "本地兼容联机"
+    : "本地权威演算";
   get("network-pill").classList.toggle("is-online", network);
   applyPieceDisplayMode();
   requestAnimationFrame(() => {
@@ -648,7 +661,17 @@ function startPractice(saved?: MatchSnapshot) {
   scheduleCloudSave();
 }
 
-function bindOnline(client: RealtimeClient) {
+function createOnlineClient(): OnlineClient {
+  const storageKey = scopedStorageKey(ONLINE_SESSION_KEY);
+  if (!runtimeConfig.serverUrl) return new RealtimeClient(storageKey, runtimeConfig.supabase);
+  return new AuthoritativeRealtimeClient(storageKey, runtimeConfig.serverUrl, async () => {
+    const session = await cloud.session();
+    if (!session?.access_token) throw new Error("登录已失效，请重新登录后进入真人对战");
+    return session.access_token;
+  });
+}
+
+function bindOnline(client: OnlineClient) {
   client.addEventListener("snapshot", (event) => updateSnapshot((event as CustomEvent<MatchSnapshot>).detail));
   client.addEventListener("notice", (event) => showToast((event as CustomEvent<{ message: string }>).detail.message));
   client.addEventListener("network", (event) => {
@@ -668,8 +691,8 @@ async function onlineAction(kind: "create" | "join" | "quick") {
   practice?.stop(); practice = null;
   loadoutSentKey = "";
   online?.close();
-  online = new RealtimeClient(scopedStorageKey(ONLINE_SESSION_KEY), runtimeConfig.supabase); bindOnline(online);
-  lobbyNote.textContent = "正在连接 Supabase 实时房间……";
+  online = createOnlineClient(); bindOnline(online);
+  lobbyNote.textContent = runtimeConfig.serverUrl ? "正在连接权威对战服务器……" : "正在连接本地实时房间……";
   let result;
   const introRound = economy.totalMatches;
   try {
@@ -923,6 +946,8 @@ activePropBar.addEventListener("click", (event) => {
   if (suppressActivePropClick) { event.preventDefault(); return; }
   const supply = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-claim-shovels]");
   if (supply && !supply.disabled) { commandSink?.({ type: "CLAIM_SHOVEL_SUPPLY" }); return; }
+  const bulldozer = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-claim-bulldozer]");
+  if (bulldozer && !bulldozer.disabled) { commandSink?.({ type: "CLAIM_BULLDOZER_SUPPLY" }); return; }
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-use-prop]");
   if (button && !button.disabled) useActiveProp(Number(button.dataset.useProp) as ActivePropId);
 });
@@ -1020,7 +1045,7 @@ async function restoreActiveSession(remoteProgress: CloudProgress | null) {
   try {
     const saved = JSON.parse(localStorage.getItem(scopedStorageKey(ONLINE_SESSION_KEY)) ?? "null") as { roomId?: string; token?: string } | null;
     if (!saved?.roomId || !saved.token) throw new Error("没有可恢复的房间凭证");
-    online = new RealtimeClient(scopedStorageKey(ONLINE_SESSION_KEY), runtimeConfig.supabase); bindOnline(online);
+    online = createOnlineClient(); bindOnline(online);
     const result = await online.resume(saved.roomId, saved.token);
     if (!result.ok || result.slot === undefined || !result.roomId) throw new Error(result.message ?? "房间已失效");
     slot = result.slot; activeMode = "online"; commandSink = (command) => online?.send(command);

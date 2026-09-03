@@ -2,7 +2,7 @@
 
 ## 结论
 
-正式联网不能继续让“创建房间的浏览器”兼任服务器。当前 GitHub Pages 版本使用 Supabase Realtime 广播，房主页面负责推进战斗；因此房主关页、休眠或断网后，客端虽然仍连着 Supabase，却收不到权威快照，界面会误显示“已连接”并冻结。该结构无法靠重试彻底修好。
+正式联网不再让“创建房间的浏览器”兼任服务器。生产客户端使用 Socket.IO 连接 `apps/server`；旧 Supabase Realtime 房主权威实现仅保留给无 `VITE_SERVER_URL` 的本地兼容调试，生产构建禁止回退。
 
 v2 的唯一正式方案是：`apps/server` 成为双方共同连接的唯一权威端，Supabase 只负责账号认证与持久化；GitHub Pages 只托管静态客户端。
 
@@ -61,10 +61,11 @@ UI 必须分别展示三个状态，不能再把 WebSocket 订阅成功等同于
 
 ## 部署
 
-1. 将 `apps/server` 部署到支持常驻 WebSocket 的 Node 运行环境，配置 HTTPS 域名、`CLIENT_ORIGIN`、Supabase 私有服务端凭证和数据库连接。
-2. 客户端运行配置新增必填 `VITE_SERVER_URL=https://...`；生产构建禁止回退到 Pages 同源或浏览器房主模式。
-3. 新增 Socket.IO `MatchTransport`，完成后删除生产路径对 `RealtimeClient` 房主权威逻辑的调用；Supabase Realtime 可只保留预览兼容开关。
-4. 灰度环境先完成双浏览器验收，再切换 GitHub Pages 生产变量。
+1. `Dockerfile.server` 和 `render.yaml` 将 `apps/server` 部署到支持常驻 WebSocket 的 Node 环境；生产强制配置 HTTPS、精确 `CLIENT_ORIGIN` 和 Supabase 私有服务端凭证。
+2. 客户端生产运行配置必填 `VITE_SERVER_URL=https://...`；生产构建禁止回退到 Pages 同源或浏览器房主模式。
+3. `AuthoritativeRealtimeClient` 已接线 Socket.IO，生产路径不调用 `RealtimeClient` 房主权威实现。
+4. Supabase `zhaoyun_adou_matches` 保存 24 小时检查点；恢复令牌只保存 SHA-256。
+5. 常驻服务部署完成并通过双浏览器验收后，写入 GitHub `PRODUCTION_SERVER_URL` 再发布 Pages。
 
 ## 发布闸门
 

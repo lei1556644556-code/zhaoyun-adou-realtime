@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: zhaoyun-adou-authority
+    runtime: docker
+    plan: 0.5c-512mb
+    region: singapore
+    dockerfilePath: ./Dockerfile.server
+    healthCheckPath: /health
+    autoDeployTrigger: checksPass
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: REQUIRE_AUTH
+        value: "true"
+      - key: CLIENT_ORIGIN
+        value: https://lei1556644556-code.github.io
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

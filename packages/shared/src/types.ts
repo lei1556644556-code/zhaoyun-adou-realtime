@@ -21,6 +21,14 @@ export interface UnitState {
   /** 砚台造成的临时攻速倍率及剩余时间。 */
   temporaryAttackSpeedMultiplier?: number;
   temporaryAttackSpeedMs?: number;
+  /** Boss 控制状态；均由权威模拟推进，升级会清除原包规定可驱散的状态。 */
+  bossChaosMs?: number;
+  bossSuppressionMs?: number;
+  bossSuppressionOriginalLevel?: number;
+  bossKnockedDown?: boolean;
+  bossLockedMs?: number;
+  /** 已通过升级驱散的甄宓降雨来源。 */
+  rainDispelledBossIds?: string[];
   incomeMs?: number;
 }
 
@@ -45,6 +53,42 @@ export interface EnemyState {
   /** 原包每张地图三名 Boss 按出场次序循环；旧快照可缺省。 */
   bossType?: number;
   stunnedMs: number;
+  /** 原包逐节点移动状态，坐标单位为格，位置对应 80px 格子的左上角。 */
+  pathX?: number;
+  pathY?: number;
+  /** 当前正在前往的完整路径节点下标。 */
+  pathIndex?: number;
+  moveSpeedMultiplier?: number;
+  moveSpeedBuffMs?: number;
+  inspireBonusHp?: number;
+  scaleMultiplier?: number;
+  bossCooldownMs?: number;
+  bossSkillElapsedMs?: number;
+  bossSkillTargetIds?: string[];
+  bossSkillHitIds?: string[];
+  bossSkillUsed?: boolean;
+  resurrectionRemaining?: number;
+  summonedKind?: "zombie" | "cavalry" | "puppet";
+  summonedUnitKind?: string;
+  summonedUnitLevel?: number;
+}
+
+export interface ArrowRainImpactState {
+  id: string;
+  unitId: string;
+  x: number;
+  y: number;
+  damage: number;
+  remainingMs: number;
+}
+
+export interface BulldozerState {
+  x: number;
+  y: number;
+  routeIndices: number[];
+  cursor: number;
+  phase: "moving" | "fading";
+  fadeMs: number;
 }
 
 export interface PropLoadout {
@@ -72,6 +116,8 @@ export interface PlayerPropState {
   meteorMs: number;
   /** 原包局内“看广告获得两把铲子”；网页端点击直接领取，每局一次。 */
   shovelSupplyClaimed?: boolean;
+  /** 原包敌军距终点 5 个路径节点时出现的推土车广告补给；网页端直接领取。 */
+  bulldozer?: BulldozerState;
 }
 
 export interface BattleEventBase {
@@ -166,6 +212,31 @@ export type BattleEventPayload =
     slot: PlayerSlot;
     propId: BattlePropId;
     targetIds: string[];
+    rewardBuns?: number;
+  }
+  | {
+    type: "boss-skill";
+    slot: PlayerSlot;
+    bossId: string;
+    bossType: number;
+    skillName: string;
+    phase: "cast" | "resolved" | "intercepted";
+    targetIds: string[];
+  }
+  | {
+    type: "arrow-rain-impact";
+    slot: PlayerSlot;
+    unitId: string;
+    x: number;
+    y: number;
+    damage: number;
+    targetIds: string[];
+  }
+  | {
+    type: "bulldozer";
+    slot: PlayerSlot;
+    phase: "launched" | "push" | "expired";
+    targetIds: string[];
   }
   | {
     type: "attack";
@@ -229,9 +300,13 @@ export interface PlayerBattleState {
   recruitNameBonusApplied?: boolean;
   units: UnitState[];
   reserve: ReserveItem[];
-  /** 初始为地图里的 1_0，铲子可加入相邻的 2_0。 */
+  /** 初始为地图里的 1_0；铲子可加入任意己方 2_0，不要求相邻。 */
   unlockedCells: number[];
   enemies: EnemyState[];
+  pendingArrowImpacts?: ArrowRainImpactState[];
+  /** 仍在生效的甄宓降雨 Boss；每个来源对尚未升级驱散的单位施加 -20% 攻速。 */
+  rainBossIds?: string[];
+  visionDarkMs?: number;
   /** 道具状态为可选以继续读取早期云存档；演算时会补齐。 */
   props?: PlayerPropState;
   lastEvent: string;
@@ -244,6 +319,10 @@ export interface MatchSnapshot {
   version: typeof MATCH_SNAPSHOT_VERSION;
   /** @deprecated 1.0 快照兼容别名；与 version 保持一致。 */
   snapshotVersion: typeof MATCH_SNAPSHOT_VERSION;
+  /** 对局使用的原版规则版本；服务端握手和恢复时必须一致。 */
+  rulesetVersion: typeof import("./config").RULESET_VERSION;
+  /** 机器规则配置结构版本；与玩法版本分开演进。 */
+  rulesConfigSchemaVersion: typeof import("./config").RULES_CONFIG_SCHEMA_VERSION;
   roomId: string;
   tick: number;
   stateVersion: number;
@@ -273,6 +352,8 @@ export interface MatchSnapshot {
 type MigratableMatchSnapshotField =
   | "version"
   | "snapshotVersion"
+  | "rulesetVersion"
+  | "rulesConfigSchemaVersion"
   | "simulationTimeMs"
   | "events"
   | "eventSequence"
@@ -290,6 +371,7 @@ export type GameCommand =
   | { type: "SET_PROP_LOADOUT"; loadout: PropLoadout; earlyAccountShovelBonus?: boolean }
   | { type: "USE_PROP"; propId: ActivePropId; targetUnitId?: string; targetEnemyId?: string; targetCell?: number; reserveId?: string }
   | { type: "CLAIM_SHOVEL_SUPPLY" }
+  | { type: "CLAIM_BULLDOZER_SUPPLY" }
   | { type: "DROP_RESERVE"; reserveId: string; targetCell: number }
   | { type: "DROP_RESERVE_TO_SLOT"; reserveId: string; targetSlot: number }
   | { type: "DROP_UNIT"; unitId: string; targetCell: number }

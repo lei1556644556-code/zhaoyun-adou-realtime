@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  BOSS_SKILL_RULES,
   ACTIVE_PROP_IDS,
   ATTACK_RANGE_RULES,
   BOSS_CHANCES,
@@ -48,9 +49,13 @@ function stableFingerprint(value: unknown) {
 }
 
 describe("1.0.9 versioned rules config", () => {
+  it("publishes all twelve recovered boss skill contracts through the single rules entry", () => {
+    expect(BOSS_SKILL_RULES).toHaveLength(12);
+    expect(RULES_CONFIG_1_0_9.waves.bossSkills).toBe(BOSS_SKILL_RULES);
+  });
   it("publishes one versioned entry point and honest evidence metadata", () => {
     expect(RULES_CONFIG_1_0_9.rulesetVersion).toBe("1.0.9");
-    expect(RULES_CONFIG_1_0_9.schemaVersion).toBe("1.2.0");
+    expect(RULES_CONFIG_1_0_9.schemaVersion).toBe("1.3.0");
     expect(RULES_CONFIG_1_0_9.evidence).toBe(RULE_EVIDENCE_SOURCES);
     expect(RULES_CONFIG_1_0_9.provenance).toBe(RULE_PROVENANCE);
     expect(RULE_EVIDENCE_SOURCES.originalPackage.artifactPath).toBeNull();
@@ -69,7 +74,10 @@ describe("1.0.9 versioned rules config", () => {
       attackCollision: "package-recorded",
       wavesAndBossChance: "package-recorded",
       mapLayouts: "package-recorded",
-      mapPathInterpolation: "project-adaptation",
+      mapPathInterpolation: "package-recorded",
+      bossSkillRuntime: "package-recorded",
+      huangZhongArrowRain: "package-recorded",
+      bulldozerAndGoldSeeker: "package-recorded",
       propsCatalog: "package-recorded",
       propRuntimeDetails: "pending-original-verification",
       propAcquisition: "pending-original-verification",
@@ -226,7 +234,11 @@ describe("1.0.9 versioned rules config", () => {
     });
     expect(PROP_EFFECTS[20]).toMatchObject({ cooldownMs: 300_000, lastRouteCells: 6, impactRadiusCells: 1 });
     expect(PROP_EFFECTS[23]).toMatchObject({ amount: 10, consumedImmediately: true });
-    expect(PROP_EFFECTS[24].recordedRuntimeReward).toBeNull();
+    expect(PROP_EFFECTS[24]).toMatchObject({
+      verification: "package-recorded",
+      trigger: "every-successful-shovel-use",
+      reward: { currency: "buns", min: 1, max: 10, distribution: "uniform-integer" },
+    });
 
     for (const outcome of PROP_EFFECTS[3].outcomes) {
       expect(outcome.upChance + outcome.downChance).toBe(1);
@@ -244,7 +256,7 @@ describe("1.0.9 versioned rules config", () => {
     const recordedEffects = Object.fromEntries(
       Object.entries(PROP_EFFECTS).filter(([, effect]) => effect.verification === "package-recorded"),
     );
-    expect(stableFingerprint(recordedEffects)).toBe("a2208652a5d540f3");
+    expect(stableFingerprint(recordedEffects)).toBe("b8e96bb6dd76de9a");
 
     expect(PROP_ACQUISITION_RULES.loadout).toMatchObject({ activeLimit: 2, passiveLimit: 6, duplicatesAllowed: false });
     expect(PROP_ACQUISITION_RULES.inBattleShovelSupply.webAdaptation).toEqual({

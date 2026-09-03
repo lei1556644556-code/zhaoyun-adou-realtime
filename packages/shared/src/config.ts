@@ -1,6 +1,6 @@
 /** 原作规则版本；与网络协议版本分开演进。 */
 export const RULESET_VERSION = "1.0.9" as const;
-export const RULES_CONFIG_SCHEMA_VERSION = "1.2.0" as const;
+export const RULES_CONFIG_SCHEMA_VERSION = "1.3.0" as const;
 
 export type RuleVerificationStatus =
   | "package-recorded"
@@ -85,12 +85,27 @@ export const RULE_PROVENANCE = {
   mapLayouts: {
     status: "package-recorded",
     evidenceRefs: ["SPEC-DOCX#table-16", "SPEC-DOCX#table-17", "SPEC-DOCX#table-18", "SPEC-DOCX#table-19", "RULES-MD#7"],
-    note: "四张 8×10 地图格子矩阵已按候选包体表记录进入共享配置；不包含 path 插值实现。",
+    note: "四张 8×10 地图格子矩阵已按候选包体表记录进入共享配置。",
   },
   mapPathInterpolation: {
-    status: "project-adaptation",
-    evidenceRefs: ["RULES-MD#7", "packages/shared/test/simulation.test.ts#mirrored-paths"],
-    note: "当前 path 折点和线性插值用于让敌人沿已记录道路行军；原包的精确移动插值未随库。",
+    status: "package-recorded",
+    evidenceRefs: ["ORIGINAL-1.0.9#_s.move", "RULES-MD#7", "packages/shared/test/simulation.test.ts#node-handoff"],
+    note: "按 _s.move 恢复为逐节点像素移动；距节点小于 1px 的一帧只切换索引，不移动且不夹取。",
+  },
+  bossSkillRuntime: {
+    status: "package-recorded",
+    evidenceRefs: ["ORIGINAL-1.0.9#ft/It", "packages/shared/test/simulation.test.ts#boss-skills"],
+    note: "12 套 Boss 目标、数值、持续时间、召唤/转化、解除条件与降妖符拦截已进入共享权威模拟。",
+  },
+  huangZhongArrowRain: {
+    status: "package-recorded",
+    evidenceRefs: ["ORIGINAL-1.0.9#Na.TF/_R", "packages/shared/test/simulation.test.ts#huangzhong-rain"],
+    note: "逐路径节点生成、±24px 落点、Fisher–Yates 洗牌、500–749ms 逐箭延迟、2倍伤害与150px碰撞半径已冻结。",
+  },
+  bulldozerAndGoldSeeker: {
+    status: "package-recorded",
+    evidenceRefs: ["ORIGINAL-1.0.9#push-cart", "ORIGINAL-1.0.9#Dn.SY", "packages/shared/test/simulation.test.ts#bulldozer/gold-seeker"],
+    note: "推土车 12 节点/50px每秒/40px碰撞/39px偏移/5秒淡出，以及摸金每铲1–10馒头均已恢复。",
   },
   propsCatalog: {
     status: "package-recorded",
@@ -329,17 +344,23 @@ export interface PropEffectConfig {
  */
 export const PROP_EFFECTS = {
   0: {
-    kind: "unlock-adjacent-grass",
+    kind: "unlock-grass",
     verification: "package-recorded",
-    evidenceRefs: ["PROPS-MD#prop-0"],
-    adjacency: "orthogonal",
+    evidenceRefs: ["PROPS-MD#prop-0", "ORIGINAL-1.0.9#Dn.SY"],
+    eligibleCellCodePrefix: "2",
+    adjacencyRequired: false,
     consumeOnSuccess: true,
   },
   1: {
     kind: "push-enemies-toward-spawn",
-    verification: "pending-original-verification",
-    evidenceRefs: ["SPEC-DOCX#table-24", "PROPS-MD#prop-1"],
-    pushDistanceCells: null,
+    verification: "package-recorded",
+    evidenceRefs: ["PROPS-MD#prop-1", "ORIGINAL-1.0.9#Mh.gA", "ORIGINAL-1.0.9#_s.back"],
+    speedPxPerSec: 50,
+    startPathOffsetFromEnd: 2,
+    maximumReversePathNodes: 12,
+    collisionRadiusPx: 40,
+    withinCellOffsetClampPx: 39,
+    endpointFadeMs: 5_000,
   },
   2: {
     kind: "reroll-unit-kind",
@@ -414,10 +435,10 @@ export const PROP_EFFECTS = {
   },
   11: {
     kind: "boss-spell-failure",
-    verification: "pending-original-verification",
-    evidenceRefs: ["SPEC-DOCX#table-24", "PROPS-MD#prop-11"],
+    verification: "package-recorded",
+    evidenceRefs: ["SPEC-DOCX#table-24", "PROPS-MD#prop-11", "ORIGINAL-1.0.9#ie.gE"],
     failureChance: 0.5,
-    backlash: "boss-self-life-unspecified",
+    backlashMaxHpFraction: { minInclusive: 0.1, maxExclusive: 0.2 },
   },
   12: {
     kind: "farmer-production",
@@ -509,11 +530,14 @@ export const PROP_EFFECTS = {
     consumedImmediately: true,
   },
   24: {
-    kind: "golden-shovel-appearance",
-    verification: "pending-original-verification",
-    evidenceRefs: ["PROPS-MD#prop-24"],
+    kind: "golden-shovel-treasure",
+    verification: "package-recorded",
+    evidenceRefs: ["PROPS-MD#prop-24", "ORIGINAL-1.0.9#Qh", "ORIGINAL-1.0.9#wg"],
     goldenAppearance: true,
-    recordedRuntimeReward: null,
+    trigger: "every-successful-shovel-use",
+    reward: { currency: "buns", min: 1, max: 10, distribution: "uniform-integer" },
+    rewardDelayMs: 300,
+    perCoinVisualIntervalMs: 100,
   },
 } as const satisfies Record<number, PropEffectConfig>;
 
@@ -606,6 +630,22 @@ export const BOSS_CONFIGS = [
   { name: "彻底疯狂", hpMultiplier: 7, speedPxPerSec: 10, range: 2, cooldownMs: 15_000, intro: "冲阵击倒小兵，使其无法动弹，升级解除", color: "#fb2500" },
   { name: "噬目", hpMultiplier: 10, speedPxPerSec: 10, range: 2, cooldownMs: 8_000, intro: "视野变暗，难以看清局势", color: "#21b2ff" },
   { name: "一代枭雄", hpMultiplier: 14, speedPxPerSec: 10, range: 10, cooldownMs: 15_000, intro: "封印最高等级小兵，升级解除", color: "#010b97" },
+] as const;
+
+/** 原包 1.0.9 Boss 技能的机器可读合同；动画停止型时长只控制表现，不改已核定结算点。 */
+export const BOSS_SKILL_RULES = [
+  { key: "soul-sweep", effectWindowMs: [500, 1400], pulseMs: 100, chaosMs: 2_000, radiusCells: 2 },
+  { key: "resurrection", maximumRevives: 3, target: "normal-enemy-death-in-range", summonedKind: "zombie" },
+  { key: "inspire", delayMs: 500, durationMs: 5_000, scaleBonus: 0.2, hpBonus: 0.5, moveSpeedBonus: 0.3 },
+  { key: "demolition", delayMs: 500, target: "uniform-random-empty-deployment-cell", result: "locked-grass" },
+  { key: "rain", attackSpeedBonus: -0.2, duration: "until-boss-death", dispel: "unit-upgrade" },
+  { key: "charm", target: "all-minimum-level-soldiers", maximumEligibleLevel: 3, summonedKind: "puppet", pathIndexOffset: [-1, 1] },
+  { key: "cavalry-order", summonedKind: "cavalry", count: 1 },
+  { key: "halberd-suppression", delayMs: 650, durationMs: 5_000, temporaryLevel: 1, preventsMerge: true },
+  { key: "devour", delayMs: 500, hpPerTargetCurrentWaveMultiplier: 2, scalePerTarget: 0.01 },
+  { key: "knockdown", target: "uniform-random-unit-in-range", impactOffsetCells: 0.75, runDurationMsPerPixel: 3, dispel: "unit-upgrade" },
+  { key: "darkness", delayMs: 1_000, durationMs: 5_000 },
+  { key: "seal", target: "highest-level-soldier", belowMaxDurationMs: -1, maxLevelDurationMs: 10_000, dispel: "unit-upgrade" },
 ] as const;
 
 export interface MapLayout {
@@ -740,6 +780,7 @@ export const RULES_CONFIG_1_0_9 = {
     normalSpeedPxPerSec: NORMAL_ENEMY_SPEED_PX_PER_SEC,
     introRoundHpMultipliers: INTRO_ROUND_HP_MULTIPLIERS,
     bossConfigs: BOSS_CONFIGS,
+    bossSkills: BOSS_SKILL_RULES,
   },
   maps: MAP_LAYOUTS,
 } as const;

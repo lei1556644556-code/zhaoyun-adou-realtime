@@ -1,0 +1,16 @@
+FROM node:24-alpine
+
+WORKDIR /app
+RUN corepack enable
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/server/package.json apps/server/package.json
+COPY packages/shared/package.json packages/shared/package.json
+RUN pnpm install --frozen-lockfile --filter @adou/server...
+
+COPY apps/server apps/server
+COPY packages/shared packages/shared
+
+ENV NODE_ENV=production
+EXPOSE 3001
+CMD ["pnpm", "--filter", "@adou/server", "start"]

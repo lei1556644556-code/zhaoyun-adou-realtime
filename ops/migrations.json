@@ -7,6 +7,13 @@
       "owner": "05-account-economy-cloud-save",
       "requiredBefore": "client-production",
       "rollback": "forward-only-preserve-data"
+    },
+    {
+      "id": "20260903150000_authoritative_matches",
+      "introducedIn": "0.1.0",
+      "owner": "08-integration-release-ops",
+      "requiredBefore": "authoritative-server-production",
+      "rollback": "forward-only-preserve-active-matches"
     }
   ]
 }

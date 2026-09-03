@@ -2,6 +2,7 @@ export type DeploymentEnvironment = "local" | "preview" | "production";
 
 export interface RuntimeConfig {
   deploymentEnvironment: DeploymentEnvironment;
+  serverUrl: string | null;
   supabase: {
     url: string;
     publishableKey: string;
@@ -38,8 +39,20 @@ export function loadRuntimeConfig(): RuntimeConfig {
     throw new Error("浏览器配置禁止使用 Supabase service role key");
   }
 
+  const rawServerUrl = import.meta.env.VITE_SERVER_URL?.trim();
+  if (rawEnvironment === "production" && !rawServerUrl) throw new Error("生产环境缺少 VITE_SERVER_URL");
+  let serverUrl: string | null = null;
+  if (rawServerUrl) {
+    const parsedServer = new URL(rawServerUrl);
+    if (rawEnvironment === "production" && parsedServer.protocol !== "https:") {
+      throw new Error("生产权威服务器地址必须使用 HTTPS");
+    }
+    serverUrl = parsedServer.toString().replace(/\/$/, "");
+  }
+
   return {
     deploymentEnvironment: rawEnvironment,
+    serverUrl,
     supabase: { url: parsedUrl.toString().replace(/\/$/, ""), publishableKey },
   };
 }

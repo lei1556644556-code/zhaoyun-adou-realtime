@@ -23,6 +23,9 @@ importers:
       phaser:
         specifier: 3.90.0
         version: 3.90.0
+      socket.io-client:
+        specifier: 4.8.3
+        version: 4.8.3
     devDependencies:
       typescript:
         specifier: 5.9.3
@@ -39,6 +42,9 @@ importers:
       '@adou/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@supabase/supabase-js':
+        specifier: 2.112.4
+        version: 2.112.4
       express:
         specifier: 5.1.0
         version: 5.1.0

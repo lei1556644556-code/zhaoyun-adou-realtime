@@ -1,7 +1,8 @@
 import Phaser from "phaser";
 import {
-  GAME_CONFIG, GENERALS, MAP_LAYOUTS, PROPS, SOLDIERS, attackRangeIntersectsCell, cellCode, cellCoords, cellIndex, pathPoint,
-  type ActivePropId, type CombatEffectEvent, type HeroRarity, type MatchSnapshot, type PlayerBattleState, type PlayerSlot,
+  GAME_CONFIG, GENERALS, MAP_LAYOUTS, PROPS, SOLDIERS, attackRangeIntersectsCell, cellCode, cellCoords, cellIndex,
+  enemyPathPoint, pathPoint,
+  type ActivePropId, type BattleEvent, type CombatEffectEvent, type HeroRarity, type MatchSnapshot, type PlayerBattleState, type PlayerSlot,
 } from "@adou/shared";
 import { allImageAssets, HERO_ASSET_KEYS, IMAGE_ASSETS, TROOP_ASSET_KEYS } from "./assets";
 import {
@@ -416,7 +417,7 @@ export class BattleScene extends Phaser.Scene {
     this.snapshot = snapshot;
     this.slot = slot;
     if (!this.activePointer || this.isDragging) this.renderState();
-    this.playCombatEvents(snapshot.combatEvents ?? []);
+    this.playBattleEvents(snapshot.events ?? []);
     // The canvas exists before preload/create and the first authoritative
     // snapshot finish. Only expose it after interactive pieces have rendered,
     // otherwise a player's first click can land on an inert loading canvas.
@@ -450,6 +451,15 @@ export class BattleScene extends Phaser.Scene {
     this.drawUnits(opponent, true, false);
     this.drawUnits(mine, false, true);
     this.drawCamp(mine);
+    this.drawBulldozer(mine, false);
+    this.drawBulldozer(opponent, true);
+    if ((mine.visionDarkMs ?? 0) > 0) {
+      this.stateLayer.add(this.add.rectangle(WIDTH / 2, MAP_TOP + 400, WIDTH, 800, 0x08121b, 0.67).setDepth(70));
+      this.stateLayer.add(this.add.text(WIDTH / 2, MAP_TOP + 400, "噬 目", {
+        fontFamily: '"STKaiti", "KaiTi", serif', fontSize: "72px", color: "#9ccfff", fontStyle: "bold",
+        stroke: "#071019", strokeThickness: 8,
+      }).setOrigin(0.5).setAlpha(0.64).setDepth(71));
+    }
     this.drawActivePropTargets();
     if (this.isDragging && this.draggingType) {
       const dragged = this.dragLayer.getAt(0) as Phaser.GameObjects.Container | null;
@@ -604,6 +614,22 @@ export class BattleScene extends Phaser.Scene {
     placedProps(opponent, true);
   }
 
+  private drawBulldozer(player: PlayerBattleState, mirror: boolean) {
+    const bulldozer = player.props?.bulldozer;
+    if (!bulldozer) return;
+    const x = ((mirror ? GAME_CONFIG.columns - 1 - bulldozer.x : bulldozer.x) + 0.5) * CELL;
+    const y = MAP_TOP + ((mirror ? GAME_CONFIG.rows - 1 - bulldozer.y : bulldozer.y) + 0.5) * CELL;
+    const alpha = bulldozer.phase === "fading" ? Math.max(0, bulldozer.fadeMs / 5_000) : 1;
+    const body = this.add.container(x, y).setAlpha(alpha).setDepth(32);
+    body.add([
+      this.add.ellipse(0, 24, 66, 18, 0x1f2925, 0.45),
+      this.add.rectangle(0, 2, 62, 42, 0x986238, 1).setStrokeStyle(4, 0xf2ca70, 1),
+      this.add.rectangle(mirror ? 34 : -34, 9, 22, 50, 0xc49a58, 1).setStrokeStyle(3, 0x5f3828, 1),
+      this.add.text(0, 0, "车", { fontFamily: '"KaiTi", serif', fontSize: "30px", color: "#fff0bc", fontStyle: "bold" }).setOrigin(0.5),
+    ]);
+    this.stateLayer.add(body);
+  }
+
   private ownPiecePoint(kind: string, level: number) {
     if (!this.snapshot) return { x: WIDTH / 2, y: MAP_TOP + 560 };
     const mine = this.snapshot.players[this.slot];
@@ -709,13 +735,43 @@ export class BattleScene extends Phaser.Scene {
     }
   }
 
-  private playCombatEvents(events: CombatEffectEvent[]) {
+  private playBattleEvents(events: BattleEvent[]) {
     for (const event of events.slice(0, 28)) {
       if (this.playedEffectIds.has(event.id)) continue;
       this.playedEffectIds.add(event.id);
-      this.playAttackEffect(event);
+      if (event.type === "attack") this.playAttackEffect(event);
+      else if (event.type === "arrow-rain-impact") this.playArrowRainImpact(event);
+      else if (event.type === "boss-skill" && event.phase !== "resolved") this.playBossSkill(event);
+      else if (event.type === "bulldozer" && event.phase === "push") this.cameras.main.shake(90, 0.0018);
     }
     if (this.playedEffectIds.size > 600) this.playedEffectIds.clear();
+  }
+
+  private playArrowRainImpact(event: Extract<BattleEvent, { type: "arrow-rain-impact" }>) {
+    const mirror = event.slot !== this.slot;
+    const x = ((mirror ? GAME_CONFIG.columns - event.x : event.x)) * CELL;
+    const y = MAP_TOP + ((mirror ? GAME_CONFIG.rows - event.y : event.y)) * CELL;
+    const arrow = this.add.rectangle(x, y - 150, 5, 64, 0x8a4c2d, 1).setStrokeStyle(2, 0xffe7a3, 1).setRotation(0.12);
+    this.effectsLayer.add(arrow);
+    this.tweens.add({ targets: arrow, y, duration: 130, ease: "Cubic.easeIn", onComplete: () => {
+      arrow.destroy();
+      const ring = this.add.circle(x, y, 18, 0xf3ad43, 0.28).setStrokeStyle(5, 0xffe7a3, 1);
+      this.effectsLayer.add(ring);
+      this.tweens.add({ targets: ring, scale: 4, alpha: 0, duration: 360, onComplete: () => ring.destroy() });
+    }});
+  }
+
+  private playBossSkill(event: Extract<BattleEvent, { type: "boss-skill" }>) {
+    const intercepted = event.phase === "intercepted";
+    const banner = this.add.container(WIDTH / 2, MAP_TOP + 400).setDepth(95).setAlpha(0);
+    const plate = this.add.rectangle(0, 0, 430, 92, intercepted ? 0x2f624e : 0x711f25, 0.94)
+      .setStrokeStyle(4, intercepted ? 0xb8f1ba : 0xffd177, 1);
+    const text = this.add.text(0, 0, intercepted ? `降妖符·反噬 ${event.skillName}` : `Boss发动·${event.skillName}`, {
+      fontFamily: '"STKaiti", "KaiTi", serif', fontSize: "34px", color: "#fff1bd", fontStyle: "bold",
+    }).setOrigin(0.5);
+    banner.add([plate, text]); this.effectsLayer.add(banner);
+    this.tweens.add({ targets: banner, alpha: 1, scale: 1.06, duration: 180, yoyo: true, hold: 520, onComplete: () => banner.destroy() });
+    if (!intercepted) this.cameras.main.shake(130, 0.0024);
   }
 
   private playAttackEffect(event: CombatEffectEvent) {
@@ -1090,7 +1146,7 @@ export class BattleScene extends Phaser.Scene {
   private drawEnemies(player: PlayerBattleState, mirror: boolean) {
     if (!this.snapshot) return;
     for (const enemy of player.enemies) {
-      const point = pathPoint(this.snapshot.mapIndex, enemy.progress);
+      const point = enemyPathPoint(this.snapshot.mapIndex, enemy);
       const y = mirror ? GAME_CONFIG.rows - 1 - point.y : point.y;
       const x = mirror ? GAME_CONFIG.columns - 1 - point.x : point.x;
       const seed = [...enemy.id].reduce((total, character) => total + character.charCodeAt(0), 0);
@@ -1111,6 +1167,7 @@ export class BattleScene extends Phaser.Scene {
             fontFamily: '"STKaiti", "KaiTi", serif', fontSize: enemy.boss ? "44px" : "31px",
             color: "#fff0c6", fontStyle: "bold", stroke: "#3b2522", strokeThickness: enemy.boss ? 5 : 3,
           }).setOrigin(0.5);
+      body.setScale(enemy.scaleMultiplier ?? 1);
       body.setRotation(step * (enemy.boss ? 0.018 : 0.035));
       if (mirror) body.setTint(0xd4e5e3);
       const barBack = this.add.rectangle(px, py - radius - 9, enemy.boss ? 54 : 38, 6, 0x482c28, 1);
@@ -1128,11 +1185,7 @@ export class BattleScene extends Phaser.Scene {
       for (let cell = 0; cell < GAME_CONFIG.rows * GAME_CONFIG.columns; cell += 1) {
         if (cellCode(this.snapshot.mapIndex, cell) !== "2_0" || mine.unlockedCells.includes(cell)) continue;
         const point = cellCoords(cell);
-        const adjacent = mine.unlockedCells.some((openCell) => {
-          const open = cellCoords(openCell);
-          return Math.abs(open.x - point.x) + Math.abs(open.y - point.y) === 1;
-        });
-        if (adjacent) hint.lineStyle(5, 0xffd35c, 0.9).strokeRoundedRect(point.x * CELL + 5, MAP_TOP + point.y * CELL + 5, CELL - 10, CELL - 10, 7);
+        hint.lineStyle(5, 0xffd35c, 0.9).strokeRoundedRect(point.x * CELL + 5, MAP_TOP + point.y * CELL + 5, CELL - 10, CELL - 10, 7);
       }
     } else {
       for (const cell of mine.unlockedCells) {

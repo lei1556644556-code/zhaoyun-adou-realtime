@@ -66,11 +66,7 @@ function chooseReserveTarget(mapIndex: number, player: PlayerBattleState, kind: 
   if (kind === "铲子") {
     for (let cell = 0; cell < GAME_CONFIG.columns * GAME_CONFIG.rows; cell += 1) {
       if (cellCode(mapIndex, cell) !== "2_0" || player.unlockedCells.includes(cell)) continue;
-      const target = cellCoords(cell);
-      if (player.unlockedCells.some((open) => {
-        const point = cellCoords(open);
-        return Math.abs(point.x - target.x) + Math.abs(point.y - target.y) === 1;
-      })) return cell;
+      return cell;
     }
     return null;
   }

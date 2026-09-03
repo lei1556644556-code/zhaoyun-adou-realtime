@@ -2,8 +2,41 @@ import { describe, expect, it } from "vitest";
 import {
   BOSS_CONFIGS, GAME_CONFIG, INTRO_ROUND_HP_MULTIPLIERS, MAP_LAYOUTS, NORMAL_ENEMY_SPEED_PX_PER_SEC,
   PROPS, TOKEN_POOL, applyCommand, attackRangeIntersectsCell, cellCode, cellIndex, createMatch, executeCommand,
-  initialOpenCells, pathLengthCells, pathPoint, stepMatch, type CommandEnvelope,
+  initialOpenCells, pathLengthCells, pathPoint, stepMatch, type CommandEnvelope, type MatchSnapshot,
 } from "../src";
+
+function bossFixture(bossType: number, withSoldier = false): MatchSnapshot {
+  const match = createMatch(`BOSS-SKILL-${bossType}`, 10_900 + bossType);
+  const player = match.players[0];
+  player.phase = "battle";
+  player.prepareMs = 0;
+  player.spawnMs = 999_999;
+  player.remainingToSpawn = 1;
+  player.units = withSoldier ? [{
+    id: `soldier-${bossType}`, kind: "刀", level: 2, cell: cellIndex(4, 7), cooldownMs: 999_999, attackCount: 0,
+  }] : [];
+  player.enemies = [{
+    id: `boss-${bossType}`, hp: 10_000, maxHp: 10_000, progress: 0.4,
+    boss: true, bossType, stunnedMs: 0, pathX: 4, pathY: 6, pathIndex: 7,
+    bossCooldownMs: BOSS_CONFIGS[bossType]!.cooldownMs, scaleMultiplier: 1,
+  }];
+  return match;
+}
+
+function expandedTestPath(mapIndex: number) {
+  const source = MAP_LAYOUTS[mapIndex]!.path;
+  const result: Array<{ x: number; y: number }> = [];
+  for (let index = 0; index < source.length; index += 1) {
+    const point = source[index]!;
+    const previous = source[index - 1];
+    if (!previous) { result.push({ x: point[0], y: point[1] }); continue; }
+    const dx = Math.sign(point[0] - previous[0]);
+    const dy = Math.sign(point[1] - previous[1]);
+    const steps = Math.max(Math.abs(point[0] - previous[0]), Math.abs(point[1] - previous[1]));
+    for (let step = 1; step <= steps; step += 1) result.push({ x: previous[0] + dx * step, y: previous[1] + dy * step });
+  }
+  return result;
+}
 
 describe("1.0.9 authoritative simulation", () => {
   it("uses the package-backed board and opening values", () => {
@@ -307,13 +340,259 @@ describe("1.0.9 authoritative simulation", () => {
     expect(match.players[0].units).toEqual([expect.objectContaining({ id: "u-bow", kind: "弓", cell: sourceCell })]);
   });
 
-  it("uses a shovel only on adjacent own grass", () => {
+  it("uses a shovel on any own 2_0 grass without an adjacency requirement", () => {
     const match = createMatch("TEST", 12);
     match.players[0].reserve = [{ id: "shovel", kind: "铲子", level: 1, slot: 0 }];
-    const targetCell = cellIndex(1, 7);
+    const targetCell = cellIndex(6, 9);
+    expect(match.players[0].unlockedCells.every((cell) => {
+      const dx = Math.abs(cell % GAME_CONFIG.columns - targetCell % GAME_CONFIG.columns);
+      const dy = Math.abs(Math.floor(cell / GAME_CONFIG.columns) - Math.floor(targetCell / GAME_CONFIG.columns));
+      return dx + dy !== 1;
+    })).toBe(true);
     expect(applyCommand(match, 0, { type: "DROP_RESERVE", reserveId: "shovel", targetCell }).ok).toBe(true);
     expect(match.players[0].unlockedCells).toContain(targetCell);
     expect(match.players[0].reserve).toHaveLength(0);
+  });
+
+  it("runs all twelve package boss skills through an authoritative cast and resolution lifecycle", () => {
+    for (let bossType = 0; bossType < BOSS_CONFIGS.length; bossType += 1) {
+      const match = bossFixture(bossType, true);
+      stepMatch(match, 100);
+      expect(match.events).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "boss-skill", bossType, phase: "cast" }),
+      ]));
+      let resolved = false;
+      for (let frame = 0; frame < 80 && !resolved; frame += 1) {
+        stepMatch(match, 100);
+        resolved = match.events.some((event) => event.type === "boss-skill" && event.bossType === bossType && event.phase === "resolved");
+      }
+      expect(resolved, `Boss ${bossType} ${BOSS_CONFIGS[bossType]!.name} did not resolve`).toBe(true);
+    }
+  });
+
+  it("applies the recovered boss target effects for control, summon, buff, terrain, weather, devour, knockdown, darkness and seal", () => {
+    const soul = bossFixture(0, true);
+    stepMatch(soul, 100); stepMatch(soul, 1_000);
+    expect(soul.players[0].units[0]?.bossChaosMs).toBe(2_000);
+
+    const inspire = bossFixture(2);
+    inspire.players[0].enemies.push({
+      id: "normal", hp: 10, maxHp: 10, progress: 0.4, boss: false, stunnedMs: 0,
+      pathX: 4, pathY: 6, pathIndex: 7,
+    });
+    stepMatch(inspire, 100); stepMatch(inspire, 500);
+    expect(inspire.players[0].enemies.find((enemy) => enemy.id === "normal")).toMatchObject({
+      hp: 15, maxHp: 15, moveSpeedMultiplier: 1.3, moveSpeedBuffMs: 5_000, scaleMultiplier: 1.2,
+    });
+
+    const demolition = bossFixture(3);
+    const openBefore = demolition.players[0].unlockedCells.length;
+    stepMatch(demolition, 100); stepMatch(demolition, 500);
+    expect(demolition.players[0].unlockedCells).toHaveLength(openBefore - 1);
+
+    const rain = bossFixture(4, true);
+    stepMatch(rain, 100); stepMatch(rain, 100);
+    expect(rain.players[0].rainBossIds).toContain("boss-4");
+
+    const charm = bossFixture(5, true);
+    stepMatch(charm, 100); stepMatch(charm, 1_000);
+    expect(charm.players[0].units).toHaveLength(0);
+    expect(charm.players[0].enemies.some((enemy) => enemy.summonedKind === "puppet" && enemy.summonedUnitKind === "刀")).toBe(true);
+
+    const cavalry = bossFixture(6);
+    stepMatch(cavalry, 100); stepMatch(cavalry, 100);
+    expect(cavalry.players[0].enemies.some((enemy) => enemy.summonedKind === "cavalry")).toBe(true);
+
+    const suppression = bossFixture(7, true);
+    stepMatch(suppression, 100); stepMatch(suppression, 650);
+    expect(suppression.players[0].units[0]).toMatchObject({ level: 1, bossSuppressionOriginalLevel: 2, bossSuppressionMs: 5_000 });
+
+    const devour = bossFixture(8);
+    devour.players[0].enemies.push({
+      id: "meal", hp: 10, maxHp: 10, progress: 0.4, boss: false, stunnedMs: 0,
+      pathX: 4, pathY: 6, pathIndex: 7,
+    });
+    stepMatch(devour, 100); stepMatch(devour, 500);
+    expect(devour.players[0].enemies.some((enemy) => enemy.id === "meal")).toBe(false);
+    expect(devour.players[0].enemies[0]).toMatchObject({ maxHp: 10_020, hp: 10_020, scaleMultiplier: 1.01 });
+
+    const knockdown = bossFixture(9, true);
+    stepMatch(knockdown, 100); stepMatch(knockdown, 500);
+    expect(knockdown.players[0].units[0]?.bossKnockedDown).toBe(true);
+
+    const darkness = bossFixture(10);
+    stepMatch(darkness, 100); stepMatch(darkness, 1_000);
+    expect(darkness.players[0].visionDarkMs).toBe(5_000);
+
+    const seal = bossFixture(11, true);
+    stepMatch(seal, 100); stepMatch(seal, 1_000);
+    expect(seal.players[0].units[0]?.bossLockedMs).toBe(-1);
+  });
+
+  it("revives up to three normal deaths as 张宝 zombies while 招魂 is active", () => {
+    const match = bossFixture(1, true);
+    const player = match.players[0];
+    player.units[0]!.cooldownMs = 0;
+    player.enemies.push({
+      id: "fallen", hp: 1, maxHp: 1, progress: 0.45, boss: false, stunnedMs: 0,
+      pathX: 4, pathY: 7, pathIndex: 8,
+    });
+    stepMatch(match, 100);
+    expect(player.enemies.some((enemy) => enemy.summonedKind === "zombie")).toBe(true);
+    expect(player.enemies.find((enemy) => enemy.id === "boss-1")?.resurrectionRemaining).toBe(2);
+  });
+
+  it("schedules 黄忠 arrow rain per recovered path cell, shuffled pixel offset and sequential 500–749ms delays", () => {
+    const match = createMatch("HUANGZHONG-RAIN", 0xA220);
+    const player = match.players[0];
+    player.phase = "battle"; player.prepareMs = 0; player.spawnMs = 999_999; player.remainingToSpawn = 1;
+    player.units = [{
+      id: "huangzhong", kind: "黄忠", level: 5, cell: cellIndex(2, 7), secondaryCell: cellIndex(3, 7),
+      parts: ["黄", "忠"], cooldownMs: 0, attackCount: 30,
+    }];
+    player.enemies = [{
+      id: "target", hp: 10_000, maxHp: 10_000, progress: 0.4, boss: false, stunnedMs: 0,
+      pathX: 4, pathY: 6, pathIndex: 7,
+    }];
+
+    stepMatch(match, 100);
+    const impacts = player.pendingArrowImpacts ?? [];
+    const path = expandedTestPath(match.mapIndex).slice(1);
+    expect(impacts.length).toBeGreaterThanOrEqual(path.length * 2);
+    expect(impacts.length).toBeLessThanOrEqual(path.length * 4);
+    const delays = impacts.map((impact) => impact.remainingMs);
+    expect(delays[0]).toBeGreaterThanOrEqual(500);
+    expect(delays[0]).toBeLessThanOrEqual(749);
+    for (let index = 1; index < delays.length; index += 1) {
+      expect(delays[index]! - delays[index - 1]!).toBeGreaterThanOrEqual(500);
+      expect(delays[index]! - delays[index - 1]!).toBeLessThanOrEqual(749);
+    }
+    for (const impact of impacts) {
+      expect(path.some((cell) => Math.abs(impact.x - (cell.x + 0.5)) <= 24 / 80 + 1e-9
+        && Math.abs(impact.y - (cell.y + 0.5)) <= 24 / 80 + 1e-9)).toBe(true);
+      expect(impact.damage).toBeCloseTo(6 * 3.276 * 2, 8);
+    }
+    const firstDelay = impacts[0]!.remainingMs;
+    stepMatch(match, firstDelay);
+    expect(match.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "arrow-rain-impact", unitId: "huangzhong" }),
+    ]));
+  });
+
+  it("uses the original one-frame node handoff without moving on that handoff frame", () => {
+    const match = createMatch("NODE-HANDOFF", 3109);
+    const player = match.players[0];
+    const path = expandedTestPath(match.mapIndex);
+    player.phase = "battle"; player.spawnMs = 999_999; player.remainingToSpawn = 1;
+    player.enemies = [{
+      id: "walker", hp: 100, maxHp: 100, progress: 1 / (path.length - 1), boss: false, stunnedMs: 0,
+      pathX: path[1]!.x, pathY: path[1]!.y, pathIndex: 1,
+    }];
+    const before = { pathX: player.enemies[0]!.pathX, pathY: player.enemies[0]!.pathY };
+    stepMatch(match, 100);
+    expect(player.enemies[0]).toMatchObject({ ...before, pathIndex: 2 });
+    stepMatch(match, 100);
+    expect(player.enemies[0]!.pathY).not.toBe(before.pathY);
+  });
+
+  it("launches the recovered twelve-node bulldozer route at 50px/s and pushes on a 40px contact", () => {
+    const match = createMatch("BULLDOZER", 3110);
+    const player = match.players[0];
+    const path = expandedTestPath(match.mapIndex);
+    const startIndex = path.length - 2;
+    player.phase = "battle"; player.spawnMs = 999_999; player.remainingToSpawn = 1;
+    player.enemies = [{
+      id: "near-adou", hp: 100, maxHp: 100, progress: startIndex / (path.length - 1), boss: false, stunnedMs: 0,
+      pathX: path[startIndex]!.x, pathY: path[startIndex]!.y, pathIndex: startIndex,
+    }];
+    expect(applyCommand(match, 0, { type: "CLAIM_BULLDOZER_SUPPLY" }).ok).toBe(true);
+    expect(player.props?.bulldozer?.routeIndices).toHaveLength(12);
+    stepMatch(match, 100);
+    expect(match.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "bulldozer", phase: "push", targetIds: ["near-adou"] }),
+    ]));
+    expect(player.enemies[0]).toMatchObject({
+      pathIndex: startIndex,
+      pathX: path[startIndex - 1]!.x,
+      pathY: path[startIndex - 1]!.y,
+    });
+    expect(player.enemies[0]!.progress).toBeCloseTo((startIndex - 1) / (path.length - 1), 8);
+  });
+
+  it("awards a deterministic 1–10 bun treasure on every successful gold-seeker shovel", () => {
+    for (let seed = 1; seed <= 30; seed += 1) {
+      const match = createMatch(`GOLD-${seed}`, seed);
+      const player = match.players[0];
+      player.reserve = [{ id: `gold-shovel-${seed}`, kind: "铲子", level: 1, slot: 0 }];
+      player.props = {
+        configured: true, loadout: { active: [], passive: [{ id: 24, level: 1 }] }, cooldowns: {}, placed: [],
+        farmerSpawnMs: 30_000, superShovelMs: 60_000, meteorMs: 300_000,
+      };
+      const before = player.buns;
+      expect(applyCommand(match, 0, { type: "DROP_RESERVE", reserveId: `gold-shovel-${seed}`, targetCell: cellIndex(6, 9) }).ok).toBe(true);
+      const reward = player.buns - before;
+      expect(reward).toBeGreaterThanOrEqual(1);
+      expect(reward).toBeLessThanOrEqual(10);
+      expect(match.events).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "prop-triggered", propId: 24, rewardBuns: reward }),
+      ]));
+    }
+  });
+
+  it("replaces 苞 in 张苞 with a reserve 飞 and returns 苞 to that same occupied reserve slot", () => {
+    const match = createMatch("REPLACE-ZHANGBAO", 124);
+    const left = cellIndex(2, 7);
+    const right = cellIndex(3, 7);
+    match.players[0].units = [{
+      id: "general-zhangbao", kind: "张苞", level: 2,
+      cell: left, secondaryCell: right, parts: ["张", "苞"], cooldownMs: 321, attackCount: 9,
+    }];
+    match.players[0].reserve = [
+      { id: "reserve-fei", kind: "飞", level: 2, slot: 0 },
+      ...Array.from({ length: GAME_CONFIG.reserveSize - 1 }, (_, index) => ({
+        id: `occupied-${index + 1}`, kind: "刀", level: 1, slot: index + 1,
+      })),
+    ];
+
+    const result = applyCommand(match, 0, {
+      type: "DROP_RESERVE", reserveId: "reserve-fei", targetCell: right,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(match.players[0].units).toEqual([expect.objectContaining({
+      id: "general-zhangbao", kind: "张飞", level: 2,
+      cell: left, secondaryCell: right, parts: ["张", "飞"], cooldownMs: 0, attackCount: 0,
+    })]);
+    expect(match.players[0].reserve).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "reserve-fei", kind: "苞", level: 2, slot: 0 }),
+    ]));
+    expect(match.players[0].lastEvent).toBe("换字成将「张飞」Lv.2");
+  });
+
+  it("upgrades a general with the same-level matching character and splits into two upgraded characters", () => {
+    const match = createMatch("UPGRADE-SPLIT-GENERAL", 125);
+    const left = cellIndex(2, 7);
+    const right = cellIndex(3, 7);
+    const splitTarget = cellIndex(4, 8);
+    match.players[0].units = [{
+      id: "general", kind: "张飞", level: 1,
+      cell: left, secondaryCell: right, parts: ["张", "飞"], cooldownMs: 0, attackCount: 0,
+    }];
+    match.players[0].reserve = [{ id: "reserve-fei", kind: "飞", level: 1, slot: 0 }];
+
+    expect(applyCommand(match, 0, {
+      type: "DROP_RESERVE", reserveId: "reserve-fei", targetCell: right,
+    }).ok).toBe(true);
+    expect(match.players[0].units[0]).toMatchObject({ kind: "张飞", level: 2 });
+    expect(match.players[0].reserve).toHaveLength(0);
+
+    expect(applyCommand(match, 0, {
+      type: "SPLIT_GENERAL", unitId: "general", partIndex: 1, targetCell: splitTarget,
+    }).ok).toBe(true);
+    expect(match.players[0].units).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "张", level: 2, cell: left }),
+      expect.objectContaining({ kind: "飞", level: 2, cell: splitTarget }),
+    ]));
   });
 
   it("turns the original in-battle shovel ad into one direct grant of up to two shovels", () => {

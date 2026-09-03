@@ -335,6 +335,9 @@ describe("board, camp, merge, range, and prop regressions", () => {
       expect(player.units[0]).toMatchObject({ cooldownMs: 0, attackCount: 0 });
 
       player.enemies[0]!.progress = 7 / 17;
+      player.enemies[0]!.pathX = undefined;
+      player.enemies[0]!.pathY = undefined;
+      player.enemies[0]!.pathIndex = undefined;
       stepMatch(match, 100);
       expect(player.units[0]?.attackCount).toBe(1);
       stepMatch(match, 100);

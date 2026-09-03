@@ -3,13 +3,13 @@ import {
   DIFFICULTY_CURVES, DIFFICULTY_WEIGHTS, EARLY_ACCOUNT_SHOVEL_BONUS, GAME_CONFIG,
   GENERAL_LEVEL_ATTACK, GENERAL_LEVEL_SPEED, GENERALS, HERO_PAIRS, INTRO_ROUND_HP_MULTIPLIERS,
   MAP_LAYOUTS, NORMAL_ENEMY_SPEED_PX_PER_SEC, PASSIVE_PROP_IDS, PROPS, SOLDIER_LEVEL_ATTACK,
-  SOLDIER_LEVEL_SPEED, SOLDIERS, TOKEN_POOL, WAVES, cellCode, cellCoords, initialOpenCells,
-  pathLengthCells, pathPoint,
+  RULESET_VERSION, RULES_CONFIG_SCHEMA_VERSION, SOLDIER_LEVEL_SPEED, SOLDIERS, TOKEN_POOL, WAVES,
+  cellCode, cellCoords, initialOpenCells,
 } from "./config";
 import { MATCH_SNAPSHOT_VERSION } from "./types";
 import type {
   BattleEvent, BattleEventPayload, CommandEnvelope, CommandErrorCode, CommandFailure, CommandResult, GameCommand,
-  MatchSnapshot, MatchSnapshotInput, PlayerBattleState, PlayerPropState, PlayerSlot, PropLoadout, ReserveItem, UnitState,
+  EnemyState, MatchSnapshot, MatchSnapshotInput, PlayerBattleState, PlayerPropState, PlayerSlot, PropLoadout, ReserveItem, UnitState,
 } from "./types";
 import type { ActivePropId, PassivePropId, SoldierKind } from "./config";
 
@@ -31,7 +31,9 @@ export function createRng(seed: number): Rng {
  * 该函数会原地补齐可安全推导的兼容字段并返回同一个对象。
  */
 export function normalizeMatchSnapshot(snapshot: MatchSnapshotInput): MatchSnapshot {
-  const incoming = snapshot as unknown as { version?: unknown; snapshotVersion?: unknown };
+  const incoming = snapshot as unknown as {
+    version?: unknown; snapshotVersion?: unknown; rulesetVersion?: unknown; rulesConfigSchemaVersion?: unknown;
+  };
   for (const candidate of [incoming.version, incoming.snapshotVersion]) {
     if (candidate !== undefined && candidate !== MATCH_SNAPSHOT_VERSION) {
       throw new RangeError(`不支持的快照版本：${String(candidate)}`);
@@ -44,6 +46,8 @@ export function normalizeMatchSnapshot(snapshot: MatchSnapshotInput): MatchSnaps
   const normalized = snapshot as MatchSnapshot;
   normalized.version ??= MATCH_SNAPSHOT_VERSION;
   normalized.snapshotVersion ??= MATCH_SNAPSHOT_VERSION;
+  normalized.rulesetVersion ??= RULESET_VERSION;
+  normalized.rulesConfigSchemaVersion ??= RULES_CONFIG_SCHEMA_VERSION;
   normalized.events ??= [];
   normalized.eventSequence ??= 0;
   normalized.combatEvents ??= [];
@@ -51,7 +55,20 @@ export function normalizeMatchSnapshot(snapshot: MatchSnapshotInput): MatchSnaps
   normalized.lastClientSeq ??= [0, 0];
   normalized.simulationTimeMs ??= Number.isFinite(normalized.serverTime) ? normalized.serverTime : 0;
   normalized.serverTime = normalized.simulationTimeMs;
-  for (const player of normalized.players) player.introRound ??= 10;
+  for (const player of normalized.players) {
+    player.introRound ??= 10;
+    player.pendingArrowImpacts ??= [];
+    player.rainBossIds ??= [];
+    player.visionDarkMs ??= 0;
+    ensureProps(player);
+    for (const enemy of player.enemies) ensureEnemyMovement(normalized.mapIndex, enemy);
+  }
+  if (incoming.rulesetVersion !== undefined && incoming.rulesetVersion !== RULESET_VERSION) {
+    throw new RangeError(`不支持的规则版本：${String(incoming.rulesetVersion)}`);
+  }
+  if (incoming.rulesConfigSchemaVersion !== undefined && incoming.rulesConfigSchemaVersion !== RULES_CONFIG_SCHEMA_VERSION) {
+    throw new RangeError(`不支持的规则配置版本：${String(incoming.rulesConfigSchemaVersion)}`);
+  }
   return normalized;
 }
 
@@ -140,6 +157,12 @@ function ensureProps(player: PlayerBattleState) {
   return player.props;
 }
 
+function clearUpgradeDispellable(player: PlayerBattleState, unit: UnitState) {
+  delete unit.bossKnockedDown;
+  delete unit.bossLockedMs;
+  if ((player.rainBossIds ?? []).length) unit.rainDispelledBossIds = [...player.rainBossIds!];
+}
+
 function passiveLevel(player: PlayerBattleState | undefined, id: PassivePropId) {
   if (!player) return 0;
   return ensureProps(player).loadout.passive.find((entry) => entry.id === id)?.level ?? 0;
@@ -171,6 +194,7 @@ export function createMatch(
   const bossWaves = BOSS_MILESTONES.filter((_, index) => planningRng.next() < (BOSS_CHANCES[index] ?? 0));
   return {
     version: MATCH_SNAPSHOT_VERSION, snapshotVersion: MATCH_SNAPSHOT_VERSION,
+    rulesetVersion: RULESET_VERSION, rulesConfigSchemaVersion: RULES_CONFIG_SCHEMA_VERSION,
     roomId, tick: 0, stateVersion: 0, simulationTimeMs: 0,
     seed: normalizedSeed, mapIndex: normalizedMap, phase: "preparing", difficultyCurve, bossWaves,
     players: [createPlayer(0, normalizedMap, introRounds[0]), createPlayer(1, normalizedMap, introRounds[1])],
@@ -190,9 +214,11 @@ function unitStats(unit: UnitState, player?: PlayerBattleState, opponent?: Playe
   const universalSpeed = (hasPassive(player, 14) ? 0.1 : 0)
     + (opponent && hasPassive(opponent, 14) ? 0.1 : 0);
   const togetherSpeed = (hasPassive(player, 15) ? 0.5 : 0) + (hasPassive(opponent, 15) ? 0.3 : 0);
+  const rainPenalty = (player?.rainBossIds ?? [])
+    .filter((id) => !(unit.rainDispelledBossIds ?? []).includes(id)).length * -0.2;
   const speedMultiplier = Math.max(0.05,
     1 + universalSpeed + togetherSpeed + ((unit.attackSpeedMultiplier ?? 1) - 1)
-      + ((unit.temporaryAttackSpeedMultiplier ?? 1) - 1));
+      + ((unit.temporaryAttackSpeedMultiplier ?? 1) - 1) + rainPenalty);
   return {
     attack: base.attack * (attackCurve[levelIndex] ?? 1),
     intervalMs: base.intervalMs / (speedCurve[levelIndex] ?? 1) / speedMultiplier,
@@ -387,6 +413,7 @@ function autoCombineHorizontalGeneral(snapshot: MatchSnapshot, player: PlayerBat
     survivor.parts = [hero[0] ?? source.kind, hero[1] ?? neighbor.kind];
     survivor.cooldownMs = 0;
     survivor.attackCount = 0;
+    clearUpgradeDispellable(player, survivor);
     player.units = player.units.filter((unit) => unit.id !== consumed.id);
     player.lastEvent = `横向相邻合成「${hero}」Lv.${survivor.level}`;
     emitBattleEvent(snapshot, {
@@ -442,6 +469,7 @@ function combine(player: PlayerBattleState, source: { kind: string; level: numbe
     target.secondaryCell = cells[1]!;
     target.parts = [parts[0] ?? source.kind, parts[1] ?? target.kind];
     target.cooldownMs = 0; target.attackCount = 0;
+    clearUpgradeDispellable(player, target);
     return null;
   }
   if (source.kind !== target.kind || source.level !== target.level) return "文字或等级不符合合成关系";
@@ -449,6 +477,7 @@ function combine(player: PlayerBattleState, source: { kind: string; level: numbe
   if (!maxLevel) return "文字单位不能同字升级";
   if (target.level >= maxLevel) return "单位已满级";
   target.level += 1; target.cooldownMs = 0; target.attackCount = 0;
+  clearUpgradeDispellable(player, target);
   return null;
 }
 
@@ -479,16 +508,49 @@ function dropReserve(snapshot: MatchSnapshot, player: PlayerBattleState, reserve
   if (item.kind === "铲子") {
     if (cellCode(snapshot.mapIndex, targetCell) !== "2_0") return "铲子只能开垦己方草格";
     if (player.unlockedCells.includes(targetCell)) return "该格已经开放";
-    if (!isAdjacentToUnlocked(player, targetCell)) return "只能开垦与已开放区域相邻的草格";
     player.unlockedCells.push(targetCell);
     player.reserve = player.reserve.filter((candidate) => candidate.id !== reserveId);
     player.lastEvent = "铲子开垦一格";
     emitBattleEvent(snapshot, { type: "cell-unlocked", slot: player.slot, cell: targetCell, sourceReserveId: reserveId });
+    if (hasPassive(player, 24)) {
+      const rewardRng = createRng(snapshot.seed ^ ((snapshot.stateVersion + 1) * 0x85EBCA6B) ^ targetCell ^ reserveId.length);
+      const rewardBuns = 1 + Math.floor(rewardRng.next() * 10);
+      player.buns += rewardBuns;
+      player.lastEvent = `金铲子挖出宝箱，+${rewardBuns}馒头`;
+      emitBattleEvent(snapshot, { type: "prop-triggered", slot: player.slot, propId: 24, targetIds: [], rewardBuns });
+    }
     return null;
   }
   if (!canBuild(player, targetCell)) return "只能放入己方已开放白格";
   const target = unitAtCell(player, targetCell);
   if (target) {
+    if (item.secondarySlot === undefined) {
+      const partUpgrade = upgradeGeneralWithMatchingPart(player, item, target, targetCell);
+      if (partUpgrade.matched) {
+        if (partUpgrade.error) return partUpgrade.error;
+        player.reserve = player.reserve.filter((candidate) => candidate.id !== reserveId);
+        player.lastEvent = `同字强化「${target.kind}」Lv.${target.level}`;
+        emitBattleEvent(snapshot, {
+          type: "units-merged", slot: player.slot, sourceId: reserveId, targetId: target.id,
+          resultKind: target.kind, resultLevel: target.level, location: "board", cells: unitCells(target),
+        });
+        return null;
+      }
+      const replacement = replaceGeneralPart(item, target, targetCell);
+      if (replacement.matched) {
+        target.kind = replacement.hero; target.parts = replacement.parts;
+        target.level = Math.max(target.level, item.level); target.cooldownMs = 0; target.attackCount = 0;
+        item.kind = replacement.displacedKind;
+        item.level = replacement.displacedLevel;
+        item.secondarySlot = undefined; item.parts = undefined;
+        player.lastEvent = `换字成将「${replacement.hero}」Lv.${target.level}`;
+        emitBattleEvent(snapshot, {
+          type: "units-swapped", slot: player.slot,
+          placements: [{ id: target.id, cells: unitCells(target) }, { id: item.id, slots: reserveSlots(item) }],
+        });
+        return null;
+      }
+    }
     if (isMergeAttempt(item, target)) {
       const error = combine(player, item, target);
       if (error) return error;
@@ -563,6 +625,33 @@ function dropReserveToSlot(snapshot: MatchSnapshot, player: PlayerBattleState, r
   if (reserveOccupiesSlot(source, targetSlot)) return null;
   const target = reserveAtSlot(player, targetSlot, source.id);
   if (target) {
+    if (source.secondarySlot === undefined) {
+      const partUpgrade = upgradeReserveGeneralWithMatchingPart(source, target, targetSlot);
+      if (partUpgrade.matched) {
+        if (partUpgrade.error) return partUpgrade.error;
+        player.reserve = player.reserve.filter((item) => item.id !== source.id);
+        player.lastEvent = `营地同字强化「${target.kind}」Lv.${target.level}`;
+        emitBattleEvent(snapshot, {
+          type: "units-merged", slot: player.slot, sourceId: source.id, targetId: target.id,
+          resultKind: target.kind, resultLevel: target.level, location: "reserve", slots: reserveSlots(target),
+        });
+        return null;
+      }
+      const replacement = replaceReserveGeneralPart(source, target, targetSlot);
+      if (replacement.matched) {
+        target.kind = replacement.hero; target.parts = replacement.parts;
+        target.level = Math.max(target.level, source.level);
+        source.kind = replacement.displacedKind;
+        source.level = replacement.displacedLevel;
+        source.secondarySlot = undefined; source.parts = undefined;
+        player.lastEvent = `营地换字成将「${replacement.hero}」Lv.${target.level}`;
+        emitBattleEvent(snapshot, {
+          type: "units-swapped", slot: player.slot,
+          placements: [{ id: target.id, slots: reserveSlots(target) }, { id: source.id, slots: reserveSlots(source) }],
+        });
+        return null;
+      }
+    }
     if (isMergeAttempt(source, target)) {
       const error = combineReserve(player, source, target, source);
       if (error) return error;
@@ -616,9 +705,21 @@ function dropUnitToReserve(snapshot: MatchSnapshot, player: PlayerBattleState, u
   if (!validReserveSlot(targetSlot)) return "营地目标格不存在";
   const source = player.units.find((unit) => unit.id === unitId);
   if (!source) return "单位不存在";
+  if ((source.bossLockedMs ?? 0) !== 0 || (source.bossChaosMs ?? 0) > 0 || source.bossKnockedDown) return "单位正受 Boss 控制，暂时无法移动";
   if (source.secondaryCell !== undefined) return "两格武将请先拆字再放回营地";
   const target = reserveAtSlot(player, targetSlot);
   if (target) {
+    const partUpgrade = upgradeReserveGeneralWithMatchingPart(source, target, targetSlot);
+    if (partUpgrade.matched) {
+      if (partUpgrade.error) return partUpgrade.error;
+      player.units = player.units.filter((unit) => unit.id !== source.id);
+      player.lastEvent = `营地同字强化「${target.kind}」Lv.${target.level}`;
+      emitBattleEvent(snapshot, {
+        type: "units-merged", slot: player.slot, sourceId: source.id, targetId: target.id,
+        resultKind: target.kind, resultLevel: target.level, location: "reserve", slots: reserveSlots(target),
+      });
+      return null;
+    }
     if (isMergeAttempt(source, target)) {
       const error = combineReserve(player, source, target);
       if (error) return error;
@@ -664,6 +765,7 @@ function dropUnit(snapshot: MatchSnapshot, player: PlayerBattleState, unitId: st
   if (!canBuild(player, targetCell)) return "只能放入己方已开放白格";
   const source = player.units.find((candidate) => candidate.id === unitId);
   if (!source) return "单位不存在";
+  if ((source.bossLockedMs ?? 0) !== 0 || (source.bossChaosMs ?? 0) > 0 || source.bossKnockedDown) return "单位正受 Boss 控制，暂时无法移动";
   const target = unitAtCell(player, targetCell);
   if (!target) {
     if (source.secondaryCell !== undefined) return "两格武将需要先拆字再移动";
@@ -675,6 +777,39 @@ function dropUnit(snapshot: MatchSnapshot, player: PlayerBattleState, unitId: st
     return null;
   }
   if (target.id === source.id) return null;
+  if ((target.bossLockedMs ?? 0) !== 0 || (target.bossChaosMs ?? 0) > 0 || target.bossKnockedDown) return "目标单位正受 Boss 控制，暂时无法交互";
+  if (source.secondaryCell === undefined) {
+    const partUpgrade = upgradeGeneralWithMatchingPart(player, source, target, targetCell);
+      if (partUpgrade.matched) {
+        if (partUpgrade.error) return partUpgrade.error;
+        player.units = player.units.filter((candidate) => candidate.id !== source.id);
+      player.lastEvent = `同字强化「${target.kind}」Lv.${target.level}`;
+      emitBattleEvent(snapshot, {
+        type: "units-merged", slot: player.slot, sourceId: source.id, targetId: target.id,
+        resultKind: target.kind, resultLevel: target.level, location: "board", cells: unitCells(target),
+        });
+        return null;
+      }
+      const replacement = replaceGeneralPart(source, target, targetCell);
+      if (replacement.matched) {
+        const freeSlot = firstEmptyReserveSlot(player);
+        if (freeSlot === null) return "换下的姓名字需要一个空营地格";
+        target.kind = replacement.hero; target.parts = replacement.parts;
+        target.level = Math.max(target.level, source.level); target.cooldownMs = 0; target.attackCount = 0;
+        player.units = player.units.filter((candidate) => candidate.id !== source.id);
+        const returned: ReserveItem = {
+          id: source.id.replace(/^u-/, "r-"), kind: replacement.displacedKind,
+          level: replacement.displacedLevel, slot: freeSlot,
+        };
+        player.reserve.push(returned);
+        player.lastEvent = `换字成将「${replacement.hero}」Lv.${target.level}`;
+        emitBattleEvent(snapshot, {
+          type: "units-swapped", slot: player.slot,
+          placements: [{ id: target.id, cells: unitCells(target) }, { id: returned.id, slots: [returned.slot] }],
+        });
+        return null;
+      }
+    }
   if (isMergeAttempt(source, target)) {
     const error = combine(player, source, target, source);
     if (error) return error;
@@ -826,6 +961,7 @@ function useProp(
     }
     ownUnit.cooldownMs = 0;
     ownUnit.attackCount = 0;
+    clearUpgradeDispellable(player, ownUnit);
     player.lastEvent = `${config.name}：${ownUnit.kind}升降至Lv.${ownUnit.level}`;
   }
   if (command.propId === 5) {
@@ -926,6 +1062,7 @@ function dispatchCommand(snapshot: MatchSnapshot, player: PlayerBattleState, com
     case "SET_PROP_LOADOUT": return setPropLoadout(snapshot, player, command.loadout, command.earlyAccountShovelBonus);
     case "USE_PROP": return useProp(snapshot, player, command, rng);
     case "CLAIM_SHOVEL_SUPPLY": return claimShovelSupply(snapshot, player);
+    case "CLAIM_BULLDOZER_SUPPLY": return claimBulldozerSupply(snapshot, player);
     case "DROP_RESERVE": return dropReserve(snapshot, player, command.reserveId, command.targetCell);
     case "DROP_RESERVE_TO_SLOT": return dropReserveToSlot(snapshot, player, command.reserveId, command.targetSlot);
     case "DROP_UNIT": return dropUnit(snapshot, player, command.unitId, command.targetCell);
@@ -988,6 +1125,7 @@ function validGameCommand(value: unknown): value is GameCommand {
   switch (value.type) {
     case "RECRUIT":
     case "CLAIM_SHOVEL_SUPPLY":
+    case "CLAIM_BULLDOZER_SUPPLY":
       return true;
     case "SET_PROP_LOADOUT": {
       if (!isRecord(value.loadout) || !Array.isArray(value.loadout.active) || !Array.isArray(value.loadout.passive)) return false;
@@ -1099,9 +1237,13 @@ function spawnEnemy(snapshot: MatchSnapshot, player: PlayerBattleState) {
   const bossType = boss ? snapshot.mapIndex * 3 + Math.max(0, bossOrdinal) % 3 : undefined;
   const bossConfig = bossType === undefined ? undefined : BOSS_CONFIGS[bossType];
   const hp = baseHp * (bossConfig?.hpMultiplier ?? 1);
+  const route = expandedPath(snapshot.mapIndex);
+  const spawn = route[0] ?? { x: 0, y: 0 };
   player.enemies.push({
     id: `e-${player.slot}-${player.wave}-${player.remainingToSpawn}-${snapshot.tick}`,
     hp, maxHp: hp, progress: 0, boss, ...(bossType === undefined ? {} : { bossType }), stunnedMs: 0,
+    pathX: spawn.x, pathY: spawn.y, pathIndex: Math.min(1, Math.max(0, route.length - 1)),
+    ...(boss ? { bossCooldownMs: 0, scaleMultiplier: 1 } : {}),
   });
   player.remainingToSpawn -= 1;
 }
@@ -1113,6 +1255,7 @@ function damage(enemy: PlayerBattleState["enemies"][number], amount: number) {
 function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: number) {
   const opponent = snapshot.players[player.slot === 0 ? 1 : 0];
   for (const unit of player.units) {
+    if ((unit.bossChaosMs ?? 0) > 0 || (unit.bossLockedMs ?? 0) !== 0) continue;
     const stats = unitStats(unit, player, opponent);
     if (!stats) continue;
     // 空窗期只让冷却恢复到“可攻击”，绝不能积累负冷却债务；否则敌人
@@ -1126,7 +1269,7 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
     const position = { x: (firstPosition.x + secondPosition.x) / 2, y: (firstPosition.y + secondPosition.y) / 2 };
     const inRange = player.enemies.filter((enemy) => {
       if (enemy.hp <= 0) return false;
-      const point = pathPoint(snapshot.mapIndex, enemy.progress);
+      const point = enemyPathPoint(snapshot.mapIndex, enemy);
       return attackRangeIntersectsCell(position, point, stats.range);
     });
     if (inRange.length === 0 || elapsedCooldown > 0) continue;
@@ -1135,7 +1278,7 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
     const target = targetsClosestEnd
       ? [...inRange].sort((a, b) => b.progress - a.progress)[0]!
       : [...inRange].sort((a, b) => {
-          const pa = pathPoint(snapshot.mapIndex, a.progress); const pb = pathPoint(snapshot.mapIndex, b.progress);
+          const pa = enemyPathPoint(snapshot.mapIndex, a); const pb = enemyPathPoint(snapshot.mapIndex, b);
           return Math.hypot(pa.x - position.x, pa.y - position.y) - Math.hypot(pb.x - position.x, pb.y - position.y);
         })[0]!;
 
@@ -1150,12 +1293,12 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
         const slashTarget = [...player.enemies].filter((enemy) => enemy.hp > 0)
           .sort((a, b) => b.progress - a.progress)[0];
         if (!slashTarget) break;
-        const impact = pathPoint(snapshot.mapIndex, slashTarget.progress);
+        const impact = enemyPathPoint(snapshot.mapIndex, slashTarget);
         damage(slashTarget, stats.attack);
         let hitCount = 1;
         for (const enemy of player.enemies) {
           if (enemy.id === slashTarget.id || enemy.hp <= 0) continue;
-          const point = pathPoint(snapshot.mapIndex, enemy.progress);
+          const point = enemyPathPoint(snapshot.mapIndex, enemy);
           if (!attackRangeIntersectsCell(impact, point, 2.5)) continue;
           damage(enemy, stats.attack / 2);
           hitCount += 1;
@@ -1199,9 +1342,9 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
 
     const form = hero?.form ?? SOLDIERS[unit.kind as keyof typeof SOLDIERS]?.form;
     if (unit.kind === "枪" || form?.includes("贯穿")) {
-      const targetPoint = pathPoint(snapshot.mapIndex, target.progress);
+      const targetPoint = enemyPathPoint(snapshot.mapIndex, target);
       for (const enemy of inRange) if (enemy.id !== target.id) {
-        const point = pathPoint(snapshot.mapIndex, enemy.progress);
+        const point = enemyPathPoint(snapshot.mapIndex, enemy);
         if (!pikeThrustIntersectsCell(position, targetPoint, point)) continue;
         damage(enemy, stats.attack);
         effect.hitCount += 1;
@@ -1213,7 +1356,7 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
           damage(enemy, stats.attack / 2);
           effect.hitCount += 1;
         }
-        const point = pathPoint(snapshot.mapIndex, enemy.progress);
+        const point = enemyPathPoint(snapshot.mapIndex, enemy);
         if (attackRangeIntersectsCell(position, point, stats.range / 2)) {
           damage(enemy, stats.attack / 2);
           effect.hitCount += 1;
@@ -1232,9 +1375,8 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
       effect.hitCount = Math.max(effect.hitCount, inRange.length);
     }
     if (fireArrowRain) {
-      // 原包每个落点为 2 倍攻击；共享内核以已锁定的当前目标结算一个确定性命中。
-      damage(target, stats.attack * 2);
-      effect.damage += stats.attack * 2;
+      // 原包 Na.TF/_R：整条 A* 路径逐格生成、洗牌并逐箭结算落点。
+      scheduleHuangZhongArrowRain(snapshot, player, unit, stats.attack);
       effect.special = true;
     }
     if (arrowRain) {
@@ -1271,6 +1413,16 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
   }
   const defeated = player.enemies.filter((enemy) => enemy.hp <= 0);
   if (defeated.length) {
+    for (const fallen of defeated) {
+      if (fallen.boss) continue;
+      const necromancer = player.enemies.find((enemy) => enemy.bossType === 1
+        && enemy.bossSkillElapsedMs !== undefined && (enemy.resurrectionRemaining ?? 0) > 0
+        && attackRangeIntersectsCell(enemyPathPoint(snapshot.mapIndex, enemy), enemyPathPoint(snapshot.mapIndex, fallen), BOSS_CONFIGS[1].range));
+      if (necromancer) {
+        necromancer.resurrectionRemaining = Math.max(0, (necromancer.resurrectionRemaining ?? 0) - 1);
+        spawnSummonedEnemy(snapshot, player, "zombie", fallen);
+      }
+    }
     player.enemies = player.enemies.filter((enemy) => enemy.hp > 0);
     const reward = defeated.reduce((sum, enemy) => sum + (enemy.boss ? GAME_CONFIG.bossKillBuns : GAME_CONFIG.normalKillBuns), 0);
     player.buns += reward;
@@ -1278,6 +1430,9 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
       type: "enemy-defeated", slot: player.slot, enemyId: enemy.id, boss: enemy.boss,
       rewardBuns: enemy.boss ? GAME_CONFIG.bossKillBuns : GAME_CONFIG.normalKillBuns,
     });
+    for (const deadBoss of defeated.filter((enemy) => enemy.bossType === 4)) {
+      player.rainBossIds = (player.rainBossIds ?? []).filter((id) => id !== deadBoss.id);
+    }
     player.lastEvent = defeated.some((enemy) => enemy.boss) ? `击败Boss，+${reward}馒头` : `击败敌人，+${reward}馒头`;
   }
 }
@@ -1300,6 +1455,484 @@ function expandedPath(mapIndex: number) {
     for (let step = 1; step <= steps; step += 1) result.push({ x: previous[0] + dx * step, y: previous[1] + dy * step });
   }
   return result;
+}
+
+function generalPartAtCell(target: UnitState, targetCell: number) {
+  if (target.secondaryCell === undefined || !GENERALS[target.kind]) return null;
+  const parts = target.parts ?? [target.kind[0] ?? "", target.kind[1] ?? ""];
+  if (targetCell === target.cell) return parts[0] ?? null;
+  if (targetCell === target.secondaryCell) return parts[1] ?? null;
+  return null;
+}
+
+function generalPartAtSlot(target: ReserveItem, targetSlot: number) {
+  if (target.secondarySlot === undefined || !GENERALS[target.kind]) return null;
+  const parts = target.parts ?? [target.kind[0] ?? "", target.kind[1] ?? ""];
+  if (targetSlot === target.slot) return parts[0] ?? null;
+  if (targetSlot === target.secondarySlot) return parts[1] ?? null;
+  return null;
+}
+
+function upgradeGeneralWithMatchingPart(player: PlayerBattleState, source: { kind: string; level: number }, target: UnitState, targetCell: number) {
+  const part = generalPartAtCell(target, targetCell);
+  if (part !== source.kind) return { matched: false as const };
+  if (source.level !== target.level) return { matched: true as const, error: "同字与武将必须同级才能升级" };
+  const maxLevel = maxLevelForKind(target.kind);
+  if (!maxLevel || target.level >= maxLevel) return { matched: true as const, error: "武将已满级" };
+  target.level += 1; target.cooldownMs = 0; target.attackCount = 0;
+  clearUpgradeDispellable(player, target);
+  return { matched: true as const, error: null };
+}
+
+function replaceGeneralPart(source: { kind: string; level: number }, target: UnitState, targetCell: number) {
+  if (target.secondaryCell === undefined || !GENERALS[target.kind]) return { matched: false as const };
+  const parts = [...(target.parts ?? [target.kind[0] ?? "", target.kind[1] ?? ""])] as [string, string];
+  const partIndex: 0 | 1 | null = targetCell === target.cell ? 0 : targetCell === target.secondaryCell ? 1 : null;
+  if (partIndex === null || parts[partIndex] === source.kind) return { matched: false as const };
+  const displacedKind = parts[partIndex];
+  parts[partIndex] = source.kind;
+  const hero = HERO_PAIRS[`${parts[0]}+${parts[1]}`];
+  if (!hero) return { matched: false as const };
+  return { matched: true as const, hero, parts, displacedKind, displacedLevel: target.level };
+}
+
+function replaceReserveGeneralPart(source: { kind: string; level: number }, target: ReserveItem, targetSlot: number) {
+  if (target.secondarySlot === undefined || !GENERALS[target.kind]) return { matched: false as const };
+  const parts = [...(target.parts ?? [target.kind[0] ?? "", target.kind[1] ?? ""])] as [string, string];
+  const partIndex: 0 | 1 | null = targetSlot === target.slot ? 0 : targetSlot === target.secondarySlot ? 1 : null;
+  if (partIndex === null || parts[partIndex] === source.kind) return { matched: false as const };
+  const displacedKind = parts[partIndex];
+  parts[partIndex] = source.kind;
+  const hero = HERO_PAIRS[`${parts[0]}+${parts[1]}`];
+  if (!hero) return { matched: false as const };
+  return { matched: true as const, hero, parts, displacedKind, displacedLevel: target.level };
+}
+
+function upgradeReserveGeneralWithMatchingPart(source: { kind: string; level: number }, target: ReserveItem, targetSlot: number) {
+  const part = generalPartAtSlot(target, targetSlot);
+  if (part !== source.kind) return { matched: false as const };
+  if (source.level !== target.level) return { matched: true as const, error: "同字与武将必须同级才能升级" };
+  const maxLevel = maxLevelForKind(target.kind);
+  if (!maxLevel || target.level >= maxLevel) return { matched: true as const, error: "武将已满级" };
+  target.level += 1;
+  return { matched: true as const, error: null };
+}
+
+function stringSeed(value: string) {
+  let hash = 2166136261;
+  for (const character of value) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+  return hash >>> 0;
+}
+
+function ensureEnemyMovement(mapIndex: number, enemy: EnemyState) {
+  if (Number.isFinite(enemy.pathX) && Number.isFinite(enemy.pathY) && Number.isInteger(enemy.pathIndex)) return;
+  const route = expandedPath(mapIndex);
+  const segments = Math.max(1, route.length - 1);
+  const distance = Math.max(0, Math.min(1, enemy.progress)) * segments;
+  const fromIndex = Math.min(route.length - 2, Math.floor(distance));
+  const fraction = distance - fromIndex;
+  const from = route[fromIndex] ?? route[0] ?? { x: 0, y: 0 };
+  const to = route[fromIndex + 1] ?? from;
+  enemy.pathX = from.x + (to.x - from.x) * fraction;
+  enemy.pathY = from.y + (to.y - from.y) * fraction;
+  enemy.pathIndex = Math.min(route.length - 1, Math.max(1, Math.ceil(distance)));
+}
+
+function syncEnemyProgress(mapIndex: number, enemy: EnemyState) {
+  ensureEnemyMovement(mapIndex, enemy);
+  const route = expandedPath(mapIndex);
+  const targetIndex = Math.max(1, Math.min(route.length - 1, enemy.pathIndex ?? 1));
+  const from = route[targetIndex - 1] ?? route[0] ?? { x: 0, y: 0 };
+  const to = route[targetIndex] ?? from;
+  const segmentLength = Math.max(0.0001, Math.hypot(to.x - from.x, to.y - from.y));
+  const traveled = Math.max(0, Math.min(segmentLength,
+    Math.hypot((enemy.pathX ?? from.x) - from.x, (enemy.pathY ?? from.y) - from.y)));
+  enemy.progress = Math.max(0, Math.min(1, (targetIndex - 1 + traveled / segmentLength) / Math.max(1, route.length - 1)));
+}
+
+/** 敌军的权威逐节点坐标；旧快照仍可由 progress 无损迁移到折线路径。 */
+export function enemyPathPoint(mapIndex: number, enemy: EnemyState) {
+  ensureEnemyMovement(mapIndex, enemy);
+  return { x: enemy.pathX ?? 0, y: enemy.pathY ?? 0 };
+}
+
+function normalWaveHp(snapshot: MatchSnapshot, player: PlayerBattleState) {
+  const waveIndex = Math.max(0, player.wave - 1);
+  const wave = WAVES[waveIndex] ?? WAVES[0];
+  const curve = DIFFICULTY_CURVES[snapshot.difficultyCurve] ?? DIFFICULTY_CURVES[0];
+  const introRound = Math.max(0, Math.floor(player.introRound ?? 10));
+  const introMultiplier = player.wave <= 10 && introRound < INTRO_ROUND_HP_MULTIPLIERS.length
+    ? INTRO_ROUND_HP_MULTIPLIERS[introRound] ?? 1 : 1;
+  return wave[1] * (curve[waveIndex] ?? 1) * introMultiplier;
+}
+
+function spawnSummonedEnemy(
+  snapshot: MatchSnapshot, player: PlayerBattleState, kind: NonNullable<EnemyState["summonedKind"]>,
+  source?: EnemyState, unit?: UnitState,
+) {
+  const route = expandedPath(snapshot.mapIndex);
+  const pathIndex = source?.pathIndex ?? Math.min(1, route.length - 1);
+  const origin = source ? enemyPathPoint(snapshot.mapIndex, source) : route[0] ?? { x: 0, y: 0 };
+  const hp = normalWaveHp(snapshot, player);
+  const enemy: EnemyState = {
+    id: `summon-${kind}-${player.slot}-${snapshot.tick}-${player.enemies.length}`,
+    hp, maxHp: hp, progress: source?.progress ?? 0, boss: false, stunnedMs: 0,
+    pathX: origin.x, pathY: origin.y, pathIndex, summonedKind: kind,
+    ...(unit ? { summonedUnitKind: unit.kind, summonedUnitLevel: unit.level } : {}),
+  };
+  player.enemies.push(enemy);
+  syncEnemyProgress(snapshot.mapIndex, enemy);
+  return enemy;
+}
+
+function unitsInBossRange(snapshot: MatchSnapshot, player: PlayerBattleState, boss: EnemyState, range: number) {
+  const center = enemyPathPoint(snapshot.mapIndex, boss);
+  return player.units.filter((unit) => {
+    const first = cellCoords(unit.cell);
+    const second = unit.secondaryCell === undefined ? first : cellCoords(unit.secondaryCell);
+    const point = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
+    return attackRangeIntersectsCell(center, point, range);
+  });
+}
+
+function enemiesInBossRange(snapshot: MatchSnapshot, player: PlayerBattleState, boss: EnemyState, range: number) {
+  const center = enemyPathPoint(snapshot.mapIndex, boss);
+  return player.enemies.filter((enemy) => enemy.id !== boss.id
+    && attackRangeIntersectsCell(center, enemyPathPoint(snapshot.mapIndex, enemy), range));
+}
+
+function finishBossSkill(snapshot: MatchSnapshot, player: PlayerBattleState, boss: EnemyState, targetIds: string[] = []) {
+  if (boss.bossType === undefined) return;
+  emitBattleEvent(snapshot, {
+    type: "boss-skill", slot: player.slot, bossId: boss.id, bossType: boss.bossType,
+    skillName: BOSS_CONFIGS[boss.bossType]?.name ?? "Boss技能", phase: "resolved", targetIds,
+  });
+  boss.bossSkillElapsedMs = undefined;
+  boss.bossSkillTargetIds = undefined;
+  boss.bossSkillHitIds = undefined;
+  boss.resurrectionRemaining = undefined;
+}
+
+function beginBossSkill(snapshot: MatchSnapshot, player: PlayerBattleState, boss: EnemyState) {
+  const bossType = boss.bossType;
+  if (bossType === undefined) return;
+  const config = BOSS_CONFIGS[bossType];
+  if (!config) return;
+  const rng = createRng(snapshot.seed ^ snapshot.tick ^ stringSeed(boss.id) ^ 0xB055);
+  boss.bossCooldownMs = 0;
+  if (hasPassive(player, 11) && rng.next() < 0.5) {
+    const fraction = 0.1 + rng.next() * 0.1;
+    damage(boss, boss.maxHp * fraction);
+    emitBattleEvent(snapshot, {
+      type: "boss-skill", slot: player.slot, bossId: boss.id, bossType,
+      skillName: config.name, phase: "intercepted", targetIds: [boss.id],
+    });
+    return;
+  }
+  boss.bossSkillElapsedMs = 0;
+  boss.bossSkillHitIds = [];
+  emitBattleEvent(snapshot, {
+    type: "boss-skill", slot: player.slot, bossId: boss.id, bossType,
+    skillName: config.name, phase: "cast", targetIds: [],
+  });
+
+  if (bossType === 1) boss.resurrectionRemaining = 3;
+  if (bossType === 4) {
+    boss.bossSkillUsed = true;
+    player.rainBossIds ??= [];
+    if (!player.rainBossIds.includes(boss.id)) player.rainBossIds.push(boss.id);
+  }
+  if (bossType === 5) {
+    const soldiers = player.units.filter((unit) => Boolean(SOLDIERS[unit.kind as SoldierKind]));
+    const minimum = Math.min(...soldiers.map((unit) => unit.level));
+    boss.bossSkillTargetIds = Number.isFinite(minimum) && minimum <= 3
+      ? soldiers.filter((unit) => unit.level === minimum).map((unit) => unit.id) : [];
+  }
+  if (bossType === 7) boss.bossSkillTargetIds = unitsInBossRange(snapshot, player, boss, config.range).map((unit) => unit.id);
+  if (bossType === 9) {
+    const candidates = unitsInBossRange(snapshot, player, boss, config.range).filter((unit) => !unit.bossKnockedDown);
+    boss.bossSkillTargetIds = candidates.length ? [candidates[Math.floor(rng.next() * candidates.length)]!.id] : [];
+  }
+}
+
+function tickUnitBossStatuses(player: PlayerBattleState, deltaMs: number) {
+  for (const unit of player.units) {
+    if ((unit.bossChaosMs ?? 0) > 0) unit.bossChaosMs = Math.max(0, (unit.bossChaosMs ?? 0) - deltaMs);
+    if ((unit.bossSuppressionMs ?? 0) > 0) {
+      unit.bossSuppressionMs = Math.max(0, (unit.bossSuppressionMs ?? 0) - deltaMs);
+      if (unit.bossSuppressionMs === 0 && unit.bossSuppressionOriginalLevel !== undefined) {
+        unit.level = unit.bossSuppressionOriginalLevel;
+        unit.bossSuppressionOriginalLevel = undefined;
+      }
+    }
+    if ((unit.bossLockedMs ?? 0) > 0) unit.bossLockedMs = Math.max(0, (unit.bossLockedMs ?? 0) - deltaMs);
+  }
+  player.visionDarkMs = Math.max(0, (player.visionDarkMs ?? 0) - deltaMs);
+}
+
+function tickEnemyBuffs(enemy: EnemyState, deltaMs: number) {
+  if ((enemy.moveSpeedBuffMs ?? 0) <= 0) return;
+  enemy.moveSpeedBuffMs = Math.max(0, (enemy.moveSpeedBuffMs ?? 0) - deltaMs);
+  if (enemy.moveSpeedBuffMs > 0) return;
+  enemy.moveSpeedMultiplier = 1;
+  enemy.scaleMultiplier = 1;
+  if ((enemy.inspireBonusHp ?? 0) > 0) {
+    enemy.maxHp = Math.max(1, enemy.maxHp - (enemy.inspireBonusHp ?? 0));
+    enemy.hp = Math.min(enemy.hp, enemy.maxHp);
+    enemy.inspireBonusHp = 0;
+  }
+}
+
+function tickBossSkills(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: number) {
+  tickUnitBossStatuses(player, deltaMs);
+  for (const enemy of player.enemies) tickEnemyBuffs(enemy, deltaMs);
+  for (const boss of [...player.enemies]) {
+    if (!boss.boss || boss.bossType === undefined || boss.hp <= 0) continue;
+    const bossType = boss.bossType;
+    const config = BOSS_CONFIGS[bossType];
+    if (!config) continue;
+    if (boss.bossSkillElapsedMs === undefined) {
+      boss.bossCooldownMs = (boss.bossCooldownMs ?? 0) + deltaMs;
+      if ((boss.bossCooldownMs ?? 0) >= config.cooldownMs && boss.stunnedMs <= 0 && !(bossType === 4 && boss.bossSkillUsed)) {
+        beginBossSkill(snapshot, player, boss);
+      }
+      continue;
+    }
+    boss.bossSkillElapsedMs += deltaMs;
+    const elapsed = boss.bossSkillElapsedMs;
+    const rng = createRng(snapshot.seed ^ snapshot.tick ^ stringSeed(boss.id) ^ bossType);
+
+    if (bossType === 0) {
+      if (elapsed > 500 && elapsed < 1_400) {
+        const radius = Math.min(config.range, (elapsed - 500) / 900 * config.range);
+        const already = new Set(boss.bossSkillHitIds ?? []);
+        for (const unit of unitsInBossRange(snapshot, player, boss, radius)) if (!already.has(unit.id)) {
+          unit.bossChaosMs = Math.max(unit.bossChaosMs ?? 0, 2_000);
+          already.add(unit.id);
+        }
+        boss.bossSkillHitIds = [...already];
+      }
+      if (elapsed >= 1_400) finishBossSkill(snapshot, player, boss, boss.bossSkillHitIds ?? []);
+    } else if (bossType === 1) {
+      if (elapsed >= 1_000) finishBossSkill(snapshot, player, boss);
+    } else if (bossType === 2 && elapsed >= 500) {
+      const targets = enemiesInBossRange(snapshot, player, boss, config.range);
+      for (const target of targets) {
+        const bonus = target.maxHp * 0.5;
+        target.maxHp += bonus; target.hp += bonus; target.inspireBonusHp = (target.inspireBonusHp ?? 0) + bonus;
+        target.moveSpeedMultiplier = 1.3; target.moveSpeedBuffMs = 5_000; target.scaleMultiplier = 1.2;
+      }
+      finishBossSkill(snapshot, player, boss, targets.map((target) => target.id));
+    } else if (bossType === 3 && elapsed >= 500) {
+      const occupied = new Set(player.units.flatMap(unitCells));
+      const candidates = player.unlockedCells.filter((cell) => !occupied.has(cell));
+      const chosen = candidates[Math.floor(rng.next() * candidates.length)];
+      if (chosen !== undefined) player.unlockedCells = player.unlockedCells.filter((cell) => cell !== chosen);
+      finishBossSkill(snapshot, player, boss, chosen === undefined ? [] : [`cell-${chosen}`]);
+    } else if (bossType === 4) {
+      finishBossSkill(snapshot, player, boss, player.units.map((unit) => unit.id));
+    } else if (bossType === 5) {
+      const targets = boss.bossSkillTargetIds ?? [];
+      if (elapsed >= (targets.length ? 1_000 / targets.length : 0)) {
+        const converted: string[] = [];
+        for (const id of targets) {
+          const unit = player.units.find((candidate) => candidate.id === id);
+          if (!unit) continue;
+          const path = expandedPath(snapshot.mapIndex);
+          const bossIndex = boss.pathIndex ?? 1;
+          const offset = Math.floor(rng.next() * 3) - 1;
+          const pathIndex = Math.max(1, Math.min(path.length - 1, bossIndex + offset));
+          const source: EnemyState = { ...boss, boss: false, pathIndex, pathX: path[pathIndex]?.x, pathY: path[pathIndex]?.y };
+          player.units = player.units.filter((candidate) => candidate.id !== id);
+          converted.push(spawnSummonedEnemy(snapshot, player, "puppet", source, unit).id);
+        }
+        finishBossSkill(snapshot, player, boss, converted);
+      }
+    } else if (bossType === 6) {
+      const summoned = spawnSummonedEnemy(snapshot, player, "cavalry");
+      finishBossSkill(snapshot, player, boss, [summoned.id]);
+    } else if (bossType === 7 && elapsed >= 650) {
+      const affected: string[] = [];
+      for (const id of boss.bossSkillTargetIds ?? []) {
+        const unit = player.units.find((candidate) => candidate.id === id);
+        if (!unit) continue;
+        if (unit.bossSuppressionOriginalLevel === undefined) unit.bossSuppressionOriginalLevel = unit.level;
+        unit.level = 1; unit.bossSuppressionMs = 5_000; affected.push(id);
+      }
+      finishBossSkill(snapshot, player, boss, affected);
+    } else if (bossType === 8 && elapsed >= 500) {
+      const targets = enemiesInBossRange(snapshot, player, boss, config.range);
+      player.enemies = player.enemies.filter((enemy) => !targets.includes(enemy));
+      if (targets.length) {
+        const gain = normalWaveHp(snapshot, player) * 2 * targets.length;
+        boss.hp += gain; boss.maxHp += gain; boss.scaleMultiplier = (boss.scaleMultiplier ?? 1) + 0.01 * targets.length;
+      }
+      finishBossSkill(snapshot, player, boss, targets.map((target) => target.id));
+    } else if (bossType === 9) {
+      const unit = player.units.find((candidate) => candidate.id === boss.bossSkillTargetIds?.[0]);
+      const bossPoint = enemyPathPoint(snapshot.mapIndex, boss);
+      const point = unit ? cellCoords(unit.cell) : bossPoint;
+      const duration = unit ? Math.max(1, Math.hypot(point.x - bossPoint.x, point.y - bossPoint.y) * ORIGINAL_CELL_PX * 3) : 0;
+      if (elapsed >= duration) {
+        if (unit) unit.bossKnockedDown = true;
+        finishBossSkill(snapshot, player, boss, unit ? [unit.id] : []);
+      }
+    } else if (bossType === 10 && elapsed >= 1_000) {
+      player.visionDarkMs = 5_000;
+      finishBossSkill(snapshot, player, boss);
+    } else if (bossType === 11 && elapsed >= 1_000) {
+      const soldiers = player.units.filter((unit) => Boolean(SOLDIERS[unit.kind as SoldierKind]) && (unit.bossLockedMs ?? 0) === 0);
+      const maximum = Math.max(...soldiers.map((unit) => unit.level));
+      const target = soldiers.find((unit) => unit.level === maximum);
+      if (target) target.bossLockedMs = target.level < 5 ? -1 : 10_000;
+      finishBossSkill(snapshot, player, boss, target ? [target.id] : []);
+    }
+  }
+}
+
+function scheduleHuangZhongArrowRain(snapshot: MatchSnapshot, player: PlayerBattleState, unit: UnitState, attackValue: number) {
+  const route = expandedPath(snapshot.mapIndex).slice(1);
+  const rng = createRng(snapshot.seed ^ snapshot.tick ^ stringSeed(unit.id) ^ 0xA220);
+  const multiplier = Math.floor(Math.max(1, (unit.level - 1) / 2));
+  const points: Array<{ x: number; y: number }> = [];
+  for (const cell of route) {
+    const count = (1 + Math.floor(rng.next() * 2)) * multiplier;
+    for (let index = 0; index < count; index += 1) {
+      points.push({
+        x: cell.x + 0.5 + (Math.floor(rng.next() * 48) - 24) / ORIGINAL_CELL_PX,
+        y: cell.y + 0.5 + (Math.floor(rng.next() * 48) - 24) / ORIGINAL_CELL_PX,
+      });
+    }
+  }
+  for (let index = points.length - 1; index > 0; index -= 1) {
+    const swap = Math.floor(rng.next() * (index + 1));
+    [points[index], points[swap]] = [points[swap]!, points[index]!];
+  }
+  let cumulativeDelay = 0;
+  player.pendingArrowImpacts ??= [];
+  for (const [index, point] of points.entries()) {
+    cumulativeDelay += 500 + Math.floor(rng.next() * 250);
+    player.pendingArrowImpacts.push({
+      id: `arrow-rain-${unit.id}-${snapshot.tick}-${index}`, unitId: unit.id,
+      x: point.x, y: point.y, damage: attackValue * 2, remainingMs: cumulativeDelay,
+    });
+  }
+}
+
+function tickArrowRain(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: number) {
+  const pending = player.pendingArrowImpacts ?? [];
+  const remaining = [] as typeof pending;
+  for (const impact of pending) {
+    impact.remainingMs -= deltaMs;
+    if (impact.remainingMs > 0) { remaining.push(impact); continue; }
+    const targets = player.enemies.filter((enemy) => enemy.hp > 0
+      && Math.hypot(enemyPathPoint(snapshot.mapIndex, enemy).x + 0.5 - impact.x,
+        enemyPathPoint(snapshot.mapIndex, enemy).y + 0.5 - impact.y) <= 150 / ORIGINAL_CELL_PX);
+    for (const target of targets) damage(target, impact.damage);
+    emitBattleEvent(snapshot, {
+      type: "arrow-rain-impact", slot: player.slot, unitId: impact.unitId,
+      x: impact.x, y: impact.y, damage: impact.damage, targetIds: targets.map((target) => target.id),
+    });
+  }
+  player.pendingArrowImpacts = remaining;
+}
+
+export function bulldozerSupplyAvailable(snapshot: MatchSnapshot, player: PlayerBattleState) {
+  const props = ensureProps(player);
+  if (props.bulldozer) return false;
+  const route = expandedPath(snapshot.mapIndex);
+  return player.enemies.some((enemy) => route.length - (enemy.pathIndex ?? 1) <= 5);
+}
+
+function claimBulldozerSupply(snapshot: MatchSnapshot, player: PlayerBattleState): string | null {
+  if (!bulldozerSupplyAvailable(snapshot, player)) return "敌军接近终点时才可领取推土车补给";
+  const route = expandedPath(snapshot.mapIndex);
+  const startIndex = Math.max(0, route.length - 2);
+  const routeIndices: number[] = [];
+  for (let index = startIndex; index >= 0; index -= 1) {
+    routeIndices.push(index);
+    if (routeIndices.length > 11) break;
+  }
+  const start = route[startIndex] ?? { x: 0, y: 0 };
+  ensureProps(player).bulldozer = { x: start.x, y: start.y, routeIndices, cursor: 0, phase: "moving", fadeMs: 5_000 };
+  emitBattleEvent(snapshot, { type: "bulldozer", slot: player.slot, phase: "launched", targetIds: [] });
+  player.lastEvent = "推土车出动（原广告补给已直接领取）";
+  return null;
+}
+
+function pushEnemyWithBulldozer(snapshot: MatchSnapshot, enemy: EnemyState, offsetX: number, offsetY: number) {
+  ensureEnemyMovement(snapshot.mapIndex, enemy);
+  const route = expandedPath(snapshot.mapIndex);
+  const currentIndex = enemy.pathIndex ?? 1;
+  if (currentIndex < 2) return false;
+  const destinationIndex = currentIndex - 1;
+  const previous = route[destinationIndex] ?? route[0]!;
+  const current = route[currentIndex] ?? previous;
+  let x = previous.x; let y = previous.y;
+  const clamp = 39 / ORIGINAL_CELL_PX;
+  if (current.y !== previous.y) y += Math.min(Math.max(0, offsetY), clamp);
+  else if (current.x !== previous.x) x += Math.min(Math.max(0, offsetX), clamp);
+  else return false;
+  if (Math.abs((enemy.pathX ?? 0) - x) < 2 / ORIGINAL_CELL_PX && Math.abs((enemy.pathY ?? 0) - y) < 2 / ORIGINAL_CELL_PX) return false;
+  enemy.pathX = x; enemy.pathY = y; enemy.pathIndex = destinationIndex;
+  syncEnemyProgress(snapshot.mapIndex, enemy);
+  return true;
+}
+
+function tickBulldozer(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: number) {
+  const props = ensureProps(player);
+  const bulldozer = props.bulldozer;
+  if (!bulldozer) return;
+  const route = expandedPath(snapshot.mapIndex);
+  if (bulldozer.phase === "moving") {
+    const target = route[bulldozer.routeIndices[bulldozer.cursor] ?? 0] ?? { x: bulldozer.x, y: bulldozer.y };
+    const dx = target.x - bulldozer.x; const dy = target.y - bulldozer.y;
+    if (Math.abs(dx) <= 5 / ORIGINAL_CELL_PX && Math.abs(dy) <= 5 / ORIGINAL_CELL_PX) {
+      bulldozer.cursor += 1;
+      if (bulldozer.cursor >= bulldozer.routeIndices.length - 1) bulldozer.phase = "fading";
+    } else {
+      const distance = Math.hypot(dx, dy);
+      const step = 50 * deltaMs / 1_000 / ORIGINAL_CELL_PX;
+      bulldozer.x += step * dx / distance; bulldozer.y += step * dy / distance;
+    }
+  } else {
+    bulldozer.fadeMs -= deltaMs;
+  }
+  const offsetX = bulldozer.x - Math.floor(bulldozer.x);
+  const offsetY = bulldozer.y - Math.floor(bulldozer.y);
+  const pushed = player.enemies.filter((enemy) => Math.hypot(
+    enemyPathPoint(snapshot.mapIndex, enemy).x - bulldozer.x,
+    enemyPathPoint(snapshot.mapIndex, enemy).y - bulldozer.y,
+  ) < 0.5 && pushEnemyWithBulldozer(snapshot, enemy, offsetX, offsetY));
+  if (pushed.length) emitBattleEvent(snapshot, { type: "bulldozer", slot: player.slot, phase: "push", targetIds: pushed.map((enemy) => enemy.id) });
+  if (bulldozer.phase === "fading" && bulldozer.fadeMs <= 0) {
+    props.bulldozer = undefined;
+    emitBattleEvent(snapshot, { type: "bulldozer", slot: player.slot, phase: "expired", targetIds: [] });
+  }
+}
+
+function advanceEnemyAlongOriginalPath(snapshot: MatchSnapshot, player: PlayerBattleState, enemy: EnemyState, deltaMs: number) {
+  ensureEnemyMovement(snapshot.mapIndex, enemy);
+  const route = expandedPath(snapshot.mapIndex);
+  const target = route[enemy.pathIndex ?? 1];
+  if (!target) { enemy.progress = 1; return; }
+  const dx = target.x - (enemy.pathX ?? target.x); const dy = target.y - (enemy.pathY ?? target.y);
+  const distancePx = Math.hypot(dx, dy) * ORIGINAL_CELL_PX;
+  // 原包 _s.move：进入 1px 阈值的这一帧只切换目标节点，不发生位移。
+  if (distancePx < 1) {
+    enemy.pathIndex = (enemy.pathIndex ?? 1) + 1;
+    if ((enemy.pathIndex ?? 0) >= route.length) enemy.progress = 1;
+    else syncEnemyProgress(snapshot.mapIndex, enemy);
+    return;
+  }
+  const silt = hasPassive(player, 18) ? 0.9 : 1;
+  const bossSpeed = enemy.bossType === undefined
+    ? BOSS_ENEMY_SPEED_PX_PER_SEC : BOSS_CONFIGS[enemy.bossType]?.speedPxPerSec ?? BOSS_ENEMY_SPEED_PX_PER_SEC;
+  const speed = (enemy.boss ? bossSpeed : NORMAL_ENEMY_SPEED_PX_PER_SEC) * silt * (enemy.moveSpeedMultiplier ?? 1);
+  const stepCells = speed * deltaMs / 1_000 / ORIGINAL_CELL_PX;
+  enemy.pathX = (enemy.pathX ?? target.x) + dx / (distancePx / ORIGINAL_CELL_PX) * stepCells;
+  enemy.pathY = (enemy.pathY ?? target.y) + dy / (distancePx / ORIGINAL_CELL_PX) * stepCells;
+  syncEnemyProgress(snapshot.mapIndex, enemy);
 }
 
 function tickProps(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: number) {
@@ -1358,16 +1991,16 @@ function tickProps(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: 
     props.meteorMs = Math.max(0, props.meteorMs - deltaMs);
     const endCells = expandedPath(snapshot.mapIndex).slice(-6);
     const threatened = player.enemies.some((enemy) => {
-      const point = pathPoint(snapshot.mapIndex, enemy.progress);
+      const point = enemyPathPoint(snapshot.mapIndex, enemy);
       return endCells.some((cell) => Math.hypot(point.x - cell.x, point.y - cell.y) <= 1);
     });
     if (threatened && props.meteorMs === 0) {
       const defeatedIds = player.enemies.filter((enemy) => {
-        const point = pathPoint(snapshot.mapIndex, enemy.progress);
+        const point = enemyPathPoint(snapshot.mapIndex, enemy);
         return endCells.some((cell) => Math.hypot(point.x - cell.x, point.y - cell.y) <= 1);
       }).map((enemy) => enemy.id);
       player.enemies = player.enemies.filter((enemy) => {
-        const point = pathPoint(snapshot.mapIndex, enemy.progress);
+        const point = enemyPathPoint(snapshot.mapIndex, enemy);
         return !endCells.some((cell) => Math.hypot(point.x - cell.x, point.y - cell.y) <= 1);
       });
       props.meteorMs = 300_000;
@@ -1379,7 +2012,7 @@ function tickProps(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: 
   for (const placed of [...props.placed]) {
     const cell = cellCoords(placed.cell);
     const trigger = player.enemies.find((enemy) => {
-      const point = pathPoint(snapshot.mapIndex, enemy.progress);
+      const point = enemyPathPoint(snapshot.mapIndex, enemy);
       return Math.hypot(point.x - cell.x, point.y - cell.y) <= 0.25;
     });
     if (!trigger) continue;
@@ -1390,11 +2023,11 @@ function tickProps(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: 
     }
     else {
       targetIds = player.enemies.filter((enemy) => {
-        const point = pathPoint(snapshot.mapIndex, enemy.progress);
+        const point = enemyPathPoint(snapshot.mapIndex, enemy);
         return Math.hypot(point.x - cell.x, point.y - cell.y) <= 0.75;
       }).map((enemy) => enemy.id);
       player.enemies = player.enemies.filter((enemy) => {
-        const point = pathPoint(snapshot.mapIndex, enemy.progress);
+        const point = enemyPathPoint(snapshot.mapIndex, enemy);
         return Math.hypot(point.x - cell.x, point.y - cell.y) > 0.75;
       });
     }
@@ -1431,16 +2064,14 @@ function tickPlayer(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs:
     spawnEnemy(snapshot, player);
     player.spawnMs += GAME_CONFIG.spawnMs;
   }
+  tickBossSkills(snapshot, player, deltaMs);
+  tickArrowRain(snapshot, player, deltaMs);
   attack(snapshot, player, deltaMs);
+  tickBulldozer(snapshot, player, deltaMs);
   for (const enemy of player.enemies) {
     enemy.stunnedMs = Math.max(0, enemy.stunnedMs - deltaMs);
-    const siltMultiplier = hasPassive(player, 18) ? 0.9 : 1;
-    if (enemy.stunnedMs === 0) {
-      const routePx = Math.max(1, pathLengthCells(snapshot.mapIndex) * GAME_CONFIG.cellSize);
-      const bossSpeed = enemy.bossType === undefined
-        ? BOSS_ENEMY_SPEED_PX_PER_SEC : BOSS_CONFIGS[enemy.bossType]?.speedPxPerSec ?? BOSS_ENEMY_SPEED_PX_PER_SEC;
-      const speedPxPerSec = enemy.boss ? bossSpeed : NORMAL_ENEMY_SPEED_PX_PER_SEC;
-      enemy.progress += deltaMs / 1_000 * speedPxPerSec / routePx * siltMultiplier;
+    if (enemy.stunnedMs === 0 && enemy.bossSkillElapsedMs === undefined) {
+      advanceEnemyAlongOriginalPath(snapshot, player, enemy, deltaMs);
     }
   }
   const escaped = player.enemies.filter((enemy) => enemy.progress >= 1);
