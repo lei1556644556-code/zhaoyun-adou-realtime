@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GAME_CONFIG, cellCoords, createMatch } from "@adou/shared";
+import { GAME_CONFIG, cellCoords, cloneSnapshot, createMatch } from "@adou/shared";
 import {
   BATTLE_INPUT,
   BATTLE_LAYOUT,
@@ -10,9 +10,28 @@ import {
   commandForBattleDrop,
   createPointerGesture,
   isTapGesture,
+  resolveBattleInspection,
   updatePointerGesture,
   worldDragThreshold,
 } from "../src/game/battleInteraction";
+
+describe("battle inspection", () => {
+  it("reads the latest authoritative level when a snapshot arrives between pointerdown and pointerup", () => {
+    const pressedSnapshot = createMatch("inspect-race", 9, 0);
+    pressedSnapshot.players[0].units.push({
+      id: "blade", kind: "刀", level: 1, cell: 67, cooldownMs: 0, attackCount: 0,
+    });
+    const selection = { ownerSlot: 0, unitId: "blade" } as const;
+    expect(resolveBattleInspection(pressedSnapshot, selection)?.level).toBe(1);
+
+    const releasedSnapshot = cloneSnapshot(pressedSnapshot);
+    releasedSnapshot.players[0].units[0]!.level = 2;
+
+    expect(resolveBattleInspection(releasedSnapshot, selection)).toMatchObject({
+      kind: "刀", level: 2, ownerSlot: 0, unitId: "blade",
+    });
+  });
+});
 
 describe("battle pointer gestures", () => {
   it("keeps a short mouse movement as a tap", () => {

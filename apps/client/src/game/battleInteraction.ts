@@ -20,6 +20,8 @@ export const BATTLE_LAYOUT = {
 
 export type DragSource = "reserve" | "unit" | "generalPart";
 export type Point = Readonly<{ x: number; y: number }>;
+export type BattleInspectSelection = Readonly<{ ownerSlot: PlayerSlot; unitId?: string; reserveId?: string }>;
+export type BattleInspectPayload = BattleInspectSelection & Readonly<{ kind: string; level: number }>;
 
 export interface PointerGesture {
   pointerId: number;
@@ -80,6 +82,24 @@ export function updatePointerGesture(gesture: PointerGesture, pointerId: number,
 export function isTapGesture(gesture: PointerGesture) {
   const distance = Math.hypot(gesture.current.x - gesture.start.x, gesture.current.y - gesture.start.y);
   return !gesture.dragging && distance < gesture.threshold;
+}
+
+/**
+ * Resolves tap details from the latest authoritative snapshot. A snapshot can
+ * arrive between pointerdown and pointerup, so the press-time level is not a
+ * safe source for the inspector.
+ */
+export function resolveBattleInspection(
+  snapshot: MatchSnapshot,
+  selection: BattleInspectSelection,
+): BattleInspectPayload | null {
+  const owner = snapshot.players[selection.ownerSlot];
+  const piece = selection.unitId
+    ? owner.units.find((candidate) => candidate.id === selection.unitId)
+    : selection.reserveId
+      ? owner.reserve.find((candidate) => candidate.id === selection.reserveId)
+      : undefined;
+  return piece ? { kind: piece.kind, level: piece.level, ...selection } : null;
 }
 
 /**

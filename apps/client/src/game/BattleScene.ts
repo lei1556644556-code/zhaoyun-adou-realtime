@@ -6,8 +6,8 @@ import {
 import { allImageAssets, HERO_ASSET_KEYS, IMAGE_ASSETS, TROOP_ASSET_KEYS } from "./assets";
 import {
   BATTLE_INPUT, BATTLE_LAYOUT, activePropDropTargetAt, battleDropTargetAt, createPointerGesture, isTapGesture, updatePointerGesture,
-  worldDragThreshold,
-  type ActivePropDropPayload, type DragSource, type PointerGesture,
+  resolveBattleInspection, worldDragThreshold,
+  type ActivePropDropPayload, type BattleInspectSelection, type DragSource, type PointerGesture,
 } from "./battleInteraction";
 
 const WIDTH = GAME_CONFIG.designWidth;
@@ -19,7 +19,6 @@ const CAMP_Y = BATTLE_LAYOUT.campY;
 const CAMP_CELL = BATTLE_LAYOUT.campCell;
 
 type PieceDisplayMode = "text" | "image";
-type InspectSelection = { ownerSlot: PlayerSlot; unitId?: string; reserveId?: string };
 type DragDescriptor =
   | { sourceType: "reserve" | "unit"; id: string }
   | { sourceType: "generalPart"; id: string; partIndex: 0 | 1 };
@@ -29,7 +28,7 @@ type PointerAction =
       object: Phaser.GameObjects.Container;
       inspectKind: string;
       level: number;
-      selection?: InspectSelection;
+      selection?: BattleInspectSelection;
       drag?: DragDescriptor;
       offsetX: number;
       offsetY: number;
@@ -56,7 +55,7 @@ export class BattleScene extends Phaser.Scene {
   private draggingId: string | null = null;
   private draggingType: DragSource | null = null;
   private draggingPartIndex: 0 | 1 | null = null;
-  private selectedUnit: InspectSelection | null = null;
+  private selectedUnit: BattleInspectSelection | null = null;
   private activePropDrag: { propId: ActivePropId; hover: ActivePropDropPayload | null } | null = null;
   private mapSignature = "";
   private pieceDisplayMode: PieceDisplayMode = localStorage.getItem(PIECE_DISPLAY_MODE_KEY) === "text" ? "text" : "image";
@@ -126,7 +125,7 @@ export class BattleScene extends Phaser.Scene {
     object: Phaser.GameObjects.Container,
     inspectKind: string,
     level: number,
-    selection?: InspectSelection,
+    selection?: BattleInspectSelection,
     drag?: DragDescriptor,
   ) {
     if (this.activePointer || !pointer.primaryDown) return;
@@ -229,10 +228,15 @@ export class BattleScene extends Phaser.Scene {
         this.game.events.emit("battle:recruit");
         return;
       }
+      const inspection = active.action.selection && this.snapshot
+        ? resolveBattleInspection(this.snapshot, active.action.selection)
+        : { kind: active.action.inspectKind, level: active.action.level };
+      if (!inspection) {
+        this.clearInspection(true);
+        return;
+      }
       this.selectedUnit = active.action.selection ?? null;
-      this.game.events.emit("battle:inspect", {
-        kind: active.action.inspectKind, level: active.action.level, ...active.action.selection,
-      });
+      this.game.events.emit("battle:inspect", inspection);
       this.drawSelectedRange();
       return;
     }
@@ -946,7 +950,7 @@ export class BattleScene extends Phaser.Scene {
       const y = mirror ? GAME_CONFIG.rows - 1 - point.y : point.y;
       const x = mirror ? GAME_CONFIG.columns - 1 - point.x : point.x;
       const token = this.createToken((x + 0.5) * CELL, MAP_TOP + (y + 0.5) * CELL, unit.kind, unit.level, mirror, false, undefined, hasGoldShovels);
-      const selection = { unitId: unit.id, ownerSlot: player.slot } satisfies InspectSelection;
+      const selection = { unitId: unit.id, ownerSlot: player.slot } satisfies BattleInspectSelection;
       if (draggable) this.enableDrag(token, "unit", unit.id, unit.kind, unit.level, undefined, unit.kind, selection);
       else this.enableInspect(token, unit.kind, unit.level, selection);
       this.stateLayer.add(token);
@@ -990,7 +994,7 @@ export class BattleScene extends Phaser.Scene {
       if (splitting && this.draggingPartIndex === partIndex) return;
       const point = points[partIndex];
       const token = this.createToken(point.x, point.y, parts[partIndex], unit.level, mirror, true, general.rarity);
-      const selection = { unitId: unit.id, ownerSlot: mirror ? (this.slot === 0 ? 1 : 0) : this.slot } satisfies InspectSelection;
+      const selection = { unitId: unit.id, ownerSlot: mirror ? (this.slot === 0 ? 1 : 0) : this.slot } satisfies BattleInspectSelection;
       if (draggable) this.enableDrag(token, "generalPart", unit.id, parts[partIndex], unit.level, partIndex, unit.kind, selection);
       else this.enableInspect(token, unit.kind, unit.level, selection);
       this.stateLayer.add(token);
@@ -1045,7 +1049,7 @@ export class BattleScene extends Phaser.Scene {
     return container;
   }
 
-  private enableInspect(container: Phaser.GameObjects.Container, kind: string, level: number, selection?: InspectSelection) {
+  private enableInspect(container: Phaser.GameObjects.Container, kind: string, level: number, selection?: BattleInspectSelection) {
     container.setInteractive(
       new Phaser.Geom.Circle(container.width / 2, container.height / 2, BATTLE_INPUT.tokenHitRadius),
       Phaser.Geom.Circle.Contains,
@@ -1064,7 +1068,7 @@ export class BattleScene extends Phaser.Scene {
     level: number,
     partIndex?: 0 | 1,
     inspectKind = kind,
-    inspectSelection?: InspectSelection,
+    inspectSelection?: BattleInspectSelection,
   ) {
     container.setData({ sourceType, sourceId, kind, partIndex });
     container.setInteractive(
