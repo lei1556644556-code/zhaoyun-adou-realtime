@@ -25,6 +25,7 @@ export class AuthoritativeRealtimeClient extends EventTarget {
     private readonly storageKey: string,
     private readonly serverUrl: string,
     private readonly accessToken: () => Promise<string>,
+    private readonly socketPath = "/socket.io",
   ) { super(); }
 
   private emit(type: string, detail: unknown) {
@@ -36,6 +37,7 @@ export class AuthoritativeRealtimeClient extends EventTarget {
     if (this.closed) throw new Error("实时连接已经关闭");
     const token = await this.accessToken();
     const socket = this.socket ?? io(this.serverUrl, {
+      path: this.socketPath,
       autoConnect: false,
       transports: ["websocket", "polling"],
       auth: {

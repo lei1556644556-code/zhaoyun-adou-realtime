@@ -3,6 +3,7 @@ export type DeploymentEnvironment = "local" | "preview" | "production";
 export interface RuntimeConfig {
   deploymentEnvironment: DeploymentEnvironment;
   serverUrl: string | null;
+  socketPath: string;
   supabase: {
     url: string;
     publishableKey: string;
@@ -50,9 +51,15 @@ export function loadRuntimeConfig(): RuntimeConfig {
     serverUrl = parsedServer.toString().replace(/\/$/, "");
   }
 
+  const socketPath = import.meta.env.VITE_SOCKET_PATH?.trim() || "/socket.io";
+  if (!socketPath.startsWith("/") || /[?#]/.test(socketPath)) {
+    throw new Error("VITE_SOCKET_PATH 必须是以 / 开头且不含查询参数的路径");
+  }
+
   return {
     deploymentEnvironment: rawEnvironment,
     serverUrl,
+    socketPath,
     supabase: { url: parsedUrl.toString().replace(/\/$/, ""), publishableKey },
   };
 }

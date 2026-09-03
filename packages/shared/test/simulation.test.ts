@@ -354,6 +354,22 @@ describe("1.0.9 authoritative simulation", () => {
     expect(match.players[0].reserve).toHaveLength(0);
   });
 
+  it("swaps same-kind board soldiers when their levels differ", () => {
+    const match = createMatch("TEST", 201);
+    const firstCell = cellIndex(2, 7);
+    const secondCell = cellIndex(3, 7);
+    match.players[0].units = [
+      { id: "cavalry-2", kind: "骑", level: 2, cell: firstCell, cooldownMs: 0, attackCount: 0 },
+      { id: "cavalry-3", kind: "骑", level: 3, cell: secondCell, cooldownMs: 0, attackCount: 0 },
+    ];
+    expect(applyCommand(match, 0, { type: "DROP_UNIT", unitId: "cavalry-2", targetCell: secondCell }).ok).toBe(true);
+    expect(match.players[0].units).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "cavalry-2", cell: secondCell, level: 2 }),
+      expect.objectContaining({ id: "cavalry-3", cell: firstCell, level: 3 }),
+    ]));
+    expect(match.players[0].lastEvent).toBe("交换「骑」与「骑」");
+  });
+
   it("runs all twelve package boss skills through an authoritative cast and resolution lifecycle", () => {
     for (let bossType = 0; bossType < BOSS_CONFIGS.length; bossType += 1) {
       const match = bossFixture(bossType, true);

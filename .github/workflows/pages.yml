@@ -28,12 +28,10 @@ jobs:
     timeout-minutes: 15
     env:
       VITE_DEPLOY_ENV: production
-      # Temporary no-cost playtest endpoint hosted from the owner's PC.
-      # Move these public client values back to repository variables when the
-      # permanent authority host is selected.
       VITE_SUPABASE_URL: https://dkaabuxszrbnnrajnoaa.supabase.co
       VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_8UjZAjC-Ts2NiP8_NpmFdA_jv-CEzhd
-      VITE_SERVER_URL: https://iso-dragon-fri-phase.trycloudflare.com
+      VITE_SERVER_URL: https://api.astocklab.cn
+      VITE_SOCKET_PATH: /zhaoyun/socket.io
     steps:
       - uses: actions/checkout@v4
         with:

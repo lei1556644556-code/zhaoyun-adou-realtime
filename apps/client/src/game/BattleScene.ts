@@ -205,8 +205,10 @@ export class BattleScene extends Phaser.Scene {
     if (active.action.type === "piece" && wasDragging && drag) {
       const { action } = active;
       if (action.object.active) action.object.setPosition(pointer.worldX + action.offsetX, pointer.worldY + action.offsetY);
+      // 以玩家松手时的鼠标/手指位置作为目标格。若用棋子中心计算，玩家从
+      // 棋子边缘起拖时会产生一个永久偏移，明明松在相邻棋子上却被判回原格。
       const target = releasedInside && action.object.active
-        ? battleDropTargetAt({ x: action.object.x, y: action.object.y }, drag.sourceType)
+        ? battleDropTargetAt(this.pointerPoint(pointer), drag.sourceType)
         : { type: "outside" } as const;
       this.resetDragState(action.object);
       if (target.type === "cell") {

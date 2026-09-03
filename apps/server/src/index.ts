@@ -46,6 +46,7 @@ const supabaseUrl = process.env.SUPABASE_URL?.trim();
 const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY?.trim();
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
 const originList = (process.env.CLIENT_ORIGIN ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+const socketPath = process.env.SOCKET_PATH?.trim() || "/socket.io";
 
 if (requireAuth && (!supabaseUrl || !publishableKey)) {
   throw new Error("Production authority requires SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY");
@@ -67,6 +68,7 @@ const adminClient = supabaseUrl && serviceRoleKey
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
+  path: socketPath,
   cors: { origin: originList.length > 0 ? originList : true, credentials: false },
 });
 const rooms = new Map<string, Room>();

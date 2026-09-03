@@ -668,7 +668,7 @@ function createOnlineClient(): OnlineClient {
     const session = await cloud.session();
     if (!session?.access_token) throw new Error("登录已失效，请重新登录后进入真人对战");
     return session.access_token;
-  });
+  }, runtimeConfig.socketPath);
 }
 
 function bindOnline(client: OnlineClient) {
