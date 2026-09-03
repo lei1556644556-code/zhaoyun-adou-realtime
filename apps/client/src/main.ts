@@ -457,6 +457,7 @@ document.addEventListener("keydown", (event) => { if (event.key === "Escape") hi
 get("exit-match").addEventListener("click", async () => {
   practice?.stop(); online?.close();
   practice = null; online = null; commandSink = null; snapshot = null; activeMode = null;
+  roomPlayers = [];
   localStorage.removeItem(scopedStorageKey(ACTIVE_MODE_KEY));
   localStorage.removeItem(scopedStorageKey(PRACTICE_SAVE_KEY));
   localStorage.removeItem(scopedStorageKey(ONLINE_SESSION_KEY));
@@ -467,6 +468,7 @@ get("exit-match").addEventListener("click", async () => {
   hideUnitInspector();
   battleShell.hidden = true;
   lobby.hidden = false;
+  lobbyNote.textContent = "创建房间后把6位房号发给好友，也可以直接随机匹配。";
   window.scrollTo({ top: 0, behavior: "instant" });
 });
 
