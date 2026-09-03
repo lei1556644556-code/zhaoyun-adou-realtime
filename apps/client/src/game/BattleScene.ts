@@ -68,6 +68,7 @@ export class BattleScene extends Phaser.Scene {
   }
 
   create() {
+    this.game.canvas.classList.remove("is-battle-ready");
     this.cameras.main.setBackgroundColor("#edf0df");
     this.drawBackdrop();
     this.mapGraphics = this.add.graphics().setDepth(1);
@@ -106,6 +107,7 @@ export class BattleScene extends Phaser.Scene {
       this.game.events.off("battle:prop-drag-end", this.onPropDragEnd, this);
       this.game.events.off("battle:prop-drag-cancel", this.onPropDragCancel, this);
       this.game.events.off(Phaser.Core.Events.BLUR, this.onPointerCancel, this);
+      this.game.canvas.classList.remove("is-battle-ready");
       this.resetPointerState();
       this.onPropDragCancel();
     });
@@ -411,6 +413,10 @@ export class BattleScene extends Phaser.Scene {
     this.slot = slot;
     if (!this.activePointer || this.isDragging) this.renderState();
     this.playCombatEvents(snapshot.combatEvents ?? []);
+    // The canvas exists before preload/create and the first authoritative
+    // snapshot finish. Only expose it after interactive pieces have rendered,
+    // otherwise a player's first click can land on an inert loading canvas.
+    this.game.canvas.classList.add("is-battle-ready");
     if (previous && previousRoom === snapshot.roomId) this.playSynthesisDiff(previous.players[slot], snapshot.players[slot]);
   }
 

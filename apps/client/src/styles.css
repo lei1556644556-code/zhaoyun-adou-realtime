@@ -144,7 +144,8 @@ button { touch-action: manipulation; }
 .battle-layout { display: grid; grid-template-columns: minmax(0, var(--game-width)) minmax(270px, 340px); justify-content: center; gap: 16px; align-items: start; }
 .playfield-card { position: relative; width: min(var(--game-width), 100%); min-width: 0; overflow: hidden; border: 1px solid rgba(225,202,151,.55); background: #edf0df; box-shadow: 0 20px 55px rgba(0,0,0,.3); transition: width .16s ease; }
 .game-frame { width: 100%; aspect-ratio: 640 / 1386; touch-action: none; user-select: none; }
-.game-frame canvas { display: block; width: 100% !important; height: 100% !important; touch-action: none; }
+.game-frame canvas { display: block; visibility: hidden; width: 100% !important; height: 100% !important; touch-action: none; }
+.game-frame canvas.is-battle-ready { visibility: visible; }
 .game-frame canvas.is-dragging { cursor: grabbing !important; }
 .game-frame canvas.is-prop-targeting { cursor: crosshair !important; }
 .tactics-panel { padding: 22px; border: 1px solid rgba(225,202,151,.45); border-radius: 10px; background: rgba(248,242,226,.96); box-shadow: 0 16px 44px rgba(0,0,0,.22); }
@@ -285,8 +286,8 @@ body.is-dragging-prop, body.is-dragging-prop * { cursor: grabbing !important; }
   .primary-actions, .room-actions { flex-direction: column; }
   .join-row .btn { flex: 0 0 78px; padding-inline: 10px; }
   .battle-toolbar { position: sticky; z-index: 20; top: 0; min-height: 44px; margin: 0; gap: 6px; border-width: 0 0 1px; border-radius: 0; padding: 6px 9px; touch-action: pan-y; }
-  .battle-toolbar > div:first-child { flex: 0 0 auto; }
-  .battle-toolbar > div:first-child b { font-size: 14px; white-space: nowrap; }
+  .battle-toolbar > div:first-child { flex: 1 1 0; min-width: 0; }
+  .battle-toolbar > div:first-child b { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
   .battle-toolbar > div:first-child span { display: none; }
   .toolbar-room strong { font-size: 15px; }
   .toolbar-room button { display: none; }

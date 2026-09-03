@@ -53,12 +53,11 @@ export class PracticeEngine extends EventTarget {
   stop() { window.clearInterval(this.timer); this.timer = 0; }
 }
 
-const heroPairs = new Set(["赵云","张飞","马超","关羽","关平","关兴","张苞","张翼","黄忠","黄盖","黄祖","刘备"]);
-function findMerge(units: UnitState[]): [UnitState, UnitState] | null {
+export function findMerge(units: UnitState[]): [UnitState, UnitState] | null {
   for (let i = 0; i < units.length; i += 1) for (let j = i + 1; j < units.length; j += 1) {
     const a = units[i]; const b = units[j];
     if (!a || !b) continue;
-    if ((a.kind === b.kind && a.level === b.level) || heroPairs.has(a.kind + b.kind) || heroPairs.has(b.kind + a.kind)) return [a, b];
+    if ((a.kind === b.kind && a.level === b.level) || Boolean(HERO_PAIRS[`${a.kind}+${b.kind}`])) return [a, b];
   }
   return null;
 }
