@@ -1,6 +1,8 @@
 name: Deploy GitHub Pages
 
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       ref:
@@ -31,7 +33,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ github.event_name == 'push' && github.ref_name || inputs.ref }}
           fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
