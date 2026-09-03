@@ -2,7 +2,7 @@ import Phaser from "phaser";
 import {
   GAME_CONFIG, GENERALS, MAP_LAYOUTS, PROPS, SOLDIERS, attackRangeIntersectsCell, cellCode, cellCoords, cellIndex,
   enemyPathPoint, pathPoint,
-  type ActivePropId, type BattleEvent, type CombatEffectEvent, type HeroRarity, type MatchSnapshot, type PlayerBattleState, type PlayerSlot,
+  type ActivePropId, type BattleEvent, type CombatEffectEvent, type EnemyState, type HeroRarity, type MatchSnapshot, type PlayerBattleState, type PlayerSlot,
 } from "@adou/shared";
 import { allImageAssets, HERO_ASSET_KEYS, IMAGE_ASSETS, TROOP_ASSET_KEYS } from "./assets";
 import {
@@ -37,7 +37,17 @@ type PointerAction =
   | { type: "recruit" };
 type ActivePointer = { gesture: PointerGesture; action: PointerAction };
 type PropDragPointer = { propId: ActivePropId; clientX: number; clientY: number };
+type EnemyVisual = {
+  root: Phaser.GameObjects.Container;
+  figure: Phaser.GameObjects.Container;
+  body: Phaser.GameObjects.Image | Phaser.GameObjects.Text;
+  healthBar: Phaser.GameObjects.Rectangle;
+  healthBarWidth: number;
+  seed: number;
+  boss: boolean;
+};
 const PIECE_DISPLAY_MODE_KEY = "adou-piece-display-mode-v1";
+const ENEMY_INTERPOLATION_MS = Math.ceil(1000 / GAME_CONFIG.tickHz) + 35;
 
 export class BattleScene extends Phaser.Scene {
   private snapshot: MatchSnapshot | null = null;
@@ -45,6 +55,7 @@ export class BattleScene extends Phaser.Scene {
   private mapGraphics!: Phaser.GameObjects.Graphics;
   private tileLayer!: Phaser.GameObjects.Container;
   private selectionGraphics!: Phaser.GameObjects.Graphics;
+  private enemyLayer!: Phaser.GameObjects.Container;
   private stateLayer!: Phaser.GameObjects.Container;
   private propTargetGraphics!: Phaser.GameObjects.Graphics;
   private effectsLayer!: Phaser.GameObjects.Container;
@@ -59,6 +70,9 @@ export class BattleScene extends Phaser.Scene {
   private selectedUnit: BattleInspectSelection | null = null;
   private activePropDrag: { propId: ActivePropId; hover: ActivePropDropPayload | null } | null = null;
   private mapSignature = "";
+  private staticRenderSignature = "";
+  private enemyVisuals = new Map<string, EnemyVisual>();
+  private hudLastEventText: Phaser.GameObjects.Text | null = null;
   private pieceDisplayMode: PieceDisplayMode = localStorage.getItem(PIECE_DISPLAY_MODE_KEY) === "text" ? "text" : "image";
 
   constructor() { super("battle"); }
@@ -74,7 +88,8 @@ export class BattleScene extends Phaser.Scene {
     this.mapGraphics = this.add.graphics().setDepth(1);
     this.tileLayer = this.add.container(0, 0).setDepth(2);
     this.selectionGraphics = this.add.graphics().setDepth(4);
-    this.stateLayer = this.add.container(0, 0).setDepth(5);
+    this.enemyLayer = this.add.container(0, 0).setDepth(5);
+    this.stateLayer = this.add.container(0, 0).setDepth(6);
     this.propTargetGraphics = this.add.graphics().setDepth(20);
     this.effectsLayer = this.add.container(0, 0).setDepth(80);
     this.dragLayer = this.add.container(0, 0).setDepth(1000);
@@ -110,7 +125,16 @@ export class BattleScene extends Phaser.Scene {
       this.game.canvas.classList.remove("is-battle-ready");
       this.resetPointerState();
       this.onPropDragCancel();
+      this.clearEnemyVisuals();
     });
+  }
+
+  update(time: number) {
+    for (const visual of this.enemyVisuals.values()) {
+      const step = Math.sin(time * 0.006 + visual.seed);
+      visual.figure.y = step * (visual.boss ? 2.2 : 3.2);
+      visual.figure.rotation = step * (visual.boss ? 0.018 : 0.035);
+    }
   }
 
   private pointerPoint(pointer: Phaser.Input.Pointer) {
@@ -392,7 +416,8 @@ export class BattleScene extends Phaser.Scene {
 
   private onPieceDisplayMode(mode: PieceDisplayMode) {
     this.pieceDisplayMode = mode;
-    this.renderState();
+    this.clearEnemyVisuals();
+    this.renderState(undefined, true);
   }
 
   private drawBackdrop() {
@@ -418,7 +443,8 @@ export class BattleScene extends Phaser.Scene {
     const previousRoom = this.snapshot?.roomId;
     this.snapshot = snapshot;
     this.slot = slot;
-    if (!this.activePointer || this.isDragging) this.renderState();
+    if (!this.activePointer || this.isDragging) this.renderState(previous, false);
+    else this.syncEnemies(previous);
     this.playBattleEvents(snapshot.events ?? []);
     // The canvas exists before preload/create and the first authoritative
     // snapshot finish. Only expose it after interactive pieces have rendered,
@@ -439,35 +465,81 @@ export class BattleScene extends Phaser.Scene {
     else this.playUpgradeBurst(result.kind, result.level);
   }
 
-  private renderState() {
+  private renderState(previous?: MatchSnapshot | null, force = true) {
     if (!this.snapshot) return;
-    this.stateLayer.removeAll(true);
-    this.drawMap();
     const mine = this.snapshot.players[this.slot];
     const opponent = this.snapshot.players[this.slot === 0 ? 1 : 0];
-    this.drawSelectedRange();
-    this.drawHud(mine, opponent);
-    this.drawStructures(mine, opponent);
-    this.drawEnemies(mine, false);
-    this.drawEnemies(opponent, true);
-    this.drawUnits(opponent, true, false);
-    this.drawUnits(mine, false, true);
-    this.drawCamp(mine);
-    this.drawBulldozer(mine, false);
-    this.drawBulldozer(opponent, true);
-    if ((mine.visionDarkMs ?? 0) > 0) {
-      this.stateLayer.add(this.add.rectangle(WIDTH / 2, MAP_TOP + 400, WIDTH, 800, 0x08121b, 0.67).setDepth(70));
-      this.stateLayer.add(this.add.text(WIDTH / 2, MAP_TOP + 400, "噬 目", {
-        fontFamily: '"STKaiti", "KaiTi", serif', fontSize: "72px", color: "#9ccfff", fontStyle: "bold",
-        stroke: "#071019", strokeThickness: 8,
-      }).setOrigin(0.5).setAlpha(0.64).setDepth(71));
+    const signature = this.staticStateSignature(mine, opponent);
+    if (force || !this.staticRenderSignature || signature !== this.staticRenderSignature) {
+      this.stateLayer.removeAll(true);
+      this.drawMap();
+      this.drawSelectedRange();
+      this.drawHud(mine, opponent);
+      this.drawStructures(mine, opponent);
+      this.drawUnits(opponent, true, false);
+      this.drawUnits(mine, false, true);
+      this.drawCamp(mine);
+      this.drawBulldozer(mine, false);
+      this.drawBulldozer(opponent, true);
+      if ((mine.visionDarkMs ?? 0) > 0) {
+        this.stateLayer.add(this.add.rectangle(WIDTH / 2, MAP_TOP + 400, WIDTH, 800, 0x08121b, 0.67).setDepth(70));
+        this.stateLayer.add(this.add.text(WIDTH / 2, MAP_TOP + 400, "噬 目", {
+          fontFamily: '"STKaiti", "KaiTi", serif', fontSize: "72px", color: "#9ccfff", fontStyle: "bold",
+          stroke: "#071019", strokeThickness: 8,
+        }).setOrigin(0.5).setAlpha(0.64).setDepth(71));
+      }
+      this.drawActivePropTargets();
+      if (this.isDragging && this.draggingType) {
+        const dragged = this.dragLayer.getAt(0) as Phaser.GameObjects.Container | null;
+        this.drawDropHints(this.draggingType, dragged?.getData("kind") as string ?? "");
+      }
+      if (this.snapshot.phase === "finished") this.drawResult();
+      this.staticRenderSignature = signature;
     }
-    this.drawActivePropTargets();
-    if (this.isDragging && this.draggingType) {
-      const dragged = this.dragLayer.getAt(0) as Phaser.GameObjects.Container | null;
-      this.drawDropHints(this.draggingType, dragged?.getData("kind") as string ?? "");
-    }
-    if (this.snapshot.phase === "finished") this.drawResult();
+    this.hudLastEventText?.setText(mine.lastEvent);
+    this.syncEnemies(previous);
+  }
+
+  private staticStateSignature(mine: PlayerBattleState, opponent: PlayerBattleState) {
+    const visualPlayer = (player: PlayerBattleState) => ({
+      hp: player.hp,
+      maxHp: player.maxHp,
+      buns: player.buns,
+      recruitCost: player.recruitCost,
+      wave: player.wave,
+      phase: player.phase,
+      prepareSeconds: player.phase === "preparing" ? Math.ceil(player.prepareMs / 1000) : undefined,
+      units: player.units.map((unit) => ({
+        id: unit.id,
+        kind: unit.kind,
+        level: unit.level,
+        cell: unit.cell,
+        secondaryCell: unit.secondaryCell,
+        parts: unit.parts,
+        rangeMultiplier: unit.rangeMultiplier,
+      })),
+      reserve: player.reserve.map((item) => ({
+        id: item.id,
+        kind: item.kind,
+        level: item.level,
+        slot: item.slot,
+        secondarySlot: item.secondarySlot,
+        parts: item.parts,
+      })),
+      unlockedCells: player.unlockedCells,
+      placedProps: player.props?.placed,
+      propLoadout: player.props?.loadout,
+      bulldozer: player.props?.bulldozer,
+      visionDark: (player.visionDarkMs ?? 0) > 0,
+    });
+    return JSON.stringify({
+      roomId: this.snapshot?.roomId,
+      mapIndex: this.snapshot?.mapIndex,
+      phase: this.snapshot?.phase,
+      winner: this.snapshot?.winner,
+      mine: visualPlayer(mine),
+      opponent: visualPlayer(opponent),
+    });
   }
 
   private drawSelectedRange() {
@@ -573,10 +645,10 @@ export class BattleScene extends Phaser.Scene {
     add(this.add.text(116, 1023, `我方阿斗  ♥ ${mine.hp} / ${mine.maxHp}`, {
       fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "20px", color: "#fff3ce", fontStyle: "bold",
     }).setOrigin(0.5));
-    add(this.add.text(620, 1014, mine.lastEvent, {
+    this.hudLastEventText = add(this.add.text(620, 1014, mine.lastEvent, {
       fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "15px", color: "#5f655f", align: "right",
       wordWrap: { width: 370 },
-    }).setOrigin(1, 0));
+    }).setOrigin(1, 0)) as Phaser.GameObjects.Text;
   }
 
   private drawStructures(mine: PlayerBattleState, opponent: PlayerBattleState) {
@@ -1145,38 +1217,90 @@ export class BattleScene extends Phaser.Scene {
     });
   }
 
-  private drawEnemies(player: PlayerBattleState, mirror: boolean) {
+  private enemyVisualPoint(enemy: EnemyState, mirror: boolean, snapshot = this.snapshot) {
+    if (!snapshot) return { x: WIDTH / 2, y: MAP_TOP + 400 };
+    const point = enemyPathPoint(snapshot.mapIndex, enemy);
+    const x = mirror ? GAME_CONFIG.columns - 1 - point.x : point.x;
+    const y = mirror ? GAME_CONFIG.rows - 1 - point.y : point.y;
+    return { x: (x + 0.5) * CELL, y: MAP_TOP + (y + 0.5) * CELL };
+  }
+
+  private createEnemyVisual(enemy: EnemyState, mirror: boolean, x: number, y: number) {
+    const seed = [...enemy.id].reduce((total, character) => total + character.charCodeAt(0), 0);
+    const regularKeys = [IMAGE_ASSETS.enemies.rebel.key, IMAGE_ASSETS.enemies.brute.key, IMAGE_ASSETS.enemies.scout.key, IMAGE_ASSETS.enemies.captain.key];
+    const bossKeys = [IMAGE_ASSETS.enemies.bossHorned.key, IMAGE_ASSETS.enemies.bossBanner.key];
+    const imageKey = enemy.boss ? bossKeys[seed % bossKeys.length]! : regularKeys[seed % regularKeys.length]!;
+    const size = enemy.boss ? 74 : 53;
+    const radius = enemy.boss ? 31 : 23;
+    const healthBarWidth = enemy.boss ? 54 : 38;
+    const root = this.add.container(x, y);
+    const figure = this.add.container(0, 0);
+    const shadow = this.add.ellipse(0, radius * 0.7, enemy.boss ? 54 : 34, enemy.boss ? 16 : 10, 0x1f302b, 0.4);
+    const frame = this.add.circle(0, 0, radius, enemy.boss ? 0x8f2f2d : mirror ? 0x475c66 : 0x5e3c35, 0.88)
+      .setStrokeStyle(enemy.boss ? 3 : 2, enemy.boss ? 0xffd06e : 0xf0e5cf, 0.96);
+    const body = this.pieceDisplayMode === "image"
+      ? this.add.image(0, 1, imageKey).setDisplaySize(size, size)
+      : this.add.text(0, 0, enemy.boss ? "将" : "兵", {
+          fontFamily: '"STKaiti", "KaiTi", serif', fontSize: enemy.boss ? "44px" : "31px",
+          color: "#fff0c6", fontStyle: "bold", stroke: "#3b2522", strokeThickness: enemy.boss ? 5 : 3,
+        }).setOrigin(0.5);
+    body.setScale(enemy.scaleMultiplier ?? 1);
+    if (mirror) body.setTint(0xd4e5e3);
+    figure.add([shadow, frame, body]);
+    const barBack = this.add.rectangle(0, -radius - 9, healthBarWidth, 6, 0x482c28, 1);
+    const ratio = Math.max(0, enemy.hp / enemy.maxHp);
+    const healthBar = this.add.rectangle(-healthBarWidth / 2, -radius - 9, Math.max(0.01, healthBarWidth * ratio), 6, 0xd75240, 1)
+      .setOrigin(0, 0.5);
+    root.add([figure, barBack, healthBar]);
+    this.enemyLayer.add(root);
+    return { root, figure, body, healthBar, healthBarWidth, seed, boss: enemy.boss } satisfies EnemyVisual;
+  }
+
+  private syncEnemies(previous?: MatchSnapshot | null) {
     if (!this.snapshot) return;
-    for (const enemy of player.enemies) {
-      const point = enemyPathPoint(this.snapshot.mapIndex, enemy);
-      const y = mirror ? GAME_CONFIG.rows - 1 - point.y : point.y;
-      const x = mirror ? GAME_CONFIG.columns - 1 - point.x : point.x;
-      const seed = [...enemy.id].reduce((total, character) => total + character.charCodeAt(0), 0);
-      const step = Math.sin((this.snapshot.tick + seed) * 0.34);
-      const px = (x + 0.5) * CELL + Math.cos((this.snapshot.tick + seed) * 0.16) * 1.8;
-      const py = MAP_TOP + (y + 0.5) * CELL + step * (enemy.boss ? 2.2 : 3.2);
-      const regularKeys = [IMAGE_ASSETS.enemies.rebel.key, IMAGE_ASSETS.enemies.brute.key, IMAGE_ASSETS.enemies.scout.key, IMAGE_ASSETS.enemies.captain.key];
-      const bossKeys = [IMAGE_ASSETS.enemies.bossHorned.key, IMAGE_ASSETS.enemies.bossBanner.key];
-      const imageKey = enemy.boss ? bossKeys[seed % bossKeys.length]! : regularKeys[seed % regularKeys.length]!;
-      const size = enemy.boss ? 74 : 53;
-      const radius = enemy.boss ? 31 : 23;
-      const shadow = this.add.ellipse(px, py + radius * 0.7, enemy.boss ? 54 : 34, enemy.boss ? 16 : 10, 0x1f302b, 0.4);
-      const frame = this.add.circle(px, py, radius, enemy.boss ? 0x8f2f2d : mirror ? 0x475c66 : 0x5e3c35, 0.88)
-        .setStrokeStyle(enemy.boss ? 3 : 2, enemy.boss ? 0xffd06e : 0xf0e5cf, 0.96);
-      const body = this.pieceDisplayMode === "image"
-        ? this.add.image(px, py + 1, imageKey).setDisplaySize(size, size)
-        : this.add.text(px, py, enemy.boss ? "将" : "兵", {
-            fontFamily: '"STKaiti", "KaiTi", serif', fontSize: enemy.boss ? "44px" : "31px",
-            color: "#fff0c6", fontStyle: "bold", stroke: "#3b2522", strokeThickness: enemy.boss ? 5 : 3,
-          }).setOrigin(0.5);
-      body.setScale(enemy.scaleMultiplier ?? 1);
-      body.setRotation(step * (enemy.boss ? 0.018 : 0.035));
-      if (mirror) body.setTint(0xd4e5e3);
-      const barBack = this.add.rectangle(px, py - radius - 9, enemy.boss ? 54 : 38, 6, 0x482c28, 1);
-      const ratio = Math.max(0, enemy.hp / enemy.maxHp);
-      const bar = this.add.rectangle(px - (enemy.boss ? 27 : 19), py - radius - 9, (enemy.boss ? 54 : 38) * ratio, 6, 0xd75240, 1).setOrigin(0, 0.5);
-      this.stateLayer.add([shadow, frame, body, barBack, bar]);
+    if (previous && previous.roomId !== this.snapshot.roomId) this.clearEnemyVisuals();
+    const wanted = new Set<string>();
+    const sides = [
+      { player: this.snapshot.players[this.slot], mirror: false, previous: previous?.players[this.slot] },
+      { player: this.snapshot.players[this.slot === 0 ? 1 : 0], mirror: true, previous: previous?.players[this.slot === 0 ? 1 : 0] },
+    ] as const;
+    for (const side of sides) for (const enemy of side.player.enemies) {
+      const key = `${side.player.slot}:${enemy.id}`;
+      wanted.add(key);
+      const target = this.enemyVisualPoint(enemy, side.mirror);
+      let visual = this.enemyVisuals.get(key);
+      if (!visual) {
+        const priorEnemy = side.previous?.enemies.find((candidate) => candidate.id === enemy.id);
+        const start = priorEnemy ? this.enemyVisualPoint(priorEnemy, side.mirror, previous) : target;
+        visual = this.createEnemyVisual(enemy, side.mirror, start.x, start.y);
+        this.enemyVisuals.set(key, visual);
+      }
+      visual.body.setScale(enemy.scaleMultiplier ?? 1);
+      const ratio = Math.max(0, Math.min(1, enemy.hp / enemy.maxHp));
+      visual.healthBar.setDisplaySize(Math.max(0.01, visual.healthBarWidth * ratio), 6);
+      this.tweens.killTweensOf(visual.root);
+      const distance = Phaser.Math.Distance.Between(visual.root.x, visual.root.y, target.x, target.y);
+      if (distance > CELL * 2.5) visual.root.setPosition(target.x, target.y);
+      else if (distance > 0.1) this.tweens.add({
+        targets: visual.root,
+        x: target.x,
+        y: target.y,
+        duration: ENEMY_INTERPOLATION_MS,
+        ease: "Linear",
+      });
     }
+    for (const [key, visual] of this.enemyVisuals) {
+      if (wanted.has(key)) continue;
+      this.tweens.killTweensOf(visual.root);
+      visual.root.destroy(true);
+      this.enemyVisuals.delete(key);
+    }
+  }
+
+  private clearEnemyVisuals() {
+    for (const visual of this.enemyVisuals.values()) this.tweens.killTweensOf(visual.root);
+    this.enemyVisuals.clear();
+    if (this.enemyLayer?.active) this.enemyLayer.removeAll(true);
   }
 
   private drawDropHints(sourceType: DragSource, kind: string) {
