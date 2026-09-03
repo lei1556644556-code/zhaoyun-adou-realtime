@@ -3,6 +3,7 @@ import type { MatchSnapshot } from "@adou/shared";
 
 const DEFAULT_SUPABASE_URL = "https://dkaabuxszrbnnrajnoaa.supabase.co";
 const DEFAULT_SUPABASE_KEY = "sb_publishable_8UjZAjC-Ts2NiP8_NpmFdA_jv-CEzhd";
+const PROFILE_TABLE = "zhaoyun_adou_profiles";
 
 export interface CloudProgress {
   version: 1;
@@ -100,7 +101,7 @@ export class SupabaseService {
 
   async loadProfile(session: Session): Promise<PlayerProfile> {
     const { data, error } = await this.client
-      .from("player_profiles")
+      .from(PROFILE_TABLE)
       .select("user_id,display_name,username_normalized,progress")
       .eq("user_id", session.user.id)
       .maybeSingle<ProfileRow>();
@@ -114,7 +115,7 @@ export class SupabaseService {
   }
 
   async saveProgress(profile: PlayerProfile, progress: CloudProgress) {
-    const { error } = await this.client.from("player_profiles").upsert({
+    const { error } = await this.client.from(PROFILE_TABLE).upsert({
       user_id: profile.userId,
       display_name: profile.username,
       username_normalized: normalizeUsername(profile.username),
@@ -125,7 +126,7 @@ export class SupabaseService {
   }
 
   private async ensureProfile(session: Session, displayName: string, normalized: string) {
-    const { error } = await this.client.from("player_profiles").upsert({
+    const { error } = await this.client.from(PROFILE_TABLE).upsert({
       user_id: session.user.id,
       display_name: displayName,
       username_normalized: normalized,
@@ -135,7 +136,7 @@ export class SupabaseService {
   }
 
   private profileError(message: string) {
-    if (/player_profiles|schema cache|relation/i.test(message)) return "云存档表尚未初始化，请先执行项目内的 Supabase 数据库迁移";
+    if (/zhaoyun_adou_profiles|schema cache|relation/i.test(message)) return "云存档表尚未初始化，请先执行项目内的 Supabase 数据库迁移";
     if (/duplicate key/i.test(message)) return "这个账号已被注册，请换一个账号";
     return readableAuthError(message);
   }

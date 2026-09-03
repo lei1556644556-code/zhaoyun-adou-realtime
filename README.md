@@ -69,7 +69,7 @@ VITE_SERVER_URL=https://你的房间服务器地址
 supabase/migrations/20260902133000_player_accounts.sql
 ```
 
-迁移会创建 `player_profiles` 云存档表并启用 RLS：每个登录用户只能读取、插入和更新自己的记录，匿名用户无表权限。客户端支持用环境变量覆盖项目配置：
+迁移会创建独立的 `zhaoyun_adou_profiles` 云存档表并启用 RLS：每个登录用户只能读取、插入和更新自己的记录，匿名用户无表权限。使用独立表名可避免与 Supabase 项目中其他应用的玩家资料表冲突。客户端支持用环境变量覆盖项目配置：
 
 ```bash
 VITE_SUPABASE_URL=https://你的项目.supabase.co
