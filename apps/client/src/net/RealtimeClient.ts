@@ -55,6 +55,7 @@ export class RealtimeClient extends EventTarget {
   );
   private readonly clientId = crypto.randomUUID();
   private readonly storageKey: string;
+  private readonly intentionalClosures = new WeakSet<RealtimeChannel>();
   private roomChannel: RealtimeChannel | null = null;
   private quickChannel: RealtimeChannel | null = null;
   private tickTimer = 0;
@@ -111,7 +112,7 @@ export class RealtimeClient extends EventTarget {
             reject(new Error("实时服务暂时不可用"));
           }
         } else if (status === "CLOSED") {
-          this.emit("network", { connected: false });
+          if (!this.intentionalClosures.has(channel)) this.emit("network", { connected: false });
         }
       });
     });
@@ -138,6 +139,7 @@ export class RealtimeClient extends EventTarget {
     if (this.roomChannel) {
       const channel = this.roomChannel;
       this.roomChannel = null;
+      this.intentionalClosures.add(channel);
       await this.client.removeChannel(channel);
     }
   }
@@ -156,7 +158,10 @@ export class RealtimeClient extends EventTarget {
     this.clearQuickTimers();
     const channel = this.quickChannel;
     this.quickChannel = null;
-    if (channel) void this.client.removeChannel(channel);
+    if (channel) {
+      this.intentionalClosures.add(channel);
+      void this.client.removeChannel(channel);
+    }
     pending.resolve(result);
   }
 
@@ -483,6 +488,7 @@ export class RealtimeClient extends EventTarget {
     if (this.quickChannel) {
       const channel = this.quickChannel;
       this.quickChannel = null;
+      this.intentionalClosures.add(channel);
       void this.client.removeChannel(channel);
     }
   }
