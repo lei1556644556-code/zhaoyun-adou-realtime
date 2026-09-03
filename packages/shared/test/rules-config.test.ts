@@ -11,6 +11,7 @@ import {
   LEVEL_ATTACK,
   LEVEL_SPEED,
   MAP_LAYOUTS,
+  MERGE_RULES,
   PASSIVE_PROP_IDS,
   PROP_ACQUISITION_RULES,
   PROP_EFFECTS,
@@ -30,7 +31,7 @@ import {
 describe("1.0.9 versioned rules config", () => {
   it("publishes one versioned entry point and honest evidence metadata", () => {
     expect(RULES_CONFIG_1_0_9.rulesetVersion).toBe("1.0.9");
-    expect(RULES_CONFIG_1_0_9.schemaVersion).toBe("1.0.0");
+    expect(RULES_CONFIG_1_0_9.schemaVersion).toBe("1.1.0");
     expect(RULES_CONFIG_1_0_9.evidence).toBe(RULE_EVIDENCE_SOURCES);
     expect(RULES_CONFIG_1_0_9.provenance).toBe(RULE_PROVENANCE);
     expect(RULE_EVIDENCE_SOURCES.originalPackage.artifactPath).toBeNull();
@@ -83,6 +84,11 @@ describe("1.0.9 versioned rules config", () => {
     expect(new Set(Object.values(HERO_PAIRS))).toEqual(new Set(Object.keys(GENERALS)));
     expect(HERO_PAIRS["赵+云"]).toBe("赵云");
     expect(HERO_PAIRS["云+赵"]).toBe("赵云");
+    expect(MERGE_RULES.generals).toMatchObject({
+      adjacency: "horizontal",
+      trigger: "automatic-after-board-placement-or-move",
+      dissolveWhenPartsSeparate: true,
+    });
   });
 
   it("keeps all prop rows, effect rows, slot ids, rarity labels, and acquisition rules aligned", () => {

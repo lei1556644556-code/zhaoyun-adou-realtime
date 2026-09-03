@@ -1,6 +1,6 @@
 /** 原作规则版本；与网络协议版本分开演进。 */
 export const RULESET_VERSION = "1.0.9" as const;
-export const RULES_CONFIG_SCHEMA_VERSION = "1.0.0" as const;
+export const RULES_CONFIG_SCHEMA_VERSION = "1.1.0" as const;
 
 export type RuleVerificationStatus =
   | "package-recorded"
@@ -63,8 +63,8 @@ export const RULE_PROVENANCE = {
   },
   twoCellGeneralAndSplit: {
     status: "pending-original-verification",
-    evidenceRefs: ["RULES-MD#3"],
-    note: "两格占用、中心射程与拆字流程未在随库包体证据中定位。",
+    evidenceRefs: ["RULES-MD#3", "docs/contracts/battle-command.md#1"],
+    note: "产品已确认战场横向相邻即合将、移走即失效；原包证据仍待补齐。",
   },
   soldierAndGeneralStats: {
     status: "package-recorded",
@@ -210,8 +210,10 @@ export const MERGE_RULES = {
     pairs: HERO_PAIRS,
     orderIndependent: true,
     occupiedCells: 2,
-    cellsMustBeOrthogonallyAdjacent: true,
+    adjacency: "horizontal",
+    trigger: "automatic-after-board-placement-or-move",
     splitAnyPartToEmptyOpenCell: true,
+    dissolveWhenPartsSeparate: true,
   },
 } as const;
 

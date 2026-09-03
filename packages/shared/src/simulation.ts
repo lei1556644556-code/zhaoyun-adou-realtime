@@ -258,7 +258,6 @@ function adjacentCellExcluding(player: PlayerBattleState, targetCell: number, ex
   const target = cellCoords(targetCell);
   for (const [x, y] of [
     [target.x - 1, target.y], [target.x + 1, target.y],
-    [target.x, target.y - 1], [target.x, target.y + 1],
   ]) {
     if (x === undefined || y === undefined || x < 0 || x >= GAME_CONFIG.columns || y < 0 || y >= GAME_CONFIG.rows) continue;
     const cell = y * GAME_CONFIG.columns + x;
@@ -292,15 +291,49 @@ function unitToReserve(unit: UnitState, slot: number, secondarySlot?: number): R
   };
 }
 
+/** 战场姓名字横向相邻即合将；返回生成武将的单位 ID。 */
+function autoCombineHorizontalGeneral(snapshot: MatchSnapshot, player: PlayerBattleState, unitId: string) {
+  const source = player.units.find((unit) => unit.id === unitId);
+  if (!source || source.secondaryCell !== undefined) return null;
+  const sourcePoint = cellCoords(source.cell);
+  const neighborCells = [sourcePoint.x - 1, sourcePoint.x + 1]
+    .filter((x) => x >= 0 && x < GAME_CONFIG.columns)
+    .map((x) => sourcePoint.y * GAME_CONFIG.columns + x)
+    .sort((a, b) => a - b);
+
+  for (const neighborCell of neighborCells) {
+    const neighbor = unitAtCell(player, neighborCell);
+    if (!neighbor || neighbor.id === source.id || neighbor.secondaryCell !== undefined) continue;
+    const hero = HERO_PAIRS[`${source.kind}+${neighbor.kind}`];
+    if (!hero) continue;
+
+    const [survivor, consumed] = source.cell < neighbor.cell ? [source, neighbor] : [neighbor, source];
+    survivor.kind = hero;
+    survivor.level = Math.max(source.level, neighbor.level);
+    survivor.cell = Math.min(source.cell, neighbor.cell);
+    survivor.secondaryCell = Math.max(source.cell, neighbor.cell);
+    survivor.parts = [hero[0] ?? source.kind, hero[1] ?? neighbor.kind];
+    survivor.cooldownMs = 0;
+    survivor.attackCount = 0;
+    player.units = player.units.filter((unit) => unit.id !== consumed.id);
+    player.lastEvent = `横向相邻合成「${hero}」Lv.${survivor.level}`;
+    emitBattleEvent(snapshot, {
+      type: "units-merged", slot: player.slot, sourceId: consumed.id, targetId: survivor.id,
+      resultKind: survivor.kind, resultLevel: survivor.level, location: "board", cells: unitCells(survivor),
+    });
+    return survivor.id;
+  }
+  return null;
+}
+
 function adjacentCellForGeneral(player: PlayerBattleState, target: UnitState, source?: UnitState) {
   const targetPoint = cellCoords(target.cell);
   if (source) {
     const sourcePoint = cellCoords(source.cell);
-    if (Math.abs(sourcePoint.x - targetPoint.x) + Math.abs(sourcePoint.y - targetPoint.y) === 1) return source.cell;
+    if (sourcePoint.y === targetPoint.y && Math.abs(sourcePoint.x - targetPoint.x) === 1) return source.cell;
   }
   const candidates = [
     [targetPoint.x - 1, targetPoint.y], [targetPoint.x + 1, targetPoint.y],
-    [targetPoint.x, targetPoint.y - 1], [targetPoint.x, targetPoint.y + 1],
   ];
   for (const [x, y] of candidates) {
     if (x === undefined || y === undefined || x < 0 || x >= GAME_CONFIG.columns || y < 0 || y >= GAME_CONFIG.rows) continue;
@@ -316,7 +349,6 @@ function emptyAdjacentBuildCell(player: PlayerBattleState, targetCell: number) {
   const target = cellCoords(targetCell);
   for (const [x, y] of [
     [target.x - 1, target.y], [target.x + 1, target.y],
-    [target.x, target.y - 1], [target.x, target.y + 1],
   ]) {
     if (x === undefined || y === undefined || x < 0 || x >= GAME_CONFIG.columns || y < 0 || y >= GAME_CONFIG.rows) continue;
     const cell = y * GAME_CONFIG.columns + x;
@@ -329,7 +361,7 @@ function combine(player: PlayerBattleState, source: { kind: string; level: numbe
   const hero = HERO_PAIRS[`${source.kind}+${target.kind}`];
   if (hero) {
     const companionCell = adjacentCellForGeneral(player, target, sourceUnit);
-    if (companionCell === null) return "武将需要占用相邻两格，请先腾出空位";
+    if (companionCell === null) return "武将需要占用横向相邻两格，请先腾出空位";
     const cells = [target.cell, companionCell].sort((a, b) => a - b);
     const parts = [...hero];
     target.kind = hero;
@@ -402,7 +434,7 @@ function dropReserve(snapshot: MatchSnapshot, player: PlayerBattleState, reserve
       : target.secondaryCell === undefined
         ? adjacentCellExcluding(player, targetCell, excluded) ?? undefined
         : target.cell === targetCell ? target.secondaryCell : target.cell;
-    if (item.secondarySlot !== undefined && sourceCompanion === undefined) return "替换两格武将需要棋盘相邻空格";
+    if (item.secondarySlot !== undefined && sourceCompanion === undefined) return "替换两格武将需要棋盘横向相邻空格";
     const targetCompanion = target.secondaryCell === undefined
       ? undefined
       : adjacentReserveSlotExcluding(player, item.slot, excluded) ?? undefined;
@@ -420,11 +452,12 @@ function dropReserve(snapshot: MatchSnapshot, player: PlayerBattleState, reserve
       type: "units-swapped", slot: player.slot,
       placements: [{ id: deployed.id, cells: unitCells(deployed) }, { id: returned.id, slots: reserveSlots(returned) }],
     });
+    autoCombineHorizontalGeneral(snapshot, player, deployed.id);
     return null;
   }
   if (item.secondarySlot !== undefined && GENERALS[item.kind]) {
     const companionCell = emptyAdjacentBuildCell(player, targetCell);
-    if (companionCell === null) return "两字武将需要占用棋盘相邻两格";
+    if (companionCell === null) return "两字武将需要占用棋盘横向相邻两格";
     const cells = [targetCell, companionCell].sort((a, b) => a - b);
     const unit: UnitState = {
       id: item.id.replace(/^r-/, "u-"), kind: item.kind, level: item.level,
@@ -437,14 +470,17 @@ function dropReserve(snapshot: MatchSnapshot, player: PlayerBattleState, reserve
     emitBattleEvent(snapshot, { type: "unit-deployed", slot: player.slot, unitId: unit.id, unitKind: unit.kind, cells: unitCells(unit) });
     return null;
   }
-  const unit: UnitState = {
+  const deployed: UnitState = {
     id: item.id.replace(/^r-/, "u-"), kind: item.kind, level: item.level, cell: targetCell,
     cooldownMs: 0, attackCount: 0,
   };
-  player.units.push(unit);
+  player.units.push(deployed);
   player.reserve = player.reserve.filter((candidate) => candidate.id !== reserveId);
   player.lastEvent = `上阵「${item.kind}」`;
-  emitBattleEvent(snapshot, { type: "unit-deployed", slot: player.slot, unitId: unit.id, unitKind: unit.kind, cells: unitCells(unit) });
+  emitBattleEvent(snapshot, {
+    type: "unit-deployed", slot: player.slot, unitId: deployed.id, unitKind: deployed.kind, cells: unitCells(deployed),
+  });
+  autoCombineHorizontalGeneral(snapshot, player, deployed.id);
   return null;
 }
 
@@ -526,7 +562,7 @@ function dropUnitToReserve(snapshot: MatchSnapshot, player: PlayerBattleState, u
     const targetCompanion = target.secondarySlot === undefined
       ? undefined
       : adjacentCellExcluding(player, source.cell, excluded) ?? undefined;
-    if (target.secondarySlot !== undefined && targetCompanion === undefined) return "替换两格武将需要棋盘相邻空格";
+    if (target.secondarySlot !== undefined && targetCompanion === undefined) return "替换两格武将需要棋盘横向相邻空格";
     const targetCells = targetCompanion === undefined ? [source.cell] : [source.cell, targetCompanion].sort((a, b) => a - b);
     const returned = unitToReserve(source, targetSlot);
     const deployed = reserveToUnit(target, targetCells[0]!, targetCells[1]);
@@ -539,6 +575,7 @@ function dropUnitToReserve(snapshot: MatchSnapshot, player: PlayerBattleState, u
       type: "units-swapped", slot: player.slot,
       placements: [{ id: returned.id, slots: reserveSlots(returned) }, { id: deployed.id, cells: unitCells(deployed) }],
     });
+    autoCombineHorizontalGeneral(snapshot, player, deployed.id);
     return null;
   }
   const returned = unitToReserve(source, targetSlot);
@@ -562,6 +599,7 @@ function dropUnit(snapshot: MatchSnapshot, player: PlayerBattleState, unitId: st
     source.cell = targetCell;
     player.lastEvent = `移动「${source.kind}」`;
     emitBattleEvent(snapshot, { type: "unit-moved", slot: player.slot, unitId: source.id, fromCells, toCells: unitCells(source) });
+    autoCombineHorizontalGeneral(snapshot, player, source.id);
     return null;
   }
   if (target.id === source.id) return null;
@@ -582,7 +620,7 @@ function dropUnit(snapshot: MatchSnapshot, player: PlayerBattleState, unitId: st
     target.cell = sourceCell;
   } else {
     const companionCell = adjacentCellExcluding(player, sourceCell, new Set([source.id, target.id]));
-    if (companionCell === null) return "交换两格武将需要原位旁有相邻空格";
+    if (companionCell === null) return "交换两格武将需要原位旁有横向相邻空格";
     const targetCells = [sourceCell, companionCell].sort((a, b) => a - b);
     source.cell = targetCell;
     target.cell = targetCells[0]!;
@@ -593,6 +631,8 @@ function dropUnit(snapshot: MatchSnapshot, player: PlayerBattleState, unitId: st
     type: "units-swapped", slot: player.slot,
     placements: [{ id: source.id, cells: unitCells(source) }, { id: target.id, cells: unitCells(target) }],
   });
+  autoCombineHorizontalGeneral(snapshot, player, source.id);
+  autoCombineHorizontalGeneral(snapshot, player, target.id);
   return null;
 }
 
@@ -610,14 +650,18 @@ function splitGeneral(snapshot: MatchSnapshot, player: PlayerBattleState, unitId
     id: `${idBase}-${index}`, kind: parts[index], level: general.level, cell,
     cooldownMs: 0, attackCount: 0,
   });
+  const stationaryPart = makePart(otherIndex, cells[otherIndex]);
+  const movedPart = makePart(partIndex, targetCell);
   player.units = player.units.filter((unit) => unit.id !== general.id);
-  const partsAfterSplit = [makePart(otherIndex, cells[otherIndex]), makePart(partIndex, targetCell)];
+  const partsAfterSplit = [stationaryPart, movedPart];
   player.units.push(...partsAfterSplit);
   player.lastEvent = `拆分「${general.kind}」为「${parts[0]}」「${parts[1]}」`;
   emitBattleEvent(snapshot, {
     type: "general-split", slot: player.slot, generalId: general.id,
     parts: partsAfterSplit.map((part) => ({ id: part.id, kind: part.kind, cell: part.cell })),
   });
+  autoCombineHorizontalGeneral(snapshot, player, movedPart.id);
+  autoCombineHorizontalGeneral(snapshot, player, stationaryPart.id);
   return null;
 }
 

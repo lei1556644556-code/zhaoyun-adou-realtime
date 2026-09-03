@@ -61,11 +61,70 @@ describe("1.0.9 authoritative simulation", () => {
     }]);
   });
 
+  it("automatically combines name characters placed in horizontal neighboring cells", () => {
+    const match = createMatch("AUTO-GENERAL", 111);
+    const firstCell = cellIndex(2, 7);
+    const secondCell = cellIndex(3, 7);
+    match.players[0].units = [
+      { id: "zhao", kind: "赵", level: 1, cell: firstCell, cooldownMs: 0, attackCount: 0 },
+    ];
+    match.players[0].reserve = [{ id: "r-yun", kind: "云", level: 1, slot: 0 }];
+
+    expect(applyCommand(match, 0, { type: "DROP_RESERVE", reserveId: "r-yun", targetCell: secondCell }).ok).toBe(true);
+    expect(match.players[0].units).toEqual([{
+      id: "zhao", kind: "赵云", level: 1,
+      cell: firstCell, secondaryCell: secondCell, parts: ["赵", "云"],
+      cooldownMs: 0, attackCount: 0,
+    }]);
+  });
+
+  it("automatically combines after moving a board character beside its partner", () => {
+    const match = createMatch("MOVE-AUTO-GENERAL", 112);
+    const firstCell = cellIndex(2, 7);
+    const secondCell = cellIndex(3, 7);
+    match.players[0].units = [
+      { id: "zhao", kind: "赵", level: 1, cell: firstCell, cooldownMs: 0, attackCount: 0 },
+      { id: "yun", kind: "云", level: 1, cell: cellIndex(4, 7), cooldownMs: 0, attackCount: 0 },
+    ];
+
+    expect(applyCommand(match, 0, { type: "DROP_UNIT", unitId: "yun", targetCell: secondCell }).ok).toBe(true);
+    expect(match.players[0].units).toEqual([expect.objectContaining({
+      kind: "赵云", cell: firstCell, secondaryCell: secondCell, parts: ["赵", "云"],
+    })]);
+  });
+
+  it("does not combine name characters that are only vertically adjacent", () => {
+    const match = createMatch("VERTICAL-NAMES", 113);
+    match.players[0].units = [
+      { id: "zhao", kind: "赵", level: 1, cell: cellIndex(2, 7), cooldownMs: 0, attackCount: 0 },
+    ];
+    match.players[0].reserve = [{ id: "r-yun", kind: "云", level: 1, slot: 0 }];
+
+    expect(applyCommand(match, 0, { type: "DROP_RESERVE", reserveId: "r-yun", targetCell: cellIndex(2, 8) }).ok).toBe(true);
+    expect(match.players[0].units).toHaveLength(2);
+    expect(match.players[0].units.every((unit) => unit.secondaryCell === undefined)).toBe(true);
+  });
+
+  it("chooses the left valid partner when both horizontal neighbors match", () => {
+    const match = createMatch("DETERMINISTIC-GENERAL", 114);
+    match.players[0].units = [
+      { id: "left-yun", kind: "云", level: 1, cell: cellIndex(2, 7), cooldownMs: 0, attackCount: 0 },
+      { id: "right-yun", kind: "云", level: 1, cell: cellIndex(4, 7), cooldownMs: 0, attackCount: 0 },
+      { id: "zhao", kind: "赵", level: 1, cell: cellIndex(3, 8), cooldownMs: 0, attackCount: 0 },
+    ];
+
+    expect(applyCommand(match, 0, { type: "DROP_UNIT", unitId: "zhao", targetCell: cellIndex(3, 7) }).ok).toBe(true);
+    expect(match.players[0].units).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "left-yun", kind: "赵云", cell: cellIndex(2, 7), secondaryCell: cellIndex(3, 7) }),
+      expect.objectContaining({ id: "right-yun", kind: "云", cell: cellIndex(4, 7) }),
+    ]));
+  });
+
   it("keeps a fused general on two cells and can pull either character back out", () => {
     const match = createMatch("TEST", 14);
     const firstCell = cellIndex(2, 7);
     const secondCell = cellIndex(3, 7);
-    const splitTarget = cellIndex(4, 7);
+    const splitTarget = cellIndex(4, 8);
     match.players[0].units = [
       { id: "zhao", kind: "赵", level: 1, cell: firstCell, cooldownMs: 0, attackCount: 0 },
       { id: "yun", kind: "云", level: 1, cell: secondCell, cooldownMs: 0, attackCount: 0 },
