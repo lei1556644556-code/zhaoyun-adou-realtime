@@ -75,6 +75,7 @@ export class BattleScene extends Phaser.Scene {
   private staticRenderSignature = "";
   private enemyVisuals = new Map<string, EnemyVisual>();
   private hudLastEventText: Phaser.GameObjects.Text | null = null;
+  private hudBunsText: Phaser.GameObjects.Text | null = null;
   private pieceDisplayMode: PieceDisplayMode = localStorage.getItem(PIECE_DISPLAY_MODE_KEY) === "text" ? "text" : "image";
 
   constructor() { super("battle"); }
@@ -499,6 +500,7 @@ export class BattleScene extends Phaser.Scene {
       this.staticRenderSignature = signature;
     }
     this.hudLastEventText?.setText(mine.lastEvent);
+    this.hudBunsText?.setText(String(mine.buns));
     this.syncEnemies(previous);
   }
 
@@ -506,7 +508,6 @@ export class BattleScene extends Phaser.Scene {
     const visualPlayer = (player: PlayerBattleState) => ({
       hp: player.hp,
       maxHp: player.maxHp,
-      buns: player.buns,
       recruitCost: player.recruitCost,
       wave: player.wave,
       phase: player.phase,
@@ -541,6 +542,7 @@ export class BattleScene extends Phaser.Scene {
       winner: this.snapshot?.winner,
       mine: visualPlayer(mine),
       opponent: visualPlayer(opponent),
+      canRecruit: mine.buns + mine.reserve.length >= mine.recruitCost,
     });
   }
 
@@ -1063,7 +1065,7 @@ export class BattleScene extends Phaser.Scene {
     add(this.add.image(286, 1246, IMAGE_ASSETS.ui.bun.key).setDisplaySize(36, 36));
     add(this.add.text(312, 1245, String(mine.recruitCost), { fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "23px", color: "#ffe8aa", fontStyle: "bold" }).setOrigin(0, 0.5));
     add(this.add.text(514, 1182, "馒头", { fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "17px", color: "#736957" }).setOrigin(0.5));
-    add(this.add.text(514, 1210, String(mine.buns), { fontFamily: '"Arial", sans-serif', fontSize: "36px", color: "#85513b", fontStyle: "bold" }).setOrigin(0.5));
+    this.hudBunsText = add(this.add.text(514, 1210, String(mine.buns), { fontFamily: '"Arial", sans-serif', fontSize: "36px", color: "#85513b", fontStyle: "bold" }).setOrigin(0.5)) as Phaser.GameObjects.Text;
     add(this.add.text(320, 1312, mine.reserve.length
       ? "棕路行军 · 白格布阵 · 绿地禁行；营地内也可移动/合成"
       : "棕路行军 · 白格布阵 · 绿地须用铲子开垦；点击征兵获得五枚",

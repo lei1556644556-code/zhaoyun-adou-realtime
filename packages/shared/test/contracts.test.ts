@@ -78,6 +78,27 @@ describe("authoritative command contract", () => {
     expect(result).toEqual({ commandId: "p0-1", ok: true, duplicate: false, stateVersion: 2 });
   });
 
+  it("bounds the persisted idempotency ledger while preserving recent retries", () => {
+    const match = createMatch("BOUNDED-COMMANDS", 129);
+    for (let clientSeq = 1; clientSeq <= 270; clientSeq += 1) {
+      const commandId = `p0-${clientSeq}`;
+      match.acceptedCommands[commandId] = {
+        slot: 0,
+        clientSeq,
+        expectedStateVersion: clientSeq - 1,
+        command: { type: "RECRUIT" },
+        result: { commandId, ok: true, duplicate: false, stateVersion: clientSeq },
+      };
+    }
+
+    normalizeMatchSnapshot(match);
+
+    expect(Object.keys(match.acceptedCommands)).toHaveLength(256);
+    expect(match.acceptedCommands["p0-14"]).toBeUndefined();
+    expect(match.acceptedCommands["p0-15"]).toBeDefined();
+    expect(match.acceptedCommands["p0-270"]).toBeDefined();
+  });
+
   it("rejects malformed runtime payloads without consuming their sequence", () => {
     const match = createMatch("MALFORMED", 103);
     const malformed = {

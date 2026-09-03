@@ -102,6 +102,8 @@ describe("two-client authoritative room transport", () => {
       const commandResult = await emitAck<{ ok: boolean }>(guest, "match:command", envelope);
       expect(commandResult.ok).toBe(true);
       const recruitedState = await recruited;
+      expect(recruitedState.acceptedCommands).toEqual({});
+      expect(recruitedState.combatEvents).toEqual([]);
       expect(recruitedState.players[1].buns).toBe(GAME_CONFIG.startBuns - GAME_CONFIG.recruitBase);
       expect(recruitedState.players[1].reserve).toHaveLength(GAME_CONFIG.reserveSize);
 

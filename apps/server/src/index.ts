@@ -135,12 +135,30 @@ function serializeRoom(room: Room): StoredRoomRow {
     seats: room.seats.map(({ slot, userId, name, tokenHash: hash, introRound }) => ({
       slot, userId, name, tokenHash: hash, introRound,
     })),
-    snapshot: room.snapshot ? cloneSnapshot(room.snapshot) : null,
+    // Supabase is a recovery checkpoint, not an append-only event log. The
+    // command retry ledger and duplicate combat view are transient and would
+    // otherwise make every later checkpoint progressively larger.
+    snapshot: room.snapshot ? snapshotWithoutTransientHistory(room.snapshot) : null,
     created_at: new Date(room.createdAt).toISOString(),
     updated_at: now.toISOString(),
     expires_at: new Date(now.getTime() + 24 * 60 * 60_000).toISOString(),
   };
 }
+
+/**
+ * Clients render authoritative state but never need the server's idempotency
+ * ledger or the deprecated duplicate attack-event view. Keeping those fields
+ * out of the 10 Hz wire payload prevents command history and combat effects
+ * from multiplying bandwidth as a match progresses.
+ */
+function snapshotWithoutTransientHistory(snapshot: MatchSnapshot) {
+  const wire = cloneSnapshot(snapshot);
+  wire.acceptedCommands = {};
+  wire.combatEvents = [];
+  return wire;
+}
+
+const snapshotForClient = snapshotWithoutTransientHistory;
 
 function persistRoom(room: Room) {
   if (!adminClient) return Promise.resolve();
@@ -200,7 +218,7 @@ function startIfReady(room: Room) {
   room.updatedAt = Date.now();
   quickRoomId = quickRoomId === room.id ? null : quickRoomId;
   io.to(room.id).emit("match:start", { roomId: room.id, seed });
-  io.to(room.id).emit("match:snapshot", cloneSnapshot(room.snapshot));
+  io.to(room.id).emit("match:snapshot", snapshotForClient(room.snapshot));
   emitStatus(room);
 }
 
@@ -321,7 +339,7 @@ io.on("connection", (socket) => {
       socket.join(room.id); socket.data.roomId = room.id; socket.data.slot = seat.slot;
       ack?.({ ok: true, roomId: room.id, slot: seat.slot, token });
       emitStatus(room);
-      if (room.snapshot) socket.emit("match:snapshot", cloneSnapshot(room.snapshot));
+      if (room.snapshot) socket.emit("match:snapshot", snapshotForClient(room.snapshot));
       await persistRoom(room);
     } catch (error) { ack?.({ ok: false, code: "SERVER_ERROR", message: error instanceof Error ? error.message : "恢复房间失败" }); }
   });
@@ -339,7 +357,7 @@ io.on("connection", (socket) => {
       ack?.(result as unknown as Record<string, unknown>);
       if (result.ok) {
         room.updatedAt = Date.now();
-        io.to(room.id).emit("match:snapshot", cloneSnapshot(room.snapshot));
+        io.to(room.id).emit("match:snapshot", snapshotForClient(room.snapshot));
         void persistRoom(room).catch(() => undefined);
       }
     } catch (error) {
@@ -368,7 +386,10 @@ setInterval(() => {
     if (room.snapshot && room.snapshot.phase !== "finished") {
       stepMatch(room.snapshot, tickMs);
       room.updatedAt = now;
-      io.to(room.id).emit("match:snapshot", cloneSnapshot(room.snapshot));
+      // Tick snapshots are replaceable state frames. If a connection is
+      // congested, dropping an obsolete intermediate frame is preferable to
+      // building an ever-growing reliable send queue behind the newest state.
+      io.to(room.id).volatile.emit("match:snapshot", snapshotForClient(room.snapshot));
       if (!room.persistInFlight && now - room.lastCheckpointAt >= 1_000) void persistRoom(room).catch(() => undefined);
     }
     const noConnectedPlayers = room.seats.every((seat) => !seat.socketId);

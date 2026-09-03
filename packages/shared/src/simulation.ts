@@ -15,6 +15,19 @@ import type { ActivePropId, PassivePropId, SoldierKind } from "./config";
 
 export interface Rng { next(): number; }
 
+// Idempotency only needs to cover commands that may still be retried by a
+// connected client. Bounding the ledger keeps long matches and their
+// Supabase checkpoints from growing with every drag and recruit forever.
+const ACCEPTED_COMMAND_HISTORY_LIMIT = 256;
+
+function trimAcceptedCommands(snapshot: MatchSnapshot) {
+  const commandIds = Object.keys(snapshot.acceptedCommands);
+  const excess = commandIds.length - ACCEPTED_COMMAND_HISTORY_LIMIT;
+  for (let index = 0; index < excess; index += 1) {
+    delete snapshot.acceptedCommands[commandIds[index]!];
+  }
+}
+
 export function createRng(seed: number): Rng {
   let value = seed >>> 0;
   return { next() {
@@ -52,6 +65,7 @@ export function normalizeMatchSnapshot(snapshot: MatchSnapshotInput): MatchSnaps
   normalized.eventSequence ??= 0;
   normalized.combatEvents ??= [];
   normalized.acceptedCommands ??= {};
+  trimAcceptedCommands(normalized);
   normalized.lastClientSeq ??= [0, 0];
   normalized.simulationTimeMs ??= Number.isFinite(normalized.serverTime) ? normalized.serverTime : 0;
   normalized.serverTime = normalized.simulationTimeMs;
@@ -1236,6 +1250,7 @@ export function executeCommand(snapshot: MatchSnapshot, slot: PlayerSlot, envelo
       command: structuredClone(envelope.command), result: { ...result },
     },
   });
+  trimAcceptedCommands(snapshot);
   return result;
 }
 
