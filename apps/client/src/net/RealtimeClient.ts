@@ -1,8 +1,9 @@
 import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js";
 import {
-  GAME_CONFIG, applyCommand, cloneSnapshot, createMatch, stepMatch,
+  GAME_CONFIG, applyCommand, cloneSnapshot, createMatch,
   type CommandEnvelope, type MatchSnapshot, type PlayerSlot,
 } from "@adou/shared";
+import { stepMatchBatch } from "./stepMatchBatch";
 
 const ROOM_PREFIX = "adou-room-v1-";
 const QUICK_CHANNEL = "adou-matchmaking-v1";
@@ -226,7 +227,7 @@ export class RealtimeClient extends EventTarget {
       const steps = Math.floor(this.tickRemainder / tickMs);
       if (steps < 1) return;
       this.tickRemainder -= steps * tickMs;
-      for (let index = 0; index < steps; index += 1) stepMatch(this.snapshot, tickMs);
+      stepMatchBatch(this.snapshot, steps, tickMs);
       this.publishSnapshot();
       if (Date.now() - this.lastPersistAt >= 1_000) {
         this.lastPersistAt = Date.now();
