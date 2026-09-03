@@ -28,7 +28,8 @@ interface Room {
   createdAt: number;
   updatedAt: number;
   lastCheckpointAt: number;
-  persistQueue: Promise<void>;
+  persistInFlight: Promise<void> | null;
+  persistRequested: boolean;
 }
 interface StoredRoomRow {
   room_id: string;
@@ -104,7 +105,7 @@ function newRoom(code: string): Room {
   const now = Date.now();
   return {
     id: code, seats: [], snapshot: null, createdAt: now, updatedAt: now,
-    lastCheckpointAt: 0, persistQueue: Promise.resolve(),
+    lastCheckpointAt: 0, persistInFlight: null, persistRequested: false,
   };
 }
 
@@ -143,14 +144,23 @@ function serializeRoom(room: Room): StoredRoomRow {
 
 function persistRoom(room: Room) {
   if (!adminClient) return Promise.resolve();
-  const row = serializeRoom(room);
-  const operation = room.persistQueue.then(async () => {
-    const { error } = await adminClient.from(MATCH_TABLE).upsert(row, { onConflict: "room_id" });
-    if (error) throw new Error(`Match checkpoint failed: ${error.message}`);
-    room.lastCheckpointAt = Date.now();
-  });
-  room.persistQueue = operation.catch((error: unknown) => {
+  room.persistRequested = true;
+  if (room.persistInFlight) return room.persistInFlight;
+  const operation = (async () => {
+    while (room.persistRequested) {
+      room.persistRequested = false;
+      const row = serializeRoom(room);
+      const { error } = await adminClient.from(MATCH_TABLE).upsert(row, { onConflict: "room_id" });
+      if (error) throw new Error(`Match checkpoint failed: ${error.message}`);
+      room.lastCheckpointAt = Date.now();
+    }
+  })();
+  room.persistInFlight = operation;
+  void operation.catch((error: unknown) => {
     console.error(JSON.stringify({ event: "checkpoint_failed", roomId: room.id, message: error instanceof Error ? error.message : String(error) }));
+  }).finally(() => {
+    room.persistInFlight = null;
+    if (room.persistRequested) void persistRoom(room).catch(() => undefined);
   });
   return operation;
 }
@@ -169,7 +179,7 @@ async function loadRoom(roomId: string) {
     seats: data.seats.map((seat) => ({ ...seat, socketId: null })),
     snapshot: data.snapshot ? cloneSnapshot(data.snapshot) : null,
     createdAt: Date.parse(data.created_at), updatedAt: Date.parse(data.updated_at),
-    lastCheckpointAt: Date.now(), persistQueue: Promise.resolve(),
+    lastCheckpointAt: Date.now(), persistInFlight: null, persistRequested: false,
   };
   rooms.set(room.id, room);
   return room;
@@ -326,12 +336,12 @@ io.on("connection", (socket) => {
         ...envelope,
         expectedStateVersion: accepted?.expectedStateVersion ?? room.snapshot.stateVersion,
       });
+      ack?.(result as unknown as Record<string, unknown>);
       if (result.ok) {
         room.updatedAt = Date.now();
-        await persistRoom(room);
         io.to(room.id).emit("match:snapshot", cloneSnapshot(room.snapshot));
+        void persistRoom(room).catch(() => undefined);
       }
-      ack?.(result as unknown as Record<string, unknown>);
     } catch (error) {
       ack?.({
         ok: false,
@@ -359,7 +369,7 @@ setInterval(() => {
       stepMatch(room.snapshot, tickMs);
       room.updatedAt = now;
       io.to(room.id).emit("match:snapshot", cloneSnapshot(room.snapshot));
-      if (now - room.lastCheckpointAt >= 1_000) void persistRoom(room).catch(() => undefined);
+      if (!room.persistInFlight && now - room.lastCheckpointAt >= 1_000) void persistRoom(room).catch(() => undefined);
     }
     const noConnectedPlayers = room.seats.every((seat) => !seat.socketId);
     if (noConnectedPlayers && now - room.updatedAt > 10 * 60_000) rooms.delete(room.id);
