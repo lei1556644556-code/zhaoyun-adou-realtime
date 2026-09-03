@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   applyCommand, attackRangeIntersectsCell, cellIndex, cloneSnapshot, createMatch, executeCommand,
-  initialOpenCells, SOLDIERS, stepMatch,
-  type CommandEnvelope, type MatchSnapshot, type PlayerBattleState, type UnitState,
+  initialOpenCells, MATCH_SNAPSHOT_VERSION, normalizeMatchSnapshot, SOLDIERS, stepMatch,
+  type CommandEnvelope, type MatchSnapshot, type MatchSnapshotInput, type PlayerBattleState, type UnitState,
 } from "../src";
 
 function unit(id: string, kind: string, level: number, cell: number): UnitState {
@@ -108,6 +108,13 @@ describe("authoritative command contract", () => {
 });
 
 describe("deterministic snapshot and event contracts", () => {
+  it("publishes the canonical numeric snapshot schema version", () => {
+    const match = createMatch("VERSIONED", 124);
+    expect(match.version).toBe(MATCH_SNAPSHOT_VERSION);
+    expect(match.version).toBeTypeOf("number");
+    expect(match.snapshotVersion).toBe(match.version);
+  });
+
   it("creates byte-for-byte equivalent logical snapshots and replays the same inputs deterministically", () => {
     const a = createMatch("DETERMINISTIC", 0xC0FFEE, 2);
     const b = createMatch("DETERMINISTIC", 0xC0FFEE, 2);
@@ -174,7 +181,8 @@ describe("deterministic snapshot and event contracts", () => {
   });
 
   it("hydrates deterministic metadata when reading a 0.x snapshot", () => {
-    const legacy = createMatch("LEGACY", 116) as Partial<MatchSnapshot>;
+    const legacy = createMatch("LEGACY", 116) as MatchSnapshotInput;
+    delete legacy.version;
     delete legacy.snapshotVersion;
     delete legacy.simulationTimeMs;
     delete legacy.events;
@@ -185,9 +193,34 @@ describe("deterministic snapshot and event contracts", () => {
 
     const restored = cloneSnapshot(legacy as MatchSnapshot);
     expect(restored).toMatchObject({
-      snapshotVersion: 1, simulationTimeMs: 250, serverTime: 250,
+      version: 1, snapshotVersion: 1, simulationTimeMs: 250, serverTime: 250,
       events: [], eventSequence: 0, acceptedCommands: {}, lastClientSeq: [0, 0],
     });
+  });
+
+  it("normalizes snapshots carrying only the legacy or canonical version field", () => {
+    const legacyAliasOnly = createMatch("LEGACY-ALIAS", 125) as MatchSnapshotInput;
+    delete legacyAliasOnly.version;
+    expect(normalizeMatchSnapshot(legacyAliasOnly)).toMatchObject({
+      version: 1, snapshotVersion: 1,
+    });
+
+    const canonicalOnly = createMatch("CANONICAL-ONLY", 126) as MatchSnapshotInput;
+    delete canonicalOnly.snapshotVersion;
+    expect(normalizeMatchSnapshot(canonicalOnly)).toMatchObject({
+      version: 1, snapshotVersion: 1,
+    });
+  });
+
+  it("rejects conflicting or unsupported snapshot version fields", () => {
+    const conflict = createMatch("VERSION-CONFLICT", 127);
+    (conflict as unknown as { snapshotVersion: number }).snapshotVersion = 2;
+    expect(() => normalizeMatchSnapshot(conflict)).toThrow(/不支持的快照版本|快照版本字段冲突/);
+
+    const future = createMatch("VERSION-FUTURE", 128);
+    (future as unknown as { version: number }).version = 2;
+    delete (future as unknown as { snapshotVersion?: number }).snapshotVersion;
+    expect(() => normalizeMatchSnapshot(future)).toThrow(/不支持的快照版本/);
   });
 });
 

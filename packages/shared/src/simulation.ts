@@ -3,9 +3,10 @@ import {
   EARLY_ACCOUNT_SHOVEL_BONUS, GAME_CONFIG, GENERALS, HERO_PAIRS, LEVEL_ATTACK, LEVEL_SPEED,
   MAP_LAYOUTS, PASSIVE_PROP_IDS, PROPS, SOLDIERS, TOKEN_POOL, WAVES, cellCode, cellCoords, initialOpenCells, pathPoint,
 } from "./config";
+import { MATCH_SNAPSHOT_VERSION } from "./types";
 import type {
   BattleEvent, BattleEventPayload, CommandEnvelope, CommandErrorCode, CommandFailure, CommandResult, GameCommand,
-  MatchSnapshot, PlayerBattleState, PlayerPropState, PlayerSlot, PropLoadout, ReserveItem, UnitState,
+  MatchSnapshot, MatchSnapshotInput, PlayerBattleState, PlayerPropState, PlayerSlot, PropLoadout, ReserveItem, UnitState,
 } from "./types";
 import type { ActivePropId, PassivePropId, SoldierKind } from "./config";
 
@@ -22,19 +23,32 @@ export function createRng(seed: number): Rng {
   }};
 }
 
-function hydrateSnapshot(snapshot: MatchSnapshot) {
-  const incomingVersion = (snapshot as unknown as { snapshotVersion?: number }).snapshotVersion;
-  if (incomingVersion !== undefined && incomingVersion !== 1) {
-    throw new RangeError(`不支持的快照版本：${incomingVersion}`);
+/**
+ * 将 0.x、仅含 snapshotVersion 的 1.0 快照和当前快照规范化为可演算结构。
+ * 该函数会原地补齐可安全推导的兼容字段并返回同一个对象。
+ */
+export function normalizeMatchSnapshot(snapshot: MatchSnapshotInput): MatchSnapshot {
+  const incoming = snapshot as unknown as { version?: unknown; snapshotVersion?: unknown };
+  for (const candidate of [incoming.version, incoming.snapshotVersion]) {
+    if (candidate !== undefined && candidate !== MATCH_SNAPSHOT_VERSION) {
+      throw new RangeError(`不支持的快照版本：${String(candidate)}`);
+    }
   }
-  snapshot.snapshotVersion ??= 1;
-  snapshot.events ??= [];
-  snapshot.eventSequence ??= 0;
-  snapshot.combatEvents ??= [];
-  snapshot.acceptedCommands ??= {};
-  snapshot.lastClientSeq ??= [0, 0];
-  snapshot.simulationTimeMs ??= Number.isFinite(snapshot.serverTime) ? snapshot.serverTime : 0;
-  snapshot.serverTime = snapshot.simulationTimeMs;
+  if (incoming.version !== undefined && incoming.snapshotVersion !== undefined
+    && incoming.version !== incoming.snapshotVersion) {
+    throw new RangeError(`快照版本字段冲突：version=${String(incoming.version)}，snapshotVersion=${String(incoming.snapshotVersion)}`);
+  }
+  const normalized = snapshot as MatchSnapshot;
+  normalized.version ??= MATCH_SNAPSHOT_VERSION;
+  normalized.snapshotVersion ??= MATCH_SNAPSHOT_VERSION;
+  normalized.events ??= [];
+  normalized.eventSequence ??= 0;
+  normalized.combatEvents ??= [];
+  normalized.acceptedCommands ??= {};
+  normalized.lastClientSeq ??= [0, 0];
+  normalized.simulationTimeMs ??= Number.isFinite(normalized.serverTime) ? normalized.serverTime : 0;
+  normalized.serverTime = normalized.simulationTimeMs;
+  return normalized;
 }
 
 function beginTransition(snapshot: MatchSnapshot) {
@@ -130,7 +144,8 @@ export function createMatch(roomId: string, seed: number, mapIndex = 0): MatchSn
   const difficultyCurve = weightedIndex(planningRng, DIFFICULTY_WEIGHTS);
   const bossWaves = BOSS_MILESTONES.filter((_, index) => planningRng.next() < (BOSS_CHANCES[index] ?? 0));
   return {
-    snapshotVersion: 1, roomId, tick: 0, stateVersion: 0, simulationTimeMs: 0,
+    version: MATCH_SNAPSHOT_VERSION, snapshotVersion: MATCH_SNAPSHOT_VERSION,
+    roomId, tick: 0, stateVersion: 0, simulationTimeMs: 0,
     seed: normalizedSeed, mapIndex: normalizedMap, phase: "preparing", difficultyCurve, bossWaves,
     players: [createPlayer(0, normalizedMap), createPlayer(1, normalizedMap)],
     events: [], eventSequence: 0, combatEvents: [], acceptedCommands: {}, lastClientSeq: [0, 0],
@@ -863,7 +878,7 @@ function failure(
  * 由完整 CommandEnvelope 提供幂等与乐观并发保护。
  */
 export function applyCommand(snapshot: MatchSnapshot, slot: PlayerSlot, command: GameCommand): CommandResult {
-  hydrateSnapshot(snapshot);
+  normalizeMatchSnapshot(snapshot);
   if ((slot !== 0 && slot !== 1) || !validGameCommand(command)) {
     return failure(snapshot, "", "ERR_INVALID_COMMAND", "命令格式非法");
   }
@@ -963,7 +978,7 @@ function sameAcceptedCommand(record: MatchSnapshot["acceptedCommands"][string], 
 
 /** 权威命令入口：校验版本和席位序号，并把成功命令的幂等记录持久化进快照。 */
 export function executeCommand(snapshot: MatchSnapshot, slot: PlayerSlot, envelope: CommandEnvelope): CommandResult {
-  hydrateSnapshot(snapshot);
+  normalizeMatchSnapshot(snapshot);
   if ((slot !== 0 && slot !== 1) || !validEnvelope(envelope)) {
     return failure(snapshot, isRecord(envelope) && typeof envelope.commandId === "string" ? envelope.commandId : "", "ERR_INVALID_ENVELOPE", "命令信封格式非法");
   }
@@ -1269,7 +1284,7 @@ function tickPlayer(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs:
 }
 
 export function stepMatch(snapshot: MatchSnapshot, deltaMs: number) {
-  hydrateSnapshot(snapshot);
+  normalizeMatchSnapshot(snapshot);
   if (!Number.isFinite(deltaMs) || deltaMs <= 0) throw new RangeError("deltaMs 必须是大于 0 的有限毫秒值");
   if (snapshot.phase === "finished" || snapshot.phase === "waiting") return snapshot;
   beginTransition(snapshot);
@@ -1293,6 +1308,6 @@ export function stepMatch(snapshot: MatchSnapshot, deltaMs: number) {
 
 export function cloneSnapshot(snapshot: MatchSnapshot): MatchSnapshot {
   const clone = structuredClone(snapshot);
-  hydrateSnapshot(clone);
+  normalizeMatchSnapshot(clone);
   return clone;
 }

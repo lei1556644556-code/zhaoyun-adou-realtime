@@ -227,9 +227,13 @@ export interface PlayerBattleState {
   lastEvent: string;
 }
 
+export const MATCH_SNAPSHOT_VERSION = 1 as const;
+
 export interface MatchSnapshot {
-  /** 可持久化快照的结构版本。 */
-  snapshotVersion: 1;
+  /** 可持久化快照的规范结构版本。 */
+  version: typeof MATCH_SNAPSHOT_VERSION;
+  /** @deprecated 1.0 快照兼容别名；与 version 保持一致。 */
+  snapshotVersion: typeof MATCH_SNAPSHOT_VERSION;
   roomId: string;
   tick: number;
   stateVersion: number;
@@ -255,6 +259,21 @@ export interface MatchSnapshot {
   /** @deprecated 与 simulationTimeMs 同步的 0.x 兼容字段，不表示墙钟。 */
   serverTime: number;
 }
+
+type MigratableMatchSnapshotField =
+  | "version"
+  | "snapshotVersion"
+  | "simulationTimeMs"
+  | "events"
+  | "eventSequence"
+  | "combatEvents"
+  | "acceptedCommands"
+  | "lastClientSeq";
+
+/** 可由内核规范化的当前快照或已发布的 0.x / 1.0 快照形状。 */
+export type MatchSnapshotInput =
+  & Omit<MatchSnapshot, MigratableMatchSnapshotField>
+  & Partial<Pick<MatchSnapshot, MigratableMatchSnapshotField>>;
 
 export type GameCommand =
   | { type: "RECRUIT" }

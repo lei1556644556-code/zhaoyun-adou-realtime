@@ -2,7 +2,7 @@
 
 ## 合同元数据
 
-- 版本：1.0.0
+- 版本：1.0.1
 - 提供方：02 权威战斗内核
 - 消费方：03 战场交互、05 云存档、06 实时联机、07 自动化测试
 - TypeScript 权威定义：`packages/shared/src/types.ts`
@@ -11,7 +11,8 @@
 
 `MatchSnapshot` 是一次对局可持久化、同步和恢复的完整权威状态。除表现层消费游标外，继续演算所需的全部内容必须包含在快照中：
 
-- `snapshotVersion`：快照结构版本，当前为 `1`；
+- `version`：规范的数值型快照结构版本，当前为 `1`；
+- `snapshotVersion`：已弃用的 1.0 兼容别名；写出时暂与 `version` 同为 `1`；
 - `tick`、`stateVersion`、`simulationTimeMs`：确定性逻辑时钟与单调状态版本；
 - `seed`、地图、难度曲线和 Boss 波次计划；
 - 双方生命、经济、波次、单位占格、营地占格、敌军、道具及计时器；
@@ -33,18 +34,20 @@
 
 ## 生命周期
 
-1. `createMatch` 生成 `snapshotVersion: 1` 的完整快照。
+1. `createMatch` 生成 `version: 1` 的完整快照，并暂时同步写出 `snapshotVersion: 1` 兼容别名。
 2. 每次成功命令或有效模拟步使 `stateVersion` 恰好增加 1。
 3. `tick` 只在模拟步增加；玩家命令不增加 Tick。
 4. `simulationTimeMs` / `serverTime` 只在模拟步累加。
 5. `cloneSnapshot` 生成没有共享可变引用的等价副本。
-6. 旧存档进入演算入口时补齐 1.0 新字段；这项兼容只补元数据，不猜测缺失的规则状态。
+6. `normalizeMatchSnapshot`、`cloneSnapshot` 和演算入口在读取时统一补齐版本及 1.0 新字段；这项兼容只补元数据，不猜测缺失的规则状态。
 
 ## 兼容策略
 
-- 增加可安全推导的字段可提升 `snapshotVersion` 次版本；删除字段或改变规则语义需提升主版本并提供迁移器。
-- 0.x 存档缺少事件、命令幂等和逻辑时间字段时，内核按空集合、序号 0 和原 `serverTime`（若为有限数）补齐。
-- 消费者必须忽略不认识的附加字段；遇到高于自身支持范围的 `snapshotVersion` 时应拒绝继续权威演算。
+- `version` 是后续版本判断的规范字段；`snapshotVersion` 只用于兼容已经发布的 1.0 快照，不得独立演进。
+- 0.x 存档同时缺少两个版本字段时按版本 `1` 迁移；缺少事件、命令幂等和逻辑时间字段时，内核按空集合、序号 0 和原 `serverTime`（若为有限数）补齐。
+- 已发布的仅含 `snapshotVersion: 1` 快照会补上 `version: 1`；仅含 `version: 1` 的新快照会补上兼容别名。
+- 两个字段同时存在时必须相等；任一字段不是当前支持的数值版本 `1`，内核都拒绝继续权威演算。
+- 消费者必须忽略不认识的附加字段。增加可安全推导的字段可提升结构次版本；删除字段或改变规则语义需提升主版本并提供迁移器。
 
 ## 契约样例
 
@@ -52,6 +55,7 @@
 const a = createMatch("room", 123, 0);
 const b = createMatch("room", 123, 0);
 expect(a).toEqual(b);
+expect(a.version).toBe(1);
 
 stepMatch(a, 100);
 stepMatch(b, 100);
