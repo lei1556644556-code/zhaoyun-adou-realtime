@@ -53,7 +53,10 @@ export class BattleScene extends Phaser.Scene {
     this.dragLayer = this.add.container(0, 0).setDepth(1000);
     this.input.on("dragstart", (_pointer: Phaser.Input.Pointer, object: Phaser.GameObjects.Container) => {
       object.setData("didDrag", true);
-      this.clearInspection(true);
+      // 不能在拖拽对象移出 stateLayer 前调用 renderState：它会销毁当前对象，
+      // 随后的 Phaser 容器转移便会访问一个已经失效的 scene。
+      this.selectedUnit = null;
+      this.game.events.emit("battle:inspect-hide");
       this.isDragging = true;
       this.draggingId = object.getData("sourceId") as string;
       this.draggingType = object.getData("sourceType") as DragSource;
