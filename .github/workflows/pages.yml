@@ -28,9 +28,12 @@ jobs:
     timeout-minutes: 15
     env:
       VITE_DEPLOY_ENV: production
-      VITE_SUPABASE_URL: ${{ vars.PRODUCTION_SUPABASE_URL }}
-      VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.PRODUCTION_SUPABASE_PUBLISHABLE_KEY }}
-      VITE_SERVER_URL: ${{ vars.PRODUCTION_SERVER_URL }}
+      # Temporary no-cost playtest endpoint hosted from the owner's PC.
+      # Move these public client values back to repository variables when the
+      # permanent authority host is selected.
+      VITE_SUPABASE_URL: https://dkaabuxszrbnnrajnoaa.supabase.co
+      VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_8UjZAjC-Ts2NiP8_NpmFdA_jv-CEzhd
+      VITE_SERVER_URL: https://iso-dragon-fri-phase.trycloudflare.com
     steps:
       - uses: actions/checkout@v4
         with:

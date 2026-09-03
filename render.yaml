@@ -2,7 +2,7 @@ services:
   - type: web
     name: zhaoyun-adou-authority
     runtime: docker
-    plan: 0.5c-512mb
+    plan: free
     region: singapore
     dockerfilePath: ./Dockerfile.server
     healthCheckPath: /health
