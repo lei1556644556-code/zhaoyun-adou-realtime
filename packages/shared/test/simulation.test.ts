@@ -120,6 +120,54 @@ describe("1.0.9 authoritative simulation", () => {
     expect(match.players[0].reserve).toEqual([{ id: "r-knife", kind: "刀", level: 2, slot: 2 }]);
   });
 
+  it("swaps two incompatible board pieces instead of rejecting the drop", () => {
+    const match = createMatch("TEST", 20);
+    const firstCell = cellIndex(2, 7);
+    const secondCell = cellIndex(3, 7);
+    match.players[0].units = [
+      { id: "blade", kind: "刀", level: 1, cell: firstCell, cooldownMs: 0, attackCount: 0 },
+      { id: "spear", kind: "枪", level: 2, cell: secondCell, cooldownMs: 0, attackCount: 0 },
+    ];
+    expect(applyCommand(match, 0, { type: "DROP_UNIT", unitId: "blade", targetCell: secondCell }).ok).toBe(true);
+    expect(match.players[0].units).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "blade", cell: secondCell }),
+      expect.objectContaining({ id: "spear", cell: firstCell }),
+    ]));
+  });
+
+  it("swaps two incompatible camp pieces instead of rejecting the drop", () => {
+    const match = createMatch("TEST", 21);
+    match.players[0].reserve = [
+      { id: "blade", kind: "刀", level: 1, slot: 0 },
+      { id: "bow", kind: "弓", level: 2, slot: 4 },
+    ];
+    expect(applyCommand(match, 0, { type: "DROP_RESERVE_TO_SLOT", reserveId: "blade", targetSlot: 4 }).ok).toBe(true);
+    expect(match.players[0].reserve).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "blade", slot: 4 }),
+      expect.objectContaining({ id: "bow", slot: 0 }),
+    ]));
+  });
+
+  it("replaces a board piece with an incompatible camp piece in one drop", () => {
+    const match = createMatch("TEST", 22);
+    const targetCell = cellIndex(2, 7);
+    match.players[0].reserve = [{ id: "r-bow", kind: "弓", level: 1, slot: 3 }];
+    match.players[0].units = [{ id: "u-blade", kind: "刀", level: 2, cell: targetCell, cooldownMs: 480, attackCount: 4 }];
+    expect(applyCommand(match, 0, { type: "DROP_RESERVE", reserveId: "r-bow", targetCell }).ok).toBe(true);
+    expect(match.players[0].units).toEqual([expect.objectContaining({ id: "u-bow", kind: "弓", cell: targetCell })]);
+    expect(match.players[0].reserve).toEqual([expect.objectContaining({ id: "r-blade", kind: "刀", slot: 3 })]);
+  });
+
+  it("replaces a camp piece with an incompatible board piece in one drop", () => {
+    const match = createMatch("TEST", 23);
+    const sourceCell = cellIndex(2, 7);
+    match.players[0].units = [{ id: "u-spear", kind: "枪", level: 2, cell: sourceCell, cooldownMs: 0, attackCount: 0 }];
+    match.players[0].reserve = [{ id: "r-bow", kind: "弓", level: 1, slot: 1 }];
+    expect(applyCommand(match, 0, { type: "DROP_UNIT_TO_RESERVE", unitId: "u-spear", targetSlot: 1 }).ok).toBe(true);
+    expect(match.players[0].reserve).toEqual([expect.objectContaining({ id: "r-spear", kind: "枪", slot: 1 })]);
+    expect(match.players[0].units).toEqual([expect.objectContaining({ id: "u-bow", kind: "弓", cell: sourceCell })]);
+  });
+
   it("uses a shovel only on adjacent own grass", () => {
     const match = createMatch("TEST", 12);
     match.players[0].reserve = [{ id: "shovel", kind: "铲子", level: 1, slot: 0 }];
@@ -170,6 +218,21 @@ describe("1.0.9 authoritative simulation", () => {
     stepMatch(match, 100);
     expect(match.combatEvents).toHaveLength(1);
     expect(match.combatEvents[0]).toMatchObject({ unitId: "blade", targetId: "target", damage: 3, hitCount: 1 });
+  });
+
+  it("gives a level-two spear the configured 0.62-second attack interval without extra attacks", () => {
+    const match = createMatch("TEST", 24);
+    const player = match.players[0];
+    player.phase = "battle";
+    player.prepareMs = 0;
+    player.spawnMs = 999999;
+    player.remainingToSpawn = 1;
+    player.units = [{ id: "spear", kind: "枪", level: 2, cell: cellIndex(2, 7), cooldownMs: 0, attackCount: 0 }];
+    player.enemies = [{ id: "target", hp: 100, maxHp: 100, progress: 5 / 17, boss: false, stunnedMs: 0 }];
+    for (let index = 0; index < 6; index += 1) stepMatch(match, 100);
+    expect(player.units[0]?.attackCount).toBe(1);
+    stepMatch(match, 100);
+    expect(player.units[0]?.attackCount).toBe(2);
   });
 
   it("keeps both mirrored armies on their own roads and half of the battlefield", () => {

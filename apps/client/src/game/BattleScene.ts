@@ -45,6 +45,7 @@ export class BattleScene extends Phaser.Scene {
     this.effectsLayer = this.add.container(0, 0).setDepth(80);
     this.dragLayer = this.add.container(0, 0).setDepth(1000);
     this.input.on("dragstart", (_pointer: Phaser.Input.Pointer, object: Phaser.GameObjects.Container) => {
+      object.setData("didDrag", true);
       this.isDragging = true;
       this.draggingId = object.getData("sourceId") as string;
       this.draggingType = object.getData("sourceType") as DragSource;
@@ -551,13 +552,13 @@ export class BattleScene extends Phaser.Scene {
         }).setOrigin(0.5));
         ([item.slot, item.secondarySlot] as const).forEach((slot, partIndex) => {
           const token = this.createToken(CAMP_X + slot * CAMP_CELL + CAMP_CELL / 2, CAMP_Y + CAMP_CELL / 2, parts[partIndex] ?? "", item.level, false, true, rarity);
-          this.enableDrag(token, "reserve", item.id, item.kind);
+          this.enableDrag(token, "reserve", item.id, item.kind, item.level);
           add(token);
         });
         continue;
       }
       const token = this.createToken(CAMP_X + item.slot * CAMP_CELL + CAMP_CELL / 2, CAMP_Y + CAMP_CELL / 2, item.kind, item.level, false);
-      this.enableDrag(token, "reserve", item.id, item.kind);
+      this.enableDrag(token, "reserve", item.id, item.kind, item.level);
       add(token);
     }
     const enough = mine.buns + mine.reserve.length >= mine.recruitCost;
@@ -587,7 +588,8 @@ export class BattleScene extends Phaser.Scene {
       const y = mirror ? GAME_CONFIG.rows - 1 - point.y : point.y;
       const x = mirror ? GAME_CONFIG.columns - 1 - point.x : point.x;
       const token = this.createToken((x + 0.5) * CELL, MAP_TOP + (y + 0.5) * CELL, unit.kind, unit.level, mirror);
-      if (draggable) this.enableDrag(token, "unit", unit.id, unit.kind);
+      if (draggable) this.enableDrag(token, "unit", unit.id, unit.kind, unit.level);
+      else this.enableInspect(token, unit.kind, unit.level);
       this.stateLayer.add(token);
     }
   }
@@ -629,7 +631,8 @@ export class BattleScene extends Phaser.Scene {
       if (splitting && this.draggingPartIndex === partIndex) return;
       const point = points[partIndex];
       const token = this.createToken(point.x, point.y, parts[partIndex], unit.level, mirror, true, general.rarity);
-      if (draggable) this.enableDrag(token, "generalPart", unit.id, parts[partIndex], partIndex);
+      if (draggable) this.enableDrag(token, "generalPart", unit.id, parts[partIndex], unit.level, partIndex, unit.kind);
+      else this.enableInspect(token, unit.kind, unit.level);
       this.stateLayer.add(token);
     });
   }
@@ -672,9 +675,31 @@ export class BattleScene extends Phaser.Scene {
     return container;
   }
 
-  private enableDrag(container: Phaser.GameObjects.Container, sourceType: DragSource, sourceId: string, kind: string, partIndex?: 0 | 1) {
+  private enableInspect(container: Phaser.GameObjects.Container, kind: string, level: number) {
+    container.setInteractive({ useHandCursor: true });
+    container.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      container.setData({ tapX: pointer.worldX, tapY: pointer.worldY, tapPointerId: pointer.id, didDrag: false });
+    });
+    container.on("pointerup", (pointer: Phaser.Input.Pointer) => {
+      if (container.getData("tapPointerId") !== pointer.id || container.getData("didDrag")) return;
+      const distance = Phaser.Math.Distance.Between(
+        Number(container.getData("tapX")), Number(container.getData("tapY")), pointer.worldX, pointer.worldY,
+      );
+      if (distance <= 10) this.game.events.emit("battle:inspect", { kind, level });
+    });
+  }
+
+  private enableDrag(
+    container: Phaser.GameObjects.Container,
+    sourceType: DragSource,
+    sourceId: string,
+    kind: string,
+    level: number,
+    partIndex?: 0 | 1,
+    inspectKind = kind,
+  ) {
     container.setData({ sourceType, sourceId, kind, partIndex });
-    container.setInteractive({ useHandCursor: true, draggable: true });
+    this.enableInspect(container, inspectKind, level);
     this.input.setDraggable(container);
   }
 

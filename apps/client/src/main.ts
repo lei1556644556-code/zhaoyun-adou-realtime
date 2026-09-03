@@ -1,5 +1,9 @@
 import "./styles.css";
-import { GAME_CONFIG, MAP_LAYOUTS, type GameCommand, type MatchSnapshot, type PlayerSlot } from "@adou/shared";
+import {
+  GAME_CONFIG, GENERALS, HERO_PAIRS, LEVEL_ATTACK, LEVEL_SPEED, MAP_LAYOUTS, SOLDIERS,
+  type GameCommand, type MatchSnapshot, type PlayerSlot,
+} from "@adou/shared";
+import { IMAGE_ASSETS } from "./game/assets";
 import { createGame } from "./game/BattleScene";
 import { PracticeEngine } from "./game/PracticeEngine";
 import { RealtimeClient } from "./net/RealtimeClient";
@@ -82,7 +86,8 @@ app.innerHTML = `
             <b>操作方法</b>
             <ol>
               <li>点击“征兵”一次获得五枚棋子。</li>
-              <li>棋子可在营地换位/合成，也可在营地与下半场白格之间拖动。</li>
+              <li>拖到棋子上：能合成就合成，不能合成就直接交换位置。</li>
+              <li>轻点棋子（不拖动）可查看实际攻击、攻速、射程与技能。</li>
               <li>姓名两字合将后占两格；上阵后拖出任一字即可拆分。</li>
               <li>铲子拖到高亮草格可扩一格。</li>
               <li>棕色只走敌兵，白色才可布阵，绿色草地不可通行或放置。</li>
@@ -90,6 +95,27 @@ app.innerHTML = `
           </div>
         </aside>
       </div>
+      <section class="unit-inspector" id="unit-inspector" aria-labelledby="unit-inspector-name" hidden>
+        <button class="unit-inspector-close" id="unit-inspector-close" type="button" aria-label="关闭属性">×</button>
+        <div class="unit-inspector-head">
+          <div class="unit-inspector-portrait">
+            <img id="unit-inspector-art" alt="" />
+            <span id="unit-inspector-glyph" aria-hidden="true">兵</span>
+          </div>
+          <div>
+            <span class="unit-inspector-rarity" id="unit-inspector-rarity">兵种</span>
+            <h2 id="unit-inspector-name">刀兵</h2>
+            <p id="unit-inspector-level">Lv.1 / 5</p>
+          </div>
+        </div>
+        <dl class="unit-inspector-stats">
+          <div><dt>攻击</dt><dd id="unit-inspector-attack">—</dd></div>
+          <div><dt>攻速</dt><dd id="unit-inspector-speed">—</dd></div>
+          <div><dt>射程</dt><dd id="unit-inspector-range">—</dd></div>
+          <div><dt>方式</dt><dd id="unit-inspector-form">—</dd></div>
+        </dl>
+        <p class="unit-inspector-skill" id="unit-inspector-skill">点击棋子查看详细属性。</p>
+      </section>
     </section>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
   </main>`;
@@ -124,6 +150,58 @@ function get<T extends HTMLElement>(id: string) {
   const element = document.getElementById(id);
   if (!element) throw new Error(`Missing #${id}`);
   return element as T;
+}
+
+function unitArtPath(kind: string) {
+  if (kind in IMAGE_ASSETS.troops) return IMAGE_ASSETS.troops[kind as keyof typeof IMAGE_ASSETS.troops].path;
+  if (kind in IMAGE_ASSETS.heroes) return IMAGE_ASSETS.heroes[kind as keyof typeof IMAGE_ASSETS.heroes].path;
+  if (kind === "铲子") return IMAGE_ASSETS.ui.shovel.path;
+  return null;
+}
+
+function showUnitInspector(kind: string, level: number) {
+  const panel = get<HTMLElement>("unit-inspector");
+  const hero = GENERALS[kind];
+  const soldier = SOLDIERS[kind as keyof typeof SOLDIERS];
+  const base = hero ?? soldier;
+  const normalizedLevel = base ? Math.max(1, Math.min(level, base.maxLevel)) : Math.max(1, level);
+  const levelIndex = normalizedLevel - 1;
+  const attack = base ? base.attack * (LEVEL_ATTACK[levelIndex] ?? 1) : null;
+  const interval = base ? base.intervalMs / (LEVEL_SPEED[levelIndex] ?? 1) : null;
+  const artPath = unitArtPath(kind);
+  const art = get<HTMLImageElement>("unit-inspector-art");
+  art.hidden = !artPath;
+  if (artPath) art.src = artPath;
+  get("unit-inspector-glyph").hidden = Boolean(artPath);
+  get("unit-inspector-glyph").textContent = kind === "铲子" ? "铲" : kind;
+  get("unit-inspector-name").textContent = hero ? kind : soldier ? `${kind}兵` : kind === "铲子" ? "铲子" : `姓名字棋 · ${kind}`;
+  const rarity = hero ? (hero.rarity === "gold" ? "金色武将" : "紫色武将") : soldier ? "基础兵种" : kind === "铲子" ? "开垦道具" : "武将姓名字";
+  const rarityElement = get("unit-inspector-rarity");
+  rarityElement.textContent = rarity;
+  rarityElement.dataset.rarity = hero?.rarity ?? "base";
+  get("unit-inspector-level").textContent = base ? `Lv.${normalizedLevel} / ${base.maxLevel}` : "不可独立攻击";
+  get("unit-inspector-attack").textContent = attack === null ? "—" : String(Math.round(attack * 100) / 100);
+  get("unit-inspector-speed").textContent = interval === null ? "—" : `${(interval / 1000).toFixed(2)}秒/次`;
+  get("unit-inspector-range").textContent = base ? `${base.range}格` : "—";
+  get("unit-inspector-form").textContent = hero ? hero.weapon : soldier?.form ?? (kind === "铲子" ? "开垦草格" : "合字成将");
+  if (hero) {
+    get("unit-inspector-skill").textContent = `武器：${hero.weapon}。技能：${hero.skill}`;
+  } else if (soldier) {
+    const extra = kind === "枪" ? "贯穿命中第二名敌人，造成本次攻击50%的额外伤害。" : kind === "骑" ? "命中时对邻近敌人造成50%范围伤害。" : "";
+    get("unit-inspector-skill").textContent = `优先攻击：${soldier.target}。${extra}`;
+  } else if (kind === "铲子") {
+    get("unit-inspector-skill").textContent = "拖到己方白格旁的绿色草格，可将该格永久开垦为布阵格。";
+  } else {
+    const matches = [...new Set(Object.entries(HERO_PAIRS)
+      .filter(([pair]) => pair.split("+").includes(kind))
+      .map(([, general]) => general))];
+    get("unit-inspector-skill").textContent = matches.length ? `可参与合成：${matches.join("、")}。合成后武将占用相邻两格。` : "姓名字棋不能独立攻击，需要与对应姓名字合成武将。";
+  }
+  panel.hidden = false;
+}
+
+function hideUnitInspector() {
+  get<HTMLElement>("unit-inspector").hidden = true;
 }
 function playerName() { return currentProfile?.username ?? "常山侠客"; }
 function scopedStorageKey(base: string) { return `${base}:${currentProfile?.userId ?? "guest"}`; }
@@ -322,6 +400,7 @@ function updateSnapshot(next: MatchSnapshot) {
 }
 
 game.events.on("battle:recruit", () => commandSink?.({ type: "RECRUIT" }));
+game.events.on("battle:inspect", (payload: { kind: string; level: number }) => showUnitInspector(payload.kind, payload.level));
 game.events.on("battle:drop", (payload: { sourceType: "reserve" | "unit" | "generalPart"; id: string; partIndex: 0 | 1 | null; targetCell: number }) => {
   if (!snapshot || !commandSink) return;
   if (payload.sourceType === "reserve") commandSink({ type: "DROP_RESERVE", reserveId: payload.id, targetCell: payload.targetCell });
@@ -351,6 +430,8 @@ get("zoom-fit").addEventListener("click", () => {
   localStorage.setItem(BATTLEFIELD_ZOOM_KEY, "1");
   applyBattlefieldScale();
 });
+get("unit-inspector-close").addEventListener("click", hideUnitInspector);
+document.addEventListener("keydown", (event) => { if (event.key === "Escape") hideUnitInspector(); });
 get("exit-match").addEventListener("click", async () => {
   practice?.stop(); online?.close();
   practice = null; online = null; commandSink = null; snapshot = null; activeMode = null;
@@ -361,6 +442,7 @@ get("exit-match").addEventListener("click", async () => {
     try { await cloud.saveProgress(currentProfile, currentCloudProgress()); }
     catch { showToast("本局已退出，云端状态将在下次操作时同步"); }
   }
+  hideUnitInspector();
   battleShell.hidden = true;
   lobby.hidden = false;
   window.scrollTo({ top: 0, behavior: "instant" });
@@ -452,6 +534,7 @@ get("logout").addEventListener("click", async () => {
   try { await cloud.signOut(); }
   catch (error) { showToast(error instanceof Error ? error.message : "退出账号失败"); button.disabled = false; return; }
   practice = null; online = null; commandSink = null; snapshot = null; activeMode = null; currentProfile = null;
+  hideUnitInspector();
   lobby.hidden = true; battleShell.hidden = true; authScreen.hidden = false;
   button.disabled = false;
 });

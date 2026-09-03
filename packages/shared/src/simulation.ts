@@ -134,6 +134,56 @@ function maxLevelForKind(kind: string) {
   return GENERALS[kind]?.maxLevel ?? SOLDIERS[kind as keyof typeof SOLDIERS]?.maxLevel ?? null;
 }
 
+function isMergeAttempt(source: { kind: string; level: number }, target: { kind: string; level: number }) {
+  return Boolean(HERO_PAIRS[`${source.kind}+${target.kind}`])
+    || (source.kind === target.kind && source.level === target.level && maxLevelForKind(target.kind) !== null);
+}
+
+function adjacentReserveSlotExcluding(player: PlayerBattleState, targetSlot: number, excludedIds: ReadonlySet<string>) {
+  for (const slot of [targetSlot - 1, targetSlot + 1]) {
+    if (!validReserveSlot(slot)) continue;
+    const occupied = player.reserve.some((item) => !excludedIds.has(item.id) && reserveOccupiesSlot(item, slot));
+    if (!occupied) return slot;
+  }
+  return null;
+}
+
+function adjacentCellExcluding(player: PlayerBattleState, targetCell: number, excludedIds: ReadonlySet<string>) {
+  const target = cellCoords(targetCell);
+  for (const [x, y] of [
+    [target.x - 1, target.y], [target.x + 1, target.y],
+    [target.x, target.y - 1], [target.x, target.y + 1],
+  ]) {
+    if (x === undefined || y === undefined || x < 0 || x >= GAME_CONFIG.columns || y < 0 || y >= GAME_CONFIG.rows) continue;
+    const cell = y * GAME_CONFIG.columns + x;
+    if (!canBuild(player, cell)) continue;
+    const occupied = player.units.some((unit) => !excludedIds.has(unit.id) && occupiesCell(unit, cell));
+    if (!occupied) return cell;
+  }
+  return null;
+}
+
+function reserveToUnit(item: ReserveItem, cell: number, secondaryCell?: number): UnitState {
+  return {
+    id: item.id.replace(/^r-/, "u-"), kind: item.kind, level: item.level, cell,
+    ...(secondaryCell === undefined ? {} : {
+      secondaryCell,
+      parts: item.parts ?? [item.kind[0] ?? "", item.kind[1] ?? ""] as [string, string],
+    }),
+    cooldownMs: 0, attackCount: 0,
+  };
+}
+
+function unitToReserve(unit: UnitState, slot: number, secondarySlot?: number): ReserveItem {
+  return {
+    id: unit.id.replace(/^u-/, "r-"), kind: unit.kind, level: unit.level, slot,
+    ...(secondarySlot === undefined ? {} : {
+      secondarySlot,
+      parts: unit.parts ?? [unit.kind[0] ?? "", unit.kind[1] ?? ""] as [string, string],
+    }),
+  };
+}
+
 function adjacentCellForGeneral(player: PlayerBattleState, target: UnitState, source?: UnitState) {
   const targetPoint = cellCoords(target.cell);
   if (source) {
@@ -226,10 +276,31 @@ function dropReserve(snapshot: MatchSnapshot, player: PlayerBattleState, reserve
   if (!canBuild(player, targetCell)) return "只能放入己方已开放白格";
   const target = unitAtCell(player, targetCell);
   if (target) {
-    const error = combine(player, item, target);
-    if (error) return error;
-    player.reserve = player.reserve.filter((candidate) => candidate.id !== reserveId);
-    player.lastEvent = `合成「${target.kind}」Lv.${target.level}`;
+    if (isMergeAttempt(item, target)) {
+      const error = combine(player, item, target);
+      if (error) return error;
+      player.reserve = player.reserve.filter((candidate) => candidate.id !== reserveId);
+      player.lastEvent = `合成「${target.kind}」Lv.${target.level}`;
+      return null;
+    }
+    const excluded = new Set([item.id, target.id]);
+    const sourceCompanion = item.secondarySlot === undefined
+      ? undefined
+      : target.secondaryCell === undefined
+        ? adjacentCellExcluding(player, targetCell, excluded) ?? undefined
+        : target.cell === targetCell ? target.secondaryCell : target.cell;
+    if (item.secondarySlot !== undefined && sourceCompanion === undefined) return "替换两格武将需要棋盘相邻空格";
+    const targetCompanion = target.secondaryCell === undefined
+      ? undefined
+      : adjacentReserveSlotExcluding(player, item.slot, excluded) ?? undefined;
+    if (target.secondaryCell !== undefined && targetCompanion === undefined) return "替换两格武将需要营地相邻空格";
+    const sourceCells = sourceCompanion === undefined ? [targetCell] : [targetCell, sourceCompanion].sort((a, b) => a - b);
+    const targetSlots = targetCompanion === undefined ? [item.slot] : [item.slot, targetCompanion].sort((a, b) => a - b);
+    player.reserve = player.reserve.filter((candidate) => candidate.id !== item.id);
+    player.units = player.units.filter((candidate) => candidate.id !== target.id);
+    player.units.push(reserveToUnit(item, sourceCells[0]!, sourceCells[1]));
+    player.reserve.push(unitToReserve(target, targetSlots[0]!, targetSlots[1]));
+    player.lastEvent = `上阵「${item.kind}」，替换「${target.kind}」`;
     return null;
   }
   if (item.secondarySlot !== undefined && GENERALS[item.kind]) {
@@ -261,10 +332,31 @@ function dropReserveToSlot(player: PlayerBattleState, reserveId: string, targetS
   if (reserveOccupiesSlot(source, targetSlot)) return null;
   const target = reserveAtSlot(player, targetSlot, source.id);
   if (target) {
-    const error = combineReserve(player, source, target, source);
-    if (error) return error;
-    player.reserve = player.reserve.filter((item) => item.id !== source.id);
-    player.lastEvent = `营地合成「${target.kind}」Lv.${target.level}`;
+    if (isMergeAttempt(source, target)) {
+      const error = combineReserve(player, source, target, source);
+      if (error) return error;
+      player.reserve = player.reserve.filter((item) => item.id !== source.id);
+      player.lastEvent = `营地合成「${target.kind}」Lv.${target.level}`;
+      return null;
+    }
+    const excluded = new Set([source.id, target.id]);
+    const sourceCompanion = source.secondarySlot === undefined
+      ? undefined
+      : target.secondarySlot === undefined
+        ? adjacentReserveSlotExcluding(player, targetSlot, excluded) ?? undefined
+        : target.slot === targetSlot ? target.secondarySlot : target.slot;
+    if (source.secondarySlot !== undefined && sourceCompanion === undefined) return "交换两格武将需要目标旁有连续空位";
+    const targetCompanion = target.secondarySlot === undefined
+      ? undefined
+      : adjacentReserveSlotExcluding(player, source.slot, excluded) ?? undefined;
+    if (target.secondarySlot !== undefined && targetCompanion === undefined) return "交换两格武将需要原位旁有连续空位";
+    const sourceSlots = sourceCompanion === undefined ? [targetSlot] : [targetSlot, sourceCompanion].sort((a, b) => a - b);
+    const targetSlots = targetCompanion === undefined ? [source.slot] : [source.slot, targetCompanion].sort((a, b) => a - b);
+    source.slot = sourceSlots[0]!;
+    source.secondarySlot = sourceSlots[1];
+    target.slot = targetSlots[0]!;
+    target.secondarySlot = targetSlots[1];
+    player.lastEvent = `营地交换「${source.kind}」与「${target.kind}」`;
     return null;
   }
   if (source.secondarySlot !== undefined) {
@@ -287,10 +379,24 @@ function dropUnitToReserve(player: PlayerBattleState, unitId: string, targetSlot
   if (source.secondaryCell !== undefined) return "两格武将请先拆字再放回营地";
   const target = reserveAtSlot(player, targetSlot);
   if (target) {
-    const error = combineReserve(player, source, target);
-    if (error) return error;
+    if (isMergeAttempt(source, target)) {
+      const error = combineReserve(player, source, target);
+      if (error) return error;
+      player.units = player.units.filter((unit) => unit.id !== source.id);
+      player.lastEvent = `营地合成「${target.kind}」Lv.${target.level}`;
+      return null;
+    }
+    const excluded = new Set([source.id, target.id]);
+    const targetCompanion = target.secondarySlot === undefined
+      ? undefined
+      : adjacentCellExcluding(player, source.cell, excluded) ?? undefined;
+    if (target.secondarySlot !== undefined && targetCompanion === undefined) return "替换两格武将需要棋盘相邻空格";
+    const targetCells = targetCompanion === undefined ? [source.cell] : [source.cell, targetCompanion].sort((a, b) => a - b);
     player.units = player.units.filter((unit) => unit.id !== source.id);
-    player.lastEvent = `营地合成「${target.kind}」Lv.${target.level}`;
+    player.reserve = player.reserve.filter((item) => item.id !== target.id);
+    player.reserve.push(unitToReserve(source, targetSlot));
+    player.units.push(reserveToUnit(target, targetCells[0]!, targetCells[1]));
+    player.lastEvent = `「${source.kind}」回营，替换「${target.kind}」`;
     return null;
   }
   player.units = player.units.filter((unit) => unit.id !== source.id);
@@ -311,10 +417,26 @@ function dropUnit(player: PlayerBattleState, unitId: string, targetCell: number)
     return null;
   }
   if (target.id === source.id) return null;
-  const error = combine(player, source, target, source);
-  if (error) return error;
-  player.units = player.units.filter((candidate) => candidate.id !== source.id);
-  player.lastEvent = `合成「${target.kind}」Lv.${target.level}`;
+  if (isMergeAttempt(source, target)) {
+    const error = combine(player, source, target, source);
+    if (error) return error;
+    player.units = player.units.filter((candidate) => candidate.id !== source.id);
+    player.lastEvent = `合成「${target.kind}」Lv.${target.level}`;
+    return null;
+  }
+  const sourceCell = source.cell;
+  if (target.secondaryCell === undefined) {
+    source.cell = targetCell;
+    target.cell = sourceCell;
+  } else {
+    const companionCell = adjacentCellExcluding(player, sourceCell, new Set([source.id, target.id]));
+    if (companionCell === null) return "交换两格武将需要原位旁有相邻空格";
+    const targetCells = [sourceCell, companionCell].sort((a, b) => a - b);
+    source.cell = targetCell;
+    target.cell = targetCells[0]!;
+    target.secondaryCell = targetCells[1]!;
+  }
+  player.lastEvent = `交换「${source.kind}」与「${target.kind}」`;
   return null;
 }
 

@@ -138,6 +138,31 @@ button { touch-action: manipulation; }
 .howto ol { margin: 8px 0 0; padding-left: 21px; }
 .howto li + li { margin-top: 5px; }
 
+.unit-inspector {
+  position: fixed; z-index: 70; right: max(18px, env(safe-area-inset-right)); bottom: max(18px, env(safe-area-inset-bottom));
+  width: min(360px, calc(100vw - 36px)); overflow: hidden; border: 1px solid rgba(229,196,125,.78); border-radius: 16px;
+  padding: 20px; background: linear-gradient(145deg, rgba(250,245,229,.99), rgba(231,220,192,.99)); color: #31473e;
+  box-shadow: 0 24px 70px rgba(15,31,26,.46), inset 0 1px rgba(255,255,255,.8); animation: inspector-in .18s ease-out both;
+}
+.unit-inspector::before { content: ""; position: absolute; inset: 0; pointer-events: none; border: 5px double rgba(119,87,51,.12); border-radius: inherit; }
+.unit-inspector-close { position: absolute; z-index: 1; top: 10px; right: 11px; width: 34px; height: 34px; border: 0; border-radius: 50%; background: rgba(61,80,69,.1); color: #526258; cursor: pointer; font-size: 24px; line-height: 1; }
+.unit-inspector-close:hover { background: rgba(157,81,63,.16); color: #9d513f; }
+.unit-inspector-head { display: flex; align-items: center; gap: 15px; padding-right: 28px; }
+.unit-inspector-portrait { position: relative; display: grid; place-items: center; flex: 0 0 84px; width: 84px; height: 84px; overflow: hidden; border: 3px solid #d3b467; border-radius: 14px; background: radial-gradient(circle, #597d69, #2e4b40); box-shadow: inset 0 0 20px rgba(0,0,0,.25); }
+.unit-inspector-portrait img { width: 82px; height: 82px; object-fit: contain; filter: drop-shadow(0 4px 6px rgba(0,0,0,.35)); }
+.unit-inspector-portrait span { color: #fff0bf; font: 900 48px/1 "STKaiti", "KaiTi", serif; text-shadow: 0 3px 5px rgba(0,0,0,.5); }
+.unit-inspector-rarity { display: inline-flex; border-radius: 999px; padding: 3px 9px; background: #486c5e; color: #fff3d0; font-size: 11px; font-weight: 900; letter-spacing: .08em; }
+.unit-inspector-rarity[data-rarity="gold"] { background: linear-gradient(90deg, #9a5d26, #d39b36); color: #fff4bd; }
+.unit-inspector-rarity[data-rarity="purple"] { background: linear-gradient(90deg, #684881, #9a6cc0); color: #f5e7ff; }
+.unit-inspector h2 { margin: 7px 0 2px; color: #304f43; font: 900 29px/1.05 "STKaiti", "KaiTi", serif; }
+.unit-inspector-head p { margin: 0; color: #8c5a43; font-size: 12px; font-weight: 800; }
+.unit-inspector-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 17px 0 0; }
+.unit-inspector-stats div { display: flex; align-items: center; justify-content: space-between; min-width: 0; border: 1px solid rgba(79,102,88,.16); border-radius: 9px; padding: 9px 10px; background: rgba(255,255,255,.48); }
+.unit-inspector-stats dt { color: #7b8078; font-size: 11px; }
+.unit-inspector-stats dd { margin: 0 0 0 8px; color: #884d39; font-size: 13px; font-weight: 900; white-space: nowrap; }
+.unit-inspector-skill { margin: 12px 0 0; border-left: 3px solid #b18d47; padding: 9px 10px; background: rgba(204,187,147,.2); color: #536057; font-size: 12px; line-height: 1.65; }
+@keyframes inspector-in { from { opacity: 0; transform: translateY(14px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
 .toast { position: fixed; z-index: 100; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom)); max-width: min(90vw, 520px); transform: translate(-50%, 18px); opacity: 0; pointer-events: none; border: 1px solid rgba(232,207,153,.45); border-radius: 8px; padding: 12px 18px; background: #30493f; color: #fff2d1; box-shadow: 0 14px 50px rgba(0,0,0,.38); transition: opacity .18s ease, transform .18s ease; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
@@ -182,6 +207,10 @@ button { touch-action: manipulation; }
   .battle-layout { display: block; }
   .playfield-card { width: min(var(--game-width), 100%); margin-inline: auto; border: 0; box-shadow: none; }
   .tactics-panel { width: 100%; border: 0; border-radius: 0; box-shadow: none; }
+  .unit-inspector { right: 0; bottom: 0; left: 0; width: 100%; max-height: min(58dvh, 470px); overflow-y: auto; border-width: 1px 0 0; border-radius: 18px 18px 0 0; padding: 16px 18px calc(17px + env(safe-area-inset-bottom)); }
+  .unit-inspector-portrait { flex-basis: 72px; width: 72px; height: 72px; }
+  .unit-inspector-portrait img { width: 70px; height: 70px; }
+  .unit-inspector h2 { font-size: 26px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
