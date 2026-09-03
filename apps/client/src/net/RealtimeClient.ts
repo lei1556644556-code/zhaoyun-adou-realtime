@@ -51,6 +51,7 @@ export class RealtimeClient extends EventTarget {
   private readonly clientId = crypto.randomUUID();
   private readonly storageKey: string;
   private readonly intentionalClosures = new WeakSet<RealtimeChannel>();
+  private readonly subscribedChannels = new WeakSet<RealtimeChannel>();
   private roomChannel: RealtimeChannel | null = null;
   private quickChannel: RealtimeChannel | null = null;
   private tickTimer = 0;
@@ -68,6 +69,27 @@ export class RealtimeClient extends EventTarget {
   private pendingQuick: { name: string; matching: boolean; resolve: (result: JoinedPayload) => void } | null = null;
   private seq = 0;
   private lastSendFailureAt = 0;
+  private networkConnected: boolean | null = null;
+  private closed = false;
+
+  private readonly handleBrowserOffline = () => {
+    if (this.closed) return;
+    // Browser connectivity changes arrive before the Realtime heartbeat can
+    // time out, so surface the degraded state without waiting for the socket.
+    this.publishNetworkState(false);
+  };
+
+  private readonly handleBrowserOnline = () => {
+    if (this.closed) return;
+    const channel = this.roomChannel ?? this.quickChannel;
+    if (!channel) return;
+    if (this.client.realtime.isConnected() && this.subscribedChannels.has(channel)) {
+      this.publishNetworkState(true);
+      return;
+    }
+    this.publishNetworkState(false);
+    this.client.realtime.connect();
+  };
 
   slot: PlayerSlot = 0;
   roomId = "";
@@ -78,12 +100,25 @@ export class RealtimeClient extends EventTarget {
     super();
     this.storageKey = storageKey;
     this.client = createClient(connection.url, connection.publishableKey, {
-      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      auth: {
+        storageKey: `${storageKey}:realtime-auth`,
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
     });
+    window.addEventListener("offline", this.handleBrowserOffline);
+    window.addEventListener("online", this.handleBrowserOnline);
   }
 
   private emit(type: string, detail: unknown) {
     this.dispatchEvent(new CustomEvent(type, { detail }));
+  }
+
+  private publishNetworkState(connected: boolean) {
+    if (this.networkConnected === connected) return;
+    this.networkConnected = connected;
+    this.emit("network", { connected });
   }
 
   private async subscribe(channel: RealtimeChannel) {
@@ -96,21 +131,28 @@ export class RealtimeClient extends EventTarget {
       }, 8_000);
       channel.subscribe((status) => {
         if (status === "SUBSCRIBED") {
-          this.emit("network", { connected: true });
+          this.subscribedChannels.add(channel);
+          if (this.roomChannel === channel || this.quickChannel === channel) {
+            this.publishNetworkState(typeof navigator === "undefined" || navigator.onLine);
+          }
           if (!settled) {
             settled = true;
             window.clearTimeout(timer);
             resolve();
           }
         } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-          this.emit("network", { connected: false });
+          this.subscribedChannels.delete(channel);
+          if (this.roomChannel === channel || this.quickChannel === channel) this.publishNetworkState(false);
           if (!settled) {
             settled = true;
             window.clearTimeout(timer);
             reject(new Error("实时服务暂时不可用"));
           }
         } else if (status === "CLOSED") {
-          if (!this.intentionalClosures.has(channel)) this.emit("network", { connected: false });
+          this.subscribedChannels.delete(channel);
+          if (!this.intentionalClosures.has(channel) && (this.roomChannel === channel || this.quickChannel === channel)) {
+            this.publishNetworkState(false);
+          }
         }
       });
     });
@@ -126,7 +168,7 @@ export class RealtimeClient extends EventTarget {
       const now = Date.now();
       if (now - this.lastSendFailureAt < 3_000) return;
       this.lastSendFailureAt = now;
-      this.emit("network", { connected: false });
+      this.publishNetworkState(false);
       this.emit("notice", { message });
     });
   }
@@ -478,6 +520,9 @@ export class RealtimeClient extends EventTarget {
   }
 
   close() {
+    this.closed = true;
+    window.removeEventListener("offline", this.handleBrowserOffline);
+    window.removeEventListener("online", this.handleBrowserOnline);
     this.clearQuickTimers();
     if (this.pendingJoin) window.clearTimeout(this.pendingJoin.timer);
     this.pendingJoin = null;
