@@ -13,9 +13,16 @@
     "build:production": "pnpm --filter @adou/client build:production && pnpm --filter @adou/server check",
     "preview": "pnpm --filter @adou/client preview",
     "test": "pnpm -r --if-present test",
+    "test:contracts": "pnpm --filter @adou/qa test:contracts",
+    "test:integration": "pnpm --filter @adou/qa test:integration",
+    "test:e2e": "pnpm --filter @adou/qa test:e2e",
     "check": "pnpm -r check",
     "smoke:server": "pnpm --filter @adou/server exec tsx ../../tools/smoke-server.ts",
     "release:check": "node tools/validate-release.mjs",
-    "verify": "pnpm release:check && pnpm test && pnpm check && pnpm build:preview && pnpm smoke:server"
+    "verify": "pnpm release:check && pnpm test && pnpm check && pnpm build:preview && pnpm smoke:server",
+    "qa:acceptance": "node tools/run-qa.mjs"
+  },
+  "optionalDependencies": {
+    "@rolldown/binding-win32-x64-msvc": "1.2.6"
   }
 }

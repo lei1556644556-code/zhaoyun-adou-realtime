@@ -1,0 +1,24 @@
+{
+  "name": "@adou/qa",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run test/contracts test/determinism test/server",
+    "test:contracts": "vitest run test/contracts",
+    "test:integration": "vitest run test/determinism test/server",
+    "test:release": "vitest run test/release",
+    "test:e2e": "playwright test",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@adou/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^24.0.0",
+    "socket.io-client": "^4.8.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}
