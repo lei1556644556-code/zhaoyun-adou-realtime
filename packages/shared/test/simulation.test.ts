@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { GAME_CONFIG, MAP_LAYOUTS, PROPS, applyCommand, attackRangeIntersectsCell, cellCode, cellIndex, createMatch, initialOpenCells, pathPoint, stepMatch } from "../src";
+import {
+  GAME_CONFIG, MAP_LAYOUTS, PROPS, applyCommand, attackRangeIntersectsCell, cellCode, cellIndex,
+  createMatch, executeCommand, initialOpenCells, pathPoint, stepMatch, type CommandEnvelope,
+} from "../src";
 
 describe("1.0.9 authoritative simulation", () => {
   it("uses the package-backed board and opening values", () => {
@@ -70,14 +73,32 @@ describe("1.0.9 authoritative simulation", () => {
     ];
     match.players[0].reserve = [{ id: "r-yun", kind: "云", level: 1, slot: 0 }];
 
+    const command: CommandEnvelope = {
+      commandId: "auto-deploy-1", clientSeq: 1, expectedStateVersion: match.stateVersion,
+      command: { type: "DROP_RESERVE", reserveId: "r-yun", targetCell: secondCell },
+    };
     const versionBefore = match.stateVersion;
-    expect(applyCommand(match, 0, { type: "DROP_RESERVE", reserveId: "r-yun", targetCell: secondCell }).ok).toBe(true);
+    expect(executeCommand(match, 0, command)).toEqual({
+      commandId: command.commandId, ok: true, duplicate: false, stateVersion: versionBefore + 1,
+    });
     expect(match.stateVersion).toBe(versionBefore + 1);
+    expect(match.events.map((event) => event.type)).toEqual(["unit-deployed", "units-merged"]);
+    expect(match.events.map((event) => event.id)).toEqual(["event-1", "event-2"]);
+    expect(match.events.every((event) => event.stateVersion === match.stateVersion)).toBe(true);
     expect(match.players[0].units).toEqual([{
       id: "zhao", kind: "赵云", level: 1,
       cell: firstCell, secondaryCell: secondCell, parts: ["赵", "云"],
       cooldownMs: 0, attackCount: 0,
     }]);
+
+    const eventsAfterFirstAttempt = structuredClone(match.events);
+    const eventSequenceAfterFirstAttempt = match.eventSequence;
+    expect(executeCommand(match, 0, structuredClone(command))).toEqual({
+      commandId: command.commandId, ok: true, duplicate: true, stateVersion: versionBefore + 1,
+    });
+    expect(match.stateVersion).toBe(versionBefore + 1);
+    expect(match.eventSequence).toBe(eventSequenceAfterFirstAttempt);
+    expect(match.events).toEqual(eventsAfterFirstAttempt);
   });
 
   it("automatically combines after moving a board character beside its partner", () => {
@@ -93,6 +114,29 @@ describe("1.0.9 authoritative simulation", () => {
     expect(match.players[0].units).toEqual([expect.objectContaining({
       kind: "赵云", cell: firstCell, secondaryCell: secondCell, parts: ["赵", "云"],
     })]);
+  });
+
+  it("appends an automatic merge after a board swap without a second version increment", () => {
+    const match = createMatch("SWAP-AUTO-GENERAL", 115);
+    const leftCell = cellIndex(2, 7);
+    const targetCell = cellIndex(3, 7);
+    const sourceCell = cellIndex(4, 7);
+    match.players[0].units = [
+      { id: "yun", kind: "云", level: 1, cell: leftCell, cooldownMs: 0, attackCount: 0 },
+      { id: "blade", kind: "刀", level: 1, cell: targetCell, cooldownMs: 0, attackCount: 0 },
+      { id: "zhao", kind: "赵", level: 1, cell: sourceCell, cooldownMs: 0, attackCount: 0 },
+    ];
+
+    const versionBefore = match.stateVersion;
+    expect(applyCommand(match, 0, { type: "DROP_UNIT", unitId: "zhao", targetCell }).ok).toBe(true);
+    expect(match.stateVersion).toBe(versionBefore + 1);
+    expect(match.events.map((event) => event.type)).toEqual(["units-swapped", "units-merged"]);
+    expect(match.events.map((event) => event.id)).toEqual(["event-1", "event-2"]);
+    expect(match.events.every((event) => event.stateVersion === match.stateVersion)).toBe(true);
+    expect(match.players[0].units).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "yun", kind: "赵云", cell: leftCell, secondaryCell: targetCell }),
+      expect.objectContaining({ id: "blade", kind: "刀", cell: sourceCell }),
+    ]));
   });
 
   it("does not combine name characters that are only vertically adjacent", () => {
@@ -120,6 +164,39 @@ describe("1.0.9 authoritative simulation", () => {
       expect.objectContaining({ id: "left-yun", kind: "赵云", cell: cellIndex(2, 7), secondaryCell: cellIndex(3, 7) }),
       expect.objectContaining({ id: "right-yun", kind: "云", cell: cellIndex(4, 7) }),
     ]));
+  });
+
+  it("checks moved then stationary split parts and appends merges in that deterministic order", () => {
+    const match = createMatch("SPLIT-AUTO-GENERALS", 116);
+    const cells = [1, 2, 3, 4, 5].map((column) => cellIndex(column, 7));
+    match.players[0].unlockedCells = cells;
+    match.players[0].units = [
+      { id: "left-yun", kind: "云", level: 1, cell: cells[0]!, cooldownMs: 0, attackCount: 0 },
+      {
+        id: "general", kind: "赵云", level: 1, cell: cells[1]!, secondaryCell: cells[2]!,
+        parts: ["赵", "云"], cooldownMs: 0, attackCount: 0,
+      },
+      { id: "right-zhao", kind: "赵", level: 1, cell: cells[3]!, cooldownMs: 0, attackCount: 0 },
+    ];
+
+    const versionBefore = match.stateVersion;
+    expect(applyCommand(match, 0, {
+      type: "SPLIT_GENERAL", unitId: "general", partIndex: 1, targetCell: cells[4]!,
+    }).ok).toBe(true);
+    expect(match.stateVersion).toBe(versionBefore + 1);
+    expect(match.events.map((event) => event.type)).toEqual([
+      "general-split", "units-merged", "units-merged",
+    ]);
+    expect(match.events.map((event) => event.id)).toEqual(["event-1", "event-2", "event-3"]);
+    expect(match.events.every((event) => event.stateVersion === match.stateVersion)).toBe(true);
+    expect(match.events.slice(1)).toEqual([
+      expect.objectContaining({
+        type: "units-merged", sourceId: "general-split-1-1", targetId: "right-zhao", cells: [cells[3], cells[4]],
+      }),
+      expect.objectContaining({
+        type: "units-merged", sourceId: "general-split-1-0", targetId: "left-yun", cells: [cells[0], cells[1]],
+      }),
+    ]);
   });
 
   it("keeps a fused general on two cells and can pull either character back out", () => {
