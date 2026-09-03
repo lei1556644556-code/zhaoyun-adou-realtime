@@ -12,7 +12,7 @@
     "build:preview": "pnpm --filter @adou/client build:preview && pnpm --filter @adou/server check",
     "build:production": "pnpm --filter @adou/client build:production && pnpm --filter @adou/server check",
     "preview": "pnpm --filter @adou/client preview",
-    "test": "pnpm --filter @adou/shared test",
+    "test": "pnpm -r --if-present test",
     "check": "pnpm -r check",
     "smoke:server": "pnpm --filter @adou/server exec tsx ../../tools/smoke-server.ts",
     "release:check": "node tools/validate-release.mjs",
