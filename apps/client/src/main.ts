@@ -7,6 +7,10 @@ import {
 } from "@adou/shared";
 import { IMAGE_ASSETS } from "./game/assets";
 import { createGame } from "./game/BattleScene";
+import {
+  commandForBattleCampDrop, commandForBattleDrop,
+  type BattleCampDropPayload, type BattleDropPayload,
+} from "./game/battleInteraction";
 import { PracticeEngine } from "./game/PracticeEngine";
 import { RealtimeClient } from "./net/RealtimeClient";
 import { loadRuntimeConfig } from "./app/runtimeConfig";
@@ -153,6 +157,7 @@ const lobby = get<HTMLElement>("lobby");
 const authScreen = get<HTMLElement>("auth-screen");
 const battleShell = get<HTMLElement>("battle-shell");
 const lobbyNote = get<HTMLElement>("lobby-note");
+const interactionTestMode = import.meta.env.DEV && new URLSearchParams(location.search).get("testBattle") === "1";
 const game = createGame("game");
 const runtimeConfig = loadRuntimeConfig();
 const cloud = new SupabaseService(runtimeConfig.supabase);
@@ -464,6 +469,7 @@ function readPracticeSave() {
 }
 
 function savePractice(force = false) {
+  if (interactionTestMode) return;
   if (activeMode !== "practice" || !snapshot) return;
   const now = Date.now();
   if (!force && now - lastPracticeSaveAt < 500) return;
@@ -795,17 +801,13 @@ game.events.on("battle:prop-target-cell", (payload: { propId: 8 | 9; targetCell:
   get("prop-target-hint").textContent = "先轻点目标，再使用对应道具。";
   commandSink?.({ type: "USE_PROP", propId: payload.propId, targetCell: payload.targetCell });
 });
-game.events.on("battle:drop", (payload: { sourceType: "reserve" | "unit" | "generalPart"; id: string; partIndex: 0 | 1 | null; targetCell: number }) => {
+game.events.on("battle:drop", (payload: BattleDropPayload) => {
   if (!snapshot || !commandSink) return;
-  if (payload.sourceType === "reserve") commandSink({ type: "DROP_RESERVE", reserveId: payload.id, targetCell: payload.targetCell });
-  else if (payload.sourceType === "generalPart" && payload.partIndex !== null) {
-    commandSink({ type: "SPLIT_GENERAL", unitId: payload.id, partIndex: payload.partIndex, targetCell: payload.targetCell });
-  } else commandSink({ type: "DROP_UNIT", unitId: payload.id, targetCell: payload.targetCell });
+  commandSink(commandForBattleDrop(payload));
 });
-game.events.on("battle:camp-drop", (payload: { sourceType: "reserve" | "unit"; id: string; targetSlot: number }) => {
+game.events.on("battle:camp-drop", (payload: BattleCampDropPayload) => {
   if (!snapshot || !commandSink) return;
-  if (payload.sourceType === "reserve") commandSink({ type: "DROP_RESERVE_TO_SLOT", reserveId: payload.id, targetSlot: payload.targetSlot });
-  else commandSink({ type: "DROP_UNIT_TO_RESERVE", unitId: payload.id, targetSlot: payload.targetSlot });
+  commandSink(commandForBattleCampDrop(payload));
 });
 
 for (const pickerId of ["active-prop-picker", "passive-prop-picker"]) {
@@ -1023,4 +1025,14 @@ async function initializeAuth() {
   }
 }
 
-void initializeAuth();
+if (interactionTestMode) {
+  authScreen.hidden = true;
+  lobby.hidden = false;
+  game.events.once("battle:scene-ready", () => {
+    practice?.stop();
+    if (practice) updateSnapshot(practice.snapshot);
+  });
+  startPractice();
+} else {
+  void initializeAuth();
+}

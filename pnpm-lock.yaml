@@ -26,6 +26,9 @@ importers:
       vite:
         specifier: 8.2.2
         version: 8.2.2(@types/node@24.10.1)(esbuild@0.28.2)(tsx@4.23.13)
+      vitest:
+        specifier: 4.1.11
+        version: 4.1.11(@types/node@24.10.1)(vite@8.2.2(@types/node@24.10.1)(esbuild@0.28.2)(tsx@4.23.13))
 
   apps/server:
     dependencies:

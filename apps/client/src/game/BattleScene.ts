@@ -4,18 +4,38 @@ import {
   type CombatEffectEvent, type HeroRarity, type MatchSnapshot, type PlayerBattleState, type PlayerSlot,
 } from "@adou/shared";
 import { allImageAssets, HERO_ASSET_KEYS, IMAGE_ASSETS, TROOP_ASSET_KEYS } from "./assets";
+import {
+  BATTLE_INPUT, BATTLE_LAYOUT, battleDropTargetAt, createPointerGesture, isTapGesture, updatePointerGesture,
+  worldDragThreshold,
+  type DragSource, type PointerGesture,
+} from "./battleInteraction";
 
 const WIDTH = GAME_CONFIG.designWidth;
 const HEIGHT = GAME_CONFIG.designHeight;
 const MAP_TOP = GAME_CONFIG.mapTop;
 const CELL = GAME_CONFIG.cellSize;
-const CAMP_X = 95;
-const CAMP_Y = 1050;
-const CAMP_CELL = 90;
+const CAMP_X = BATTLE_LAYOUT.campX;
+const CAMP_Y = BATTLE_LAYOUT.campY;
+const CAMP_CELL = BATTLE_LAYOUT.campCell;
 
-type DragSource = "reserve" | "unit" | "generalPart";
 type PieceDisplayMode = "text" | "image";
 type InspectSelection = { ownerSlot: PlayerSlot; unitId?: string; reserveId?: string };
+type DragDescriptor =
+  | { sourceType: "reserve" | "unit"; id: string }
+  | { sourceType: "generalPart"; id: string; partIndex: 0 | 1 };
+type PointerAction =
+  | {
+      type: "piece";
+      object: Phaser.GameObjects.Container;
+      inspectKind: string;
+      level: number;
+      selection?: InspectSelection;
+      drag?: DragDescriptor;
+      offsetX: number;
+      offsetY: number;
+    }
+  | { type: "recruit" };
+type ActivePointer = { gesture: PointerGesture; action: PointerAction };
 const PIECE_DISPLAY_MODE_KEY = "adou-piece-display-mode-v1";
 
 export class BattleScene extends Phaser.Scene {
@@ -27,8 +47,8 @@ export class BattleScene extends Phaser.Scene {
   private effectsLayer!: Phaser.GameObjects.Container;
   private dragLayer!: Phaser.GameObjects.Container;
   private playedEffectIds = new Set<string>();
-  /** 指针按下到越过拖动阈值前也必须保留当前棋子，避免10Hz快照将它销毁。 */
-  private pointerHeld = false;
+  /** 从按下到释放由同一场景级状态机接管，避免 10Hz 快照替换按下时的对象。 */
+  private activePointer: ActivePointer | null = null;
   private isDragging = false;
   private draggingId: string | null = null;
   private draggingType: DragSource | null = null;
@@ -46,54 +66,17 @@ export class BattleScene extends Phaser.Scene {
 
   create() {
     this.cameras.main.setBackgroundColor("#edf0df");
-    this.input.dragDistanceThreshold = 12;
     this.drawBackdrop();
     this.mapGraphics = this.add.graphics().setDepth(1);
     this.tileLayer = this.add.container(0, 0).setDepth(2);
     this.stateLayer = this.add.container(0, 0).setDepth(5);
     this.effectsLayer = this.add.container(0, 0).setDepth(80);
     this.dragLayer = this.add.container(0, 0).setDepth(1000);
-    this.input.on("dragstart", (_pointer: Phaser.Input.Pointer, object: Phaser.GameObjects.Container) => {
-      object.setData("didDrag", true);
-      // 不能在拖拽对象移出 stateLayer 前调用 renderState：它会销毁当前对象，
-      // 随后的 Phaser 容器转移便会访问一个已经失效的 scene。
-      this.selectedUnit = null;
-      this.game.events.emit("battle:inspect-hide");
-      this.isDragging = true;
-      this.pointerHeld = false;
-      this.draggingId = object.getData("sourceId") as string;
-      this.draggingType = object.getData("sourceType") as DragSource;
-      this.draggingPartIndex = (object.getData("partIndex") as 0 | 1 | undefined) ?? null;
-      this.stateLayer.remove(object, false);
-      this.dragLayer.add(object);
-      object.setScale(1.08);
-      this.renderState();
-    });
-    this.input.on("drag", (_pointer: Phaser.Input.Pointer, object: Phaser.GameObjects.Container, x: number, y: number) => {
-      object.setPosition(x, y);
-    });
-    this.input.on("dragend", (_pointer: Phaser.Input.Pointer, object: Phaser.GameObjects.Container) => {
-      const sourceType = object.getData("sourceType") as DragSource;
-      const id = object.getData("sourceId") as string;
-      const partIndex = (object.getData("partIndex") as 0 | 1 | undefined) ?? null;
-      const cell = this.pointToCell(object.x, object.y);
-      const campSlot = this.pointToCampSlot(object.x, object.y);
-      this.isDragging = false;
-      this.pointerHeld = false;
-      this.draggingId = null;
-      this.draggingType = null;
-      this.draggingPartIndex = null;
-      this.dragLayer.remove(object, true);
-      if (cell !== null) this.game.events.emit("battle:drop", { sourceType, id, partIndex, targetCell: cell });
-      else if (campSlot !== null && sourceType !== "generalPart") this.game.events.emit("battle:camp-drop", { sourceType, id, targetSlot: campSlot });
-      else this.renderState();
-    });
-    this.input.on("pointerup", () => {
-      if (!this.pointerHeld || this.isDragging) return;
-      this.pointerHeld = false;
-      this.renderState();
-    });
+    this.input.on("pointermove", this.onPointerMove, this);
+    this.input.on("pointerup", this.onPointerUp, this);
+    this.input.on("pointerupoutside", this.onPointerUpOutside, this);
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]) => {
+      if (this.activePointer) return;
       if (currentlyOver.length !== 0) return;
       if (this.pendingRoadProp) {
         const targetCell = this.pointToCell(pointer.worldX, pointer.worldY);
@@ -108,12 +91,169 @@ export class BattleScene extends Phaser.Scene {
     this.game.events.on("battle:piece-mode", this.onPieceDisplayMode, this);
     this.game.events.on("battle:inspect-clear", this.onInspectClear, this);
     this.game.events.on("battle:prop-target-mode", this.onPropTargetMode, this);
+    this.game.events.on(Phaser.Core.Events.BLUR, this.onPointerCancel, this);
+    this.game.events.emit("battle:scene-ready");
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.input.off("pointermove", this.onPointerMove, this);
+      this.input.off("pointerup", this.onPointerUp, this);
+      this.input.off("pointerupoutside", this.onPointerUpOutside, this);
       this.game.events.off("battle:snapshot", this.onSnapshot, this);
       this.game.events.off("battle:piece-mode", this.onPieceDisplayMode, this);
       this.game.events.off("battle:inspect-clear", this.onInspectClear, this);
       this.game.events.off("battle:prop-target-mode", this.onPropTargetMode, this);
+      this.game.events.off(Phaser.Core.Events.BLUR, this.onPointerCancel, this);
+      this.resetPointerState();
     });
+  }
+
+  private pointerPoint(pointer: Phaser.Input.Pointer) {
+    return { x: pointer.worldX, y: pointer.worldY };
+  }
+
+  private pointerThreshold(pointer: Phaser.Input.Pointer) {
+    return worldDragThreshold(pointer.wasTouch, this.scale.displayScale);
+  }
+
+  private beginPiecePointer(
+    pointer: Phaser.Input.Pointer,
+    object: Phaser.GameObjects.Container,
+    inspectKind: string,
+    level: number,
+    selection?: InspectSelection,
+    drag?: DragDescriptor,
+  ) {
+    if (this.activePointer || !pointer.primaryDown) return;
+    const point = this.pointerPoint(pointer);
+    this.activePointer = {
+      gesture: createPointerGesture(pointer.id, point, this.pointerThreshold(pointer)),
+      action: {
+        type: "piece", object, inspectKind, level, selection, drag,
+        offsetX: object.x - point.x, offsetY: object.y - point.y,
+      },
+    };
+  }
+
+  private beginRecruitPointer(pointer: Phaser.Input.Pointer) {
+    if (this.activePointer || !pointer.primaryDown) return;
+    const point = this.pointerPoint(pointer);
+    this.activePointer = {
+      gesture: createPointerGesture(pointer.id, point, this.pointerThreshold(pointer)),
+      action: { type: "recruit" },
+    };
+  }
+
+  private onPointerMove(pointer: Phaser.Input.Pointer) {
+    if (!this.activePointer) return;
+    const update = updatePointerGesture(this.activePointer.gesture, pointer.id, this.pointerPoint(pointer));
+    if (!update.accepted) return;
+    this.activePointer.gesture = update.gesture;
+    const action = this.activePointer.action;
+    if (action.type !== "piece" || !action.drag) return;
+    if (update.beganDrag) this.beginPieceDrag(action);
+    if (this.isDragging && action.object.active) {
+      action.object.setPosition(pointer.worldX + action.offsetX, pointer.worldY + action.offsetY);
+    }
+  }
+
+  private beginPieceDrag(action: Extract<PointerAction, { type: "piece" }>) {
+    if (!action.drag || !action.object.active || action.object.parentContainer !== this.stateLayer) {
+      this.onPointerCancel();
+      return;
+    }
+    this.selectedUnit = null;
+    this.game.events.emit("battle:inspect-hide");
+    this.isDragging = true;
+    this.draggingId = action.drag.id;
+    this.draggingType = action.drag.sourceType;
+    this.draggingPartIndex = action.drag.sourceType === "generalPart" ? action.drag.partIndex : null;
+    this.stateLayer.remove(action.object, false);
+    this.dragLayer.add(action.object);
+    action.object.setScale(1.08).setRotation(0);
+    this.game.canvas.classList.add("is-dragging");
+    this.game.events.emit("battle:interaction-state", { phase: "dragging", sourceType: action.drag.sourceType, id: action.drag.id });
+    this.renderState();
+  }
+
+  private onPointerUp(pointer: Phaser.Input.Pointer) {
+    this.finishPointer(pointer, true);
+  }
+
+  private onPointerUpOutside(pointer: Phaser.Input.Pointer) {
+    this.finishPointer(pointer, false);
+  }
+
+  private finishPointer(pointer: Phaser.Input.Pointer, releasedInside: boolean) {
+    if (!this.activePointer || this.activePointer.gesture.pointerId !== pointer.id) return;
+    const update = updatePointerGesture(this.activePointer.gesture, pointer.id, this.pointerPoint(pointer));
+    this.activePointer.gesture = update.gesture;
+    if (update.beganDrag && this.activePointer.action.type === "piece" && this.activePointer.action.drag) {
+      this.beginPieceDrag(this.activePointer.action);
+    }
+    if (!this.activePointer) return;
+    const active = { ...this.activePointer, gesture: update.gesture };
+    const wasDragging = this.isDragging;
+    this.activePointer = null;
+
+    const drag = active.action.type === "piece" ? active.action.drag : undefined;
+    if (active.action.type === "piece" && wasDragging && drag) {
+      const { action } = active;
+      if (action.object.active) action.object.setPosition(pointer.worldX + action.offsetX, pointer.worldY + action.offsetY);
+      const target = releasedInside && action.object.active
+        ? battleDropTargetAt({ x: action.object.x, y: action.object.y }, drag.sourceType)
+        : { type: "outside" } as const;
+      this.resetDragState(action.object);
+      if (target.type === "cell") {
+        if (drag.sourceType === "generalPart") {
+          this.game.events.emit("battle:drop", { ...drag, targetCell: target.targetCell });
+        } else {
+          this.game.events.emit("battle:drop", { sourceType: drag.sourceType, id: drag.id, targetCell: target.targetCell });
+        }
+      } else if (target.type === "camp" && drag.sourceType !== "generalPart") {
+        this.game.events.emit("battle:camp-drop", { sourceType: drag.sourceType, id: drag.id, targetSlot: target.targetSlot });
+      }
+      // 联机命令的新快照可能稍后才到；先用旧快照恢复原位，避免棋子在网络往返期间消失。
+      this.renderState();
+      return;
+    }
+
+    this.resetDragState();
+    if (releasedInside && isTapGesture(active.gesture)) {
+      if (active.action.type === "recruit") {
+        this.game.events.emit("battle:recruit");
+        return;
+      }
+      this.selectedUnit = active.action.selection ?? null;
+      this.game.events.emit("battle:inspect", {
+        kind: active.action.inspectKind, level: active.action.level, ...active.action.selection,
+      });
+      this.renderState();
+      return;
+    }
+    this.renderState();
+  }
+
+  private onPointerCancel() {
+    if (!this.activePointer) return;
+    const object = this.activePointer.action.type === "piece" ? this.activePointer.action.object : undefined;
+    this.activePointer = null;
+    this.resetDragState(object);
+    this.renderState();
+  }
+
+  private resetDragState(object?: Phaser.GameObjects.Container) {
+    this.isDragging = false;
+    this.draggingId = null;
+    this.draggingType = null;
+    this.draggingPartIndex = null;
+    this.game.canvas.classList.remove("is-dragging");
+    if (object?.active && object.parentContainer === this.dragLayer) this.dragLayer.remove(object, true);
+    this.game.events.emit("battle:interaction-state", { phase: "idle" });
+  }
+
+  private resetPointerState() {
+    const object = this.activePointer?.action.type === "piece" ? this.activePointer.action.object : undefined;
+    this.activePointer = null;
+    this.resetDragState(object);
   }
 
   private onPropTargetMode(propId: 8 | 9 | null) {
@@ -160,7 +300,7 @@ export class BattleScene extends Phaser.Scene {
     const previousRoom = this.snapshot?.roomId;
     this.snapshot = snapshot;
     this.slot = slot;
-    if (!this.pointerHeld || this.isDragging) this.renderState();
+    if (!this.activePointer || this.isDragging) this.renderState();
     this.playCombatEvents(snapshot.combatEvents ?? []);
     if (previous && previousRoom === snapshot.roomId) this.playSynthesisDiff(previous.players[slot], snapshot.players[slot]);
   }
@@ -680,7 +820,7 @@ export class BattleScene extends Phaser.Scene {
     const enough = mine.buns + mine.reserve.length >= mine.recruitCost;
     const button = this.add.rectangle(320, 1222, 264, 112, enough ? 0xb96549 : 0x9a8f83, 1)
       .setStrokeStyle(5, 0xe7c57d, 1).setInteractive({ useHandCursor: enough });
-    if (enough) button.on("pointerup", () => this.game.events.emit("battle:recruit"));
+    if (enough) button.on("pointerdown", (pointer: Phaser.Input.Pointer) => this.beginRecruitPointer(pointer));
     add(button);
     add(this.add.text(320, 1202, "征 兵", { fontFamily: '"KaiTi", serif', fontSize: "42px", color: "#fff4d1", fontStyle: "bold" }).setOrigin(0.5));
     add(this.add.image(286, 1246, IMAGE_ASSETS.ui.bun.key).setDisplaySize(36, 36));
@@ -805,22 +945,13 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private enableInspect(container: Phaser.GameObjects.Container, kind: string, level: number, selection?: InspectSelection) {
-    container.setInteractive({ useHandCursor: true });
+    container.setInteractive(
+      new Phaser.Geom.Circle(container.width / 2, container.height / 2, BATTLE_INPUT.tokenHitRadius),
+      Phaser.Geom.Circle.Contains,
+    );
+    if (container.input) container.input.cursor = "pointer";
     container.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-      this.pointerHeld = true;
-      container.setData({ tapX: pointer.worldX, tapY: pointer.worldY, tapPointerId: pointer.id, didDrag: false });
-    });
-    container.on("pointerup", (pointer: Phaser.Input.Pointer) => {
-      this.pointerHeld = false;
-      if (container.getData("tapPointerId") !== pointer.id || container.getData("didDrag")) return;
-      const distance = Phaser.Math.Distance.Between(
-        Number(container.getData("tapX")), Number(container.getData("tapY")), pointer.worldX, pointer.worldY,
-      );
-      if (distance <= 10) {
-        this.selectedUnit = selection ?? null;
-        this.game.events.emit("battle:inspect", { kind, level, ...selection });
-        this.renderState();
-      }
+      this.beginPiecePointer(pointer, container, kind, level, selection);
     });
   }
 
@@ -835,8 +966,20 @@ export class BattleScene extends Phaser.Scene {
     inspectSelection?: InspectSelection,
   ) {
     container.setData({ sourceType, sourceId, kind, partIndex });
-    this.enableInspect(container, inspectKind, level, inspectSelection);
-    this.input.setDraggable(container);
+    container.setInteractive(
+      new Phaser.Geom.Circle(container.width / 2, container.height / 2, BATTLE_INPUT.tokenHitRadius),
+      Phaser.Geom.Circle.Contains,
+    );
+    if (container.input) container.input.cursor = "grab";
+    if (sourceType === "generalPart" && partIndex === undefined) {
+      throw new Error("两格武将拖动缺少姓名字索引");
+    }
+    const drag = sourceType === "generalPart"
+      ? { sourceType, id: sourceId, partIndex: partIndex as 0 | 1 } satisfies DragDescriptor
+      : { sourceType, id: sourceId } satisfies DragDescriptor;
+    container.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      this.beginPiecePointer(pointer, container, inspectKind, level, inspectSelection, drag);
+    });
   }
 
   private drawEnemies(player: PlayerBattleState, mirror: boolean) {
@@ -903,14 +1046,8 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private pointToCell(x: number, y: number) {
-    if (x < 0 || x >= WIDTH || y < MAP_TOP || y >= MAP_TOP + GAME_CONFIG.rows * CELL) return null;
-    const column = Math.floor(x / CELL); const row = Math.floor((y - MAP_TOP) / CELL);
-    return cellIndex(column, row);
-  }
-
-  private pointToCampSlot(x: number, y: number) {
-    if (x < CAMP_X || x >= CAMP_X + GAME_CONFIG.reserveSize * CAMP_CELL || y < CAMP_Y || y >= CAMP_Y + CAMP_CELL) return null;
-    return Math.floor((x - CAMP_X) / CAMP_CELL);
+    const target = battleDropTargetAt({ x, y }, "generalPart");
+    return target.type === "cell" ? target.targetCell : null;
   }
 
   private drawResult() {

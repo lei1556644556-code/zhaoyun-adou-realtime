@@ -145,6 +145,7 @@ button { touch-action: manipulation; }
 .playfield-card { width: min(var(--game-width), 100%); min-width: 0; overflow: hidden; border: 1px solid rgba(225,202,151,.55); background: #edf0df; box-shadow: 0 20px 55px rgba(0,0,0,.3); transition: width .16s ease; }
 .game-frame { width: 100%; aspect-ratio: 640 / 1386; touch-action: none; user-select: none; }
 .game-frame canvas { display: block; width: 100% !important; height: 100% !important; touch-action: none; }
+.game-frame canvas.is-dragging { cursor: grabbing !important; }
 .tactics-panel { padding: 22px; border: 1px solid rgba(225,202,151,.45); border-radius: 10px; background: rgba(248,242,226,.96); box-shadow: 0 16px 44px rgba(0,0,0,.22); }
 .tactics-panel h2 { margin: 0 0 18px; font: 800 34px/1 "STKaiti", "KaiTi", serif; color: #365a4d; }
 .battle-data { margin: 0; border-top: 1px solid var(--line); }
@@ -268,15 +269,18 @@ button { touch-action: manipulation; }
   .lead { margin: 18px 0 22px; font-size: 14px; }
   .primary-actions, .room-actions { flex-direction: column; }
   .join-row .btn { flex: 0 0 78px; padding-inline: 10px; }
-  .battle-toolbar { position: sticky; z-index: 20; top: 0; min-height: 44px; margin: 0; gap: 8px; border-width: 0 0 1px; border-radius: 0; padding: 6px 9px; }
+  .battle-toolbar { position: sticky; z-index: 20; top: 0; min-height: 44px; margin: 0; gap: 6px; border-width: 0 0 1px; border-radius: 0; padding: 6px 9px; touch-action: pan-y; }
+  .battle-toolbar > div:first-child { flex: 0 0 auto; }
+  .battle-toolbar > div:first-child b { font-size: 14px; white-space: nowrap; }
   .battle-toolbar > div:first-child span { display: none; }
   .toolbar-room strong { font-size: 15px; }
   .toolbar-room button { display: none; }
+  .network-pill { margin-left: 0; }
   .network-pill b { display: none; }
-  .piece-mode-toggle { padding-inline: 8px; }
+  .piece-mode-toggle { padding-inline: 6px; }
   .zoom-controls { margin-left: auto; }
   #zoom-fit { min-width: 63px; padding-inline: 6px; }
-  .exit-match { padding-inline: 8px; font-size: 12px; }
+  .exit-match { padding-inline: 6px; font-size: 11px; white-space: nowrap; }
   .battle-layout { display: block; }
   .playfield-card { width: min(var(--game-width), 100%); margin-inline: auto; border: 0; box-shadow: none; }
   .tactics-panel { width: 100%; border: 0; border-radius: 0; box-shadow: none; }
