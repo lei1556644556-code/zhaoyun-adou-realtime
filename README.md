@@ -57,7 +57,7 @@ pnpm verify
 
 ## 发布试玩链接
 
-仓库包含 GitHub Pages 工作流。先在 Settings → Pages 中选择 **GitHub Actions**，并按 `docs/operations/ENVIRONMENTS.md` 配置生产仓库变量。生产发布不会随 main 自动发生；维护者需手动运行 `Deploy GitHub Pages`，输入已通过验收的完整 commit SHA 或 `vX.Y.Z` 标签。工作流会对该 ref 重新执行发布门禁，旧标签也是静态客户端的回滚入口。
+仓库包含 GitHub Pages 工作流。先在 Settings → Pages 中选择 **GitHub Actions**，并按 `docs/operations/ENVIRONMENTS.md` 配置生产仓库变量。受保护的 `main` 分支每次推送会触发 `Deploy GitHub Pages`，工作流会对该精确提交重新执行发布门禁。维护者也可从 `main` 手动运行工作流，输入已验收的完整 commit SHA 或 `vX.Y.Z` 标签；旧标签仍是静态客户端的回滚入口。
 
 PR 和 main 的 `CI` 工作流会生成隔离的静态 Preview artifact，但默认不连接生产后端。完整账号和双人预览需要独立 Preview Supabase 项目。详细集成顺序、迁移和回滚见 `docs/operations/`。
 

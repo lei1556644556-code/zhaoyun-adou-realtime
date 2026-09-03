@@ -12,8 +12,8 @@
 
 1. 确认 `pnpm verify`、07 验收和 Preview 迁移演练通过。
 2. 同步 workspace 版本，更新变更说明并提交。
-3. 在 main 的精确提交创建签名/受保护的 `vX.Y.Z` 标签。
-4. 推送 `vX.Y.Z` 标签触发 `Deploy GitHub Pages`，或手动选择精确 SHA/标签；验证 `/release-manifest.json` 与目标 SHA 一致。
+3. 将验收通过的精确提交推送到受保护的 `main`，触发 `Deploy GitHub Pages`。
+4. 在已发布提交创建签名/受保护的 `vX.Y.Z` 标签；也可从 `main` 手动选择精确 SHA/标签重建；验证 `/release-manifest.json` 与目标 SHA 一致。
 5. 验证首页、登录、人机、房间、云存档和刷新恢复，保存工作流与验收链接。
 
 ## 回滚
