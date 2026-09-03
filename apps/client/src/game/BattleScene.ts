@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import {
-  GAME_CONFIG, GENERALS, MAP_LAYOUTS, SOLDIERS, cellCode, cellCoords, cellIndex, pathPoint,
+  GAME_CONFIG, GENERALS, MAP_LAYOUTS, SOLDIERS, attackRangeIntersectsCell, cellCode, cellCoords, cellIndex, pathPoint,
   type CombatEffectEvent, type HeroRarity, type MatchSnapshot, type PlayerBattleState, type PlayerSlot,
 } from "@adou/shared";
 import { allImageAssets, HERO_ASSET_KEYS, IMAGE_ASSETS, TROOP_ASSET_KEYS } from "./assets";
@@ -15,6 +15,7 @@ const CAMP_CELL = 90;
 
 type DragSource = "reserve" | "unit" | "generalPart";
 type PieceDisplayMode = "text" | "image";
+type InspectSelection = { ownerSlot: PlayerSlot; unitId?: string; reserveId?: string };
 const PIECE_DISPLAY_MODE_KEY = "adou-piece-display-mode-v1";
 
 export class BattleScene extends Phaser.Scene {
@@ -30,6 +31,8 @@ export class BattleScene extends Phaser.Scene {
   private draggingId: string | null = null;
   private draggingType: DragSource | null = null;
   private draggingPartIndex: 0 | 1 | null = null;
+  private selectedUnit: InspectSelection | null = null;
+  private pendingRoadProp: 8 | 9 | null = null;
   private mapSignature = "";
   private pieceDisplayMode: PieceDisplayMode = localStorage.getItem(PIECE_DISPLAY_MODE_KEY) === "text" ? "text" : "image";
 
@@ -41,6 +44,7 @@ export class BattleScene extends Phaser.Scene {
 
   create() {
     this.cameras.main.setBackgroundColor("#edf0df");
+    this.input.dragDistanceThreshold = 12;
     this.drawBackdrop();
     this.mapGraphics = this.add.graphics().setDepth(1);
     this.tileLayer = this.add.container(0, 0).setDepth(2);
@@ -49,6 +53,7 @@ export class BattleScene extends Phaser.Scene {
     this.dragLayer = this.add.container(0, 0).setDepth(1000);
     this.input.on("dragstart", (_pointer: Phaser.Input.Pointer, object: Phaser.GameObjects.Container) => {
       object.setData("didDrag", true);
+      this.clearInspection(true);
       this.isDragging = true;
       this.draggingId = object.getData("sourceId") as string;
       this.draggingType = object.getData("sourceType") as DragSource;
@@ -76,12 +81,43 @@ export class BattleScene extends Phaser.Scene {
       else if (campSlot !== null && sourceType !== "generalPart") this.game.events.emit("battle:camp-drop", { sourceType, id, targetSlot: campSlot });
       else this.renderState();
     });
+    this.input.on("pointerdown", (pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]) => {
+      if (currentlyOver.length !== 0) return;
+      if (this.pendingRoadProp) {
+        const targetCell = this.pointToCell(pointer.worldX, pointer.worldY);
+        if (targetCell !== null) this.game.events.emit("battle:prop-target-cell", { propId: this.pendingRoadProp, targetCell });
+        this.pendingRoadProp = null;
+        this.renderState();
+        return;
+      }
+      this.clearInspection(true);
+    });
     this.game.events.on("battle:snapshot", this.onSnapshot, this);
     this.game.events.on("battle:piece-mode", this.onPieceDisplayMode, this);
+    this.game.events.on("battle:inspect-clear", this.onInspectClear, this);
+    this.game.events.on("battle:prop-target-mode", this.onPropTargetMode, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.game.events.off("battle:snapshot", this.onSnapshot, this);
       this.game.events.off("battle:piece-mode", this.onPieceDisplayMode, this);
+      this.game.events.off("battle:inspect-clear", this.onInspectClear, this);
+      this.game.events.off("battle:prop-target-mode", this.onPropTargetMode, this);
     });
+  }
+
+  private onPropTargetMode(propId: 8 | 9 | null) {
+    this.pendingRoadProp = propId;
+    this.renderState();
+  }
+
+  private onInspectClear() {
+    this.clearInspection(false);
+  }
+
+  private clearInspection(hidePanel: boolean) {
+    if (!this.selectedUnit && !hidePanel) return;
+    this.selectedUnit = null;
+    if (hidePanel) this.game.events.emit("battle:inspect-hide");
+    this.renderState();
   }
 
   private onPieceDisplayMode(mode: PieceDisplayMode) {
@@ -135,6 +171,7 @@ export class BattleScene extends Phaser.Scene {
     this.drawMap();
     const mine = this.snapshot.players[this.slot];
     const opponent = this.snapshot.players[this.slot === 0 ? 1 : 0];
+    this.drawSelectedRange();
     this.drawHud(mine, opponent);
     this.drawStructures(mine, opponent);
     this.drawEnemies(mine, false);
@@ -142,11 +179,69 @@ export class BattleScene extends Phaser.Scene {
     this.drawUnits(opponent, true, false);
     this.drawUnits(mine, false, true);
     this.drawCamp(mine);
+    this.drawPropRoadHints();
     if (this.isDragging && this.draggingType) {
       const dragged = this.dragLayer.getAt(0) as Phaser.GameObjects.Container | null;
       this.drawDropHints(this.draggingType, dragged?.getData("kind") as string ?? "");
     }
     if (this.snapshot.phase === "finished") this.drawResult();
+  }
+
+  private drawSelectedRange() {
+    if (!this.snapshot || !this.selectedUnit) return;
+    if (!this.selectedUnit.unitId) return;
+    const owner = this.snapshot.players[this.selectedUnit.ownerSlot];
+    const unit = owner.units.find((candidate) => candidate.id === this.selectedUnit?.unitId);
+    const stats = unit ? (GENERALS[unit.kind] ?? SOLDIERS[unit.kind as keyof typeof SOLDIERS]) : undefined;
+    if (!unit || !stats) {
+      this.selectedUnit = null;
+      this.game.events.emit("battle:inspect-hide");
+      return;
+    }
+    const mirror = owner.slot !== this.slot;
+    const first = cellCoords(unit.cell);
+    const second = unit.secondaryCell === undefined ? first : cellCoords(unit.secondaryCell);
+    const center = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
+    const range = stats.range * (unit.rangeMultiplier ?? 1);
+    const pulse = 0.2 + Math.sin(this.snapshot.tick * 0.35) * 0.04;
+    const color = mirror ? 0x7ec7d0 : 0xffd35c;
+    const graphics = this.add.graphics();
+    for (let y = 0; y < GAME_CONFIG.rows; y += 1) for (let x = 0; x < GAME_CONFIG.columns; x += 1) {
+      const code = cellCode(this.snapshot.mapIndex, cellIndex(x, y));
+      const roadSide = Number(code[2]);
+      if (Number(code[0]) !== 0 || roadSide !== (mirror ? 1 : 0)) continue;
+      const canonicalX = mirror ? GAME_CONFIG.columns - 1 - x : x;
+      const canonicalY = mirror ? GAME_CONFIG.rows - 1 - y : y;
+      if (!attackRangeIntersectsCell(center, { x: canonicalX, y: canonicalY }, range)) continue;
+      const px = x * CELL + 7;
+      const py = MAP_TOP + y * CELL + 7;
+      graphics.fillStyle(color, pulse).fillRoundedRect(px, py, CELL - 14, CELL - 14, 9);
+      graphics.lineStyle(3, color, 0.88).strokeRoundedRect(px, py, CELL - 14, CELL - 14, 9);
+    }
+    const displayedFirst = mirror
+      ? { x: GAME_CONFIG.columns - 1 - first.x, y: GAME_CONFIG.rows - 1 - first.y }
+      : first;
+    const displayedSecond = mirror
+      ? { x: GAME_CONFIG.columns - 1 - second.x, y: GAME_CONFIG.rows - 1 - second.y }
+      : second;
+    for (const point of [displayedFirst, displayedSecond]) {
+      graphics.lineStyle(5, color, 1).strokeCircle((point.x + 0.5) * CELL, MAP_TOP + (point.y + 0.5) * CELL, 36);
+    }
+    this.stateLayer.add(graphics);
+  }
+
+  private drawPropRoadHints() {
+    if (!this.snapshot || !this.pendingRoadProp) return;
+    const graphics = this.add.graphics();
+    for (let cell = 0; cell < GAME_CONFIG.columns * GAME_CONFIG.rows; cell += 1) {
+      if (cellCode(this.snapshot.mapIndex, cell) !== "0_0") continue;
+      const point = cellCoords(cell);
+      graphics.fillStyle(this.pendingRoadProp === 8 ? 0xe6bd54 : 0xd7624f, 0.28)
+        .fillRoundedRect(point.x * CELL + 6, MAP_TOP + point.y * CELL + 6, CELL - 12, CELL - 12, 10);
+      graphics.lineStyle(4, this.pendingRoadProp === 8 ? 0xffdc75 : 0xff8a70, 0.96)
+        .strokeRoundedRect(point.x * CELL + 6, MAP_TOP + point.y * CELL + 6, CELL - 12, CELL - 12, 10);
+    }
+    this.stateLayer.add(graphics);
   }
 
   private drawMap() {
@@ -235,7 +330,21 @@ export class BattleScene extends Phaser.Scene {
     adou((last[0] + 0.5) * CELL, MAP_TOP + (last[1] + 0.5) * CELL, false);
     fort((GAME_CONFIG.columns - 1 - first[0] + 0.5) * CELL, MAP_TOP + (GAME_CONFIG.rows - 1 - first[1] + 0.5) * CELL, true);
     adou((GAME_CONFIG.columns - 1 - last[0] + 0.5) * CELL, MAP_TOP + (GAME_CONFIG.rows - 1 - last[1] + 0.5) * CELL, true);
-    void mine; void opponent;
+    const placedProps = (player: PlayerBattleState, mirror: boolean) => {
+      for (const placed of player.props?.placed ?? []) {
+        const source = cellCoords(placed.cell);
+        const x = mirror ? GAME_CONFIG.columns - 1 - source.x : source.x;
+        const y = mirror ? GAME_CONFIG.rows - 1 - source.y : source.y;
+        const px = (x + 0.5) * CELL; const py = MAP_TOP + (y + 0.5) * CELL;
+        add(this.add.circle(px, py, 24, placed.propId === 8 ? 0x5d3e2d : 0x75352e, 0.94)
+          .setStrokeStyle(3, placed.propId === 8 ? 0xffd46d : 0xff846b, 1));
+        add(this.add.text(px, py, placed.propId === 8 ? "陷" : "雷", {
+          fontFamily: '"KaiTi", serif', fontSize: "26px", color: "#fff0c4", fontStyle: "bold",
+        }).setOrigin(0.5));
+      }
+    };
+    placedProps(mine, false);
+    placedProps(opponent, true);
   }
 
   private ownPiecePoint(kind: string, level: number) {
@@ -518,6 +627,7 @@ export class BattleScene extends Phaser.Scene {
 
   private drawCamp(mine: PlayerBattleState) {
     const add = (object: Phaser.GameObjects.GameObject) => { this.stateLayer.add(object); return object; };
+    const hasGoldShovels = Boolean(mine.props?.loadout.passive.some((prop) => prop.id === 24));
     add(this.add.circle(50, CAMP_Y + 44, 37, 0x4c6255, 0.94).setStrokeStyle(3, 0xd8bb78, 1));
     add(this.add.image(50, CAMP_Y + 44, IMAGE_ASSETS.ui.camp.key).setDisplaySize(72, 72));
     for (let index = 0; index < GAME_CONFIG.reserveSize; index += 1) {
@@ -546,13 +656,13 @@ export class BattleScene extends Phaser.Scene {
         }).setOrigin(0.5));
         ([item.slot, item.secondarySlot] as const).forEach((slot, partIndex) => {
           const token = this.createToken(CAMP_X + slot * CAMP_CELL + CAMP_CELL / 2, CAMP_Y + CAMP_CELL / 2, parts[partIndex] ?? "", item.level, false, true, rarity);
-          this.enableDrag(token, "reserve", item.id, item.kind, item.level);
+          this.enableDrag(token, "reserve", item.id, item.kind, item.level, undefined, item.kind, { ownerSlot: this.slot, reserveId: item.id });
           add(token);
         });
         continue;
       }
-      const token = this.createToken(CAMP_X + item.slot * CAMP_CELL + CAMP_CELL / 2, CAMP_Y + CAMP_CELL / 2, item.kind, item.level, false);
-      this.enableDrag(token, "reserve", item.id, item.kind, item.level);
+      const token = this.createToken(CAMP_X + item.slot * CAMP_CELL + CAMP_CELL / 2, CAMP_Y + CAMP_CELL / 2, item.kind, item.level, false, false, undefined, hasGoldShovels);
+      this.enableDrag(token, "reserve", item.id, item.kind, item.level, undefined, item.kind, { ownerSlot: this.slot, reserveId: item.id });
       add(token);
     }
     const enough = mine.buns + mine.reserve.length >= mine.recruitCost;
@@ -572,6 +682,7 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private drawUnits(player: PlayerBattleState, mirror: boolean, draggable: boolean) {
+    const hasGoldShovels = Boolean(player.props?.loadout.passive.some((prop) => prop.id === 24));
     for (const unit of player.units) {
       if (unit.secondaryCell !== undefined && GENERALS[unit.kind]) {
         this.drawGeneral(unit, mirror, draggable);
@@ -581,9 +692,10 @@ export class BattleScene extends Phaser.Scene {
       const point = cellCoords(unit.cell);
       const y = mirror ? GAME_CONFIG.rows - 1 - point.y : point.y;
       const x = mirror ? GAME_CONFIG.columns - 1 - point.x : point.x;
-      const token = this.createToken((x + 0.5) * CELL, MAP_TOP + (y + 0.5) * CELL, unit.kind, unit.level, mirror);
-      if (draggable) this.enableDrag(token, "unit", unit.id, unit.kind, unit.level);
-      else this.enableInspect(token, unit.kind, unit.level);
+      const token = this.createToken((x + 0.5) * CELL, MAP_TOP + (y + 0.5) * CELL, unit.kind, unit.level, mirror, false, undefined, hasGoldShovels);
+      const selection = { unitId: unit.id, ownerSlot: player.slot } satisfies InspectSelection;
+      if (draggable) this.enableDrag(token, "unit", unit.id, unit.kind, unit.level, undefined, unit.kind, selection);
+      else this.enableInspect(token, unit.kind, unit.level, selection);
       this.stateLayer.add(token);
     }
   }
@@ -625,13 +737,14 @@ export class BattleScene extends Phaser.Scene {
       if (splitting && this.draggingPartIndex === partIndex) return;
       const point = points[partIndex];
       const token = this.createToken(point.x, point.y, parts[partIndex], unit.level, mirror, true, general.rarity);
-      if (draggable) this.enableDrag(token, "generalPart", unit.id, parts[partIndex], unit.level, partIndex, unit.kind);
-      else this.enableInspect(token, unit.kind, unit.level);
+      const selection = { unitId: unit.id, ownerSlot: mirror ? (this.slot === 0 ? 1 : 0) : this.slot } satisfies InspectSelection;
+      if (draggable) this.enableDrag(token, "generalPart", unit.id, parts[partIndex], unit.level, partIndex, unit.kind, selection);
+      else this.enableInspect(token, unit.kind, unit.level, selection);
       this.stateLayer.add(token);
     });
   }
 
-  private createToken(x: number, y: number, kind: string, level: number, opponent: boolean, generalPart = false, rarity?: HeroRarity) {
+  private createToken(x: number, y: number, kind: string, level: number, opponent: boolean, generalPart = false, rarity?: HeroRarity, goldShovel = false) {
     const seed = [...kind].reduce((sum, character) => sum + character.charCodeAt(0), 0);
     const bob = this.snapshot && !this.isDragging ? Math.sin((this.snapshot.tick + seed) * 0.2) * 1.6 : 0;
     const container = this.add.container(x, y + bob).setRotation(this.snapshot && !this.isDragging ? Math.sin((this.snapshot.tick + seed) * 0.13) * 0.018 : 0);
@@ -650,10 +763,17 @@ export class BattleScene extends Phaser.Scene {
         container.add(this.add.circle(Math.cos(angle) * 38, Math.sin(angle) * 38, level >= 5 ? 4.5 : 3.2, rarityColor, 1));
       }
     }
-    const disc = this.add.circle(0, 0, isHero ? 35 : 33, opponent ? 0x4d6b6b : isHero ? heroFill : isSoldier ? 0x52765b : 0x78634d, 1)
-      .setStrokeStyle(isHero ? 4.5 : 3.5, isHero ? rarityColor : 0xf7edcd, 1);
+    const disc = this.add.circle(0, 0, isHero ? 35 : 33,
+      goldShovel && kind === "铲子" ? 0x9b6a22 : opponent ? 0x4d6b6b : isHero ? heroFill : isSoldier ? 0x52765b : 0x78634d, 1)
+      .setStrokeStyle(isHero ? 4.5 : goldShovel && kind === "铲子" ? 5 : 3.5,
+        isHero ? rarityColor : goldShovel && kind === "铲子" ? 0xffdc69 : 0xf7edcd, 1);
     container.add(disc);
-    if (artKey) container.add(this.add.image(0, 2, artKey).setDisplaySize(isHero ? 70 : 66, isHero ? 70 : 66).setAlpha(0.96));
+    if (goldShovel && kind === "铲子") container.add(this.add.circle(0, 0, 28, 0xffd65a, 0.18));
+    if (artKey) {
+      const art = this.add.image(0, 2, artKey).setDisplaySize(isHero ? 70 : 66, isHero ? 70 : 66).setAlpha(0.96);
+      if (goldShovel && kind === "铲子") art.setTint(0xffd36a);
+      container.add(art);
+    }
     const compactLabel = Boolean(artKey);
     if (compactLabel) container.add(this.add.circle(-24, -23, 17, opponent ? 0x38575a : 0x344c41, 0.98).setStrokeStyle(2.5, rarityColor, 0.95));
     const fontSize = compactLabel ? 24 : kind.length > 1 ? 29 : generalPart ? 45 : 43;
@@ -661,6 +781,7 @@ export class BattleScene extends Phaser.Scene {
       fontFamily: '"STKaiti", "KaiTi", "Microsoft YaHei", serif', fontSize: `${fontSize}px`, color: "#fff8dc", fontStyle: "bold",
       stroke: compactLabel ? "#263b32" : "#2b312d", strokeThickness: compactLabel ? 3 : 2,
     }).setOrigin(0.5);
+    if (goldShovel && kind === "铲子") label.setColor("#fff0a3").setStroke("#5d3510", 4);
     container.add(label);
     if (kind !== "铲子" && (isHero || isSoldier)) {
       const badge = this.add.circle(26, 25, 15, level >= 4 ? rarityColor : 0xb24738, 1).setStrokeStyle(2.5, 0xffefbc, 1);
@@ -671,7 +792,7 @@ export class BattleScene extends Phaser.Scene {
     return container;
   }
 
-  private enableInspect(container: Phaser.GameObjects.Container, kind: string, level: number) {
+  private enableInspect(container: Phaser.GameObjects.Container, kind: string, level: number, selection?: InspectSelection) {
     container.setInteractive({ useHandCursor: true });
     container.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       container.setData({ tapX: pointer.worldX, tapY: pointer.worldY, tapPointerId: pointer.id, didDrag: false });
@@ -681,7 +802,11 @@ export class BattleScene extends Phaser.Scene {
       const distance = Phaser.Math.Distance.Between(
         Number(container.getData("tapX")), Number(container.getData("tapY")), pointer.worldX, pointer.worldY,
       );
-      if (distance <= 10) this.game.events.emit("battle:inspect", { kind, level });
+      if (distance <= 10) {
+        this.selectedUnit = selection ?? null;
+        this.game.events.emit("battle:inspect", { kind, level, ...selection });
+        this.renderState();
+      }
     });
   }
 
@@ -693,9 +818,10 @@ export class BattleScene extends Phaser.Scene {
     level: number,
     partIndex?: 0 | 1,
     inspectKind = kind,
+    inspectSelection?: InspectSelection,
   ) {
     container.setData({ sourceType, sourceId, kind, partIndex });
-    this.enableInspect(container, inspectKind, level);
+    this.enableInspect(container, inspectKind, level, inspectSelection);
     this.input.setDraggable(container);
   }
 

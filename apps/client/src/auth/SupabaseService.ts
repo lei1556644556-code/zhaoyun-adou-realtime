@@ -1,20 +1,47 @@
 import { createClient, type Session, type SupabaseClient } from "@supabase/supabase-js";
-import type { MatchSnapshot } from "@adou/shared";
+import type { MatchSnapshot, PropLoadout } from "@adou/shared";
 
 const DEFAULT_SUPABASE_URL = "https://dkaabuxszrbnnrajnoaa.supabase.co";
 const DEFAULT_SUPABASE_KEY = "sb_publishable_8UjZAjC-Ts2NiP8_NpmFdA_jv-CEzhd";
 const PROFILE_TABLE = "zhaoyun_adou_profiles";
+
+export interface OwnedProp {
+  id: number;
+  level: number;
+}
+
+export interface ShopOffer {
+  id: number;
+  /** 原包每个商品独立 10% 出现广告购买；网页版本直接免费领取。 */
+  freeByAd: boolean;
+  claimed?: boolean;
+}
+
+export interface AccountEconomy {
+  dayKey: string;
+  gold: number;
+  stamina: number;
+  winDay: number;
+  loseDay: number;
+  ownedProps: OwnedProp[];
+  completedMatchKeys: string[];
+  pendingResult?: { matchKey: string; won: boolean; baseReward: number };
+  pendingShop?: { matchKey: string; offers: ShopOffer[]; lotteryIds: number[]; lotteryUsed: boolean; lotteryWinnerId?: number };
+}
 
 export interface CloudProgress {
   version: 1;
   savedAt: number;
   activeMode: "practice" | "online" | null;
   practiceSnapshot?: MatchSnapshot;
+  propLoadout?: PropLoadout;
+  economy?: AccountEconomy;
 }
 
 export interface PlayerProfile {
   userId: string;
   username: string;
+  createdAt: string;
   progress: CloudProgress | null;
 }
 
@@ -110,6 +137,7 @@ export class SupabaseService {
     return {
       userId: session.user.id,
       username: data?.display_name || metadataName,
+      createdAt: session.user.created_at,
       progress: data?.progress ?? null,
     };
   }

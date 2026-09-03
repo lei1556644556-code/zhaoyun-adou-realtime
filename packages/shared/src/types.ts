@@ -1,3 +1,5 @@
+import type { ActivePropId, PassivePropId } from "./config";
+
 export type PlayerSlot = 0 | 1;
 export type MatchPhase = "waiting" | "preparing" | "battle" | "finished";
 
@@ -13,6 +15,13 @@ export interface UnitState {
   parts?: [string, string];
   cooldownMs: number;
   attackCount: number;
+  /** 主动道具永久增益；缺省值均为 1，兼容旧存档。 */
+  rangeMultiplier?: number;
+  attackSpeedMultiplier?: number;
+  /** 砚台造成的临时攻速倍率及剩余时间。 */
+  temporaryAttackSpeedMultiplier?: number;
+  temporaryAttackSpeedMs?: number;
+  incomeMs?: number;
 }
 
 export interface ReserveItem {
@@ -24,6 +33,7 @@ export interface ReserveItem {
   secondarySlot?: number;
   /** 两个营地格中显示的姓名字。 */
   parts?: [string, string];
+  incomeMs?: number;
 }
 
 export interface EnemyState {
@@ -33,6 +43,31 @@ export interface EnemyState {
   progress: number;
   boss: boolean;
   stunnedMs: number;
+}
+
+export interface PropLoadout {
+  active: ActivePropId[];
+  passive: Array<{ id: PassivePropId; level: number }>;
+}
+
+export interface PlacedPropState {
+  id: string;
+  propId: 8 | 9;
+  cell: number;
+}
+
+export interface PlayerPropState {
+  configured: boolean;
+  /** 原包账号开局前三日才在征兵池增加两份铲子权重。 */
+  earlyAccountShovelBonus?: boolean;
+  loadout: PropLoadout;
+  cooldowns: Partial<Record<ActivePropId, number>>;
+  placed: PlacedPropState[];
+  farmerSpawnMs: number;
+  superShovelMs: number;
+  meteorMs: number;
+  /** 原包局内“看广告获得两把铲子”；网页端点击直接领取，每局一次。 */
+  shovelSupplyClaimed?: boolean;
 }
 
 export interface CombatEffectEvent {
@@ -68,6 +103,8 @@ export interface PlayerBattleState {
   /** 初始为地图里的 1_0，铲子可加入相邻的 2_0。 */
   unlockedCells: number[];
   enemies: EnemyState[];
+  /** 道具状态为可选以继续读取早期云存档；演算时会补齐。 */
+  props?: PlayerPropState;
   lastEvent: string;
 }
 
@@ -89,6 +126,9 @@ export interface MatchSnapshot {
 
 export type GameCommand =
   | { type: "RECRUIT" }
+  | { type: "SET_PROP_LOADOUT"; loadout: PropLoadout; earlyAccountShovelBonus?: boolean }
+  | { type: "USE_PROP"; propId: ActivePropId; targetUnitId?: string; targetEnemyId?: string; targetCell?: number; reserveId?: string }
+  | { type: "CLAIM_SHOVEL_SUPPLY" }
   | { type: "DROP_RESERVE"; reserveId: string; targetCell: number }
   | { type: "DROP_RESERVE_TO_SLOT"; reserveId: string; targetSlot: number }
   | { type: "DROP_UNIT"; unitId: string; targetCell: number }

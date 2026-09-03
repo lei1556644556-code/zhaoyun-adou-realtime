@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GAME_CONFIG, MAP_LAYOUTS, applyCommand, cellCode, cellIndex, createMatch, pathPoint, stepMatch } from "../src";
+import { GAME_CONFIG, MAP_LAYOUTS, PROPS, applyCommand, attackRangeIntersectsCell, cellCode, cellIndex, createMatch, initialOpenCells, pathPoint, stepMatch } from "../src";
 
 describe("1.0.9 authoritative simulation", () => {
   it("uses the package-backed board and opening values", () => {
@@ -177,6 +177,28 @@ describe("1.0.9 authoritative simulation", () => {
     expect(match.players[0].reserve).toHaveLength(0);
   });
 
+  it("turns the original in-battle shovel ad into one direct grant of up to two shovels", () => {
+    const match = createMatch("SUPPLY", 120);
+    match.players[0].units = initialOpenCells(match.mapIndex).map((cell, index) => ({
+      id: `placed-${index}`, kind: "刀", level: 1, cell, cooldownMs: 0, attackCount: 0,
+    }));
+    match.players[0].reserve = [{ id: "occupied", kind: "刀", level: 1, slot: 2 }];
+    expect(applyCommand(match, 0, { type: "CLAIM_SHOVEL_SUPPLY" }).ok).toBe(true);
+    expect(match.players[0].reserve.filter((item) => item.kind === "铲子")).toHaveLength(2);
+    expect(match.players[0].props?.shovelSupplyClaimed).toBe(true);
+    expect(applyCommand(match, 0, { type: "CLAIM_SHOVEL_SUPPLY" }).ok).toBe(false);
+  });
+
+  it("shows shovel supply only after all original white deployment cells are occupied", () => {
+    const match = createMatch("SUPPLY-GATE", 121);
+    expect(applyCommand(match, 0, { type: "CLAIM_SHOVEL_SUPPLY" }).ok).toBe(false);
+    match.players[0].units = initialOpenCells(match.mapIndex).map((cell, index) => ({
+      id: `placed-${index}`, kind: "刀", level: 1, cell, cooldownMs: 0, attackCount: 0,
+    }));
+    match.players[0].reserve = [{ id: "already-shovel", kind: "铲子", level: 1, slot: 0 }];
+    expect(applyCommand(match, 0, { type: "CLAIM_SHOVEL_SUPPLY" }).ok).toBe(false);
+  });
+
   it("strictly separates brown roads, green locked grass, and white deployment cells", () => {
     const match = createMatch("TEST", 19);
     const road = cellIndex(0, 9);
@@ -255,5 +277,51 @@ describe("1.0.9 authoritative simulation", () => {
     const b = createMatch("B", 0xC0FFEE);
     expect(a.difficultyCurve).toBe(b.difficultyCurve);
     expect(a.bossWaves).toEqual(b.bossWaves);
+  });
+
+  it("uses the package circle-to-full-cell attack collision so an edge touch hits", () => {
+    expect(attackRangeIntersectsCell({ x: 0, y: 0 }, { x: 2.487, y: 0 }, 2)).toBe(true);
+    expect(attackRangeIntersectsCell({ x: 0, y: 0 }, { x: 2.489, y: 0 }, 2)).toBe(false);
+  });
+
+  it("uses the early-account effective shovel pool of 13/111", () => {
+    let shovels = 0;
+    let total = 0;
+    for (let seed = 1; seed <= 2_000; seed += 1) {
+      const match = createMatch("POOL", seed);
+      applyCommand(match, 0, { type: "SET_PROP_LOADOUT", loadout: { active: [], passive: [] }, earlyAccountShovelBonus: true });
+      applyCommand(match, 0, { type: "RECRUIT" });
+      shovels += match.players[0].reserve.filter((item) => item.kind === "铲子").length;
+      total += match.players[0].reserve.length;
+    }
+    expect(shovels / total).toBeGreaterThan(0.105);
+    expect(shovels / total).toBeLessThan(0.13);
+  });
+
+  it("loads the complete 25-row package prop catalog and enforces 2+6 slots", () => {
+    expect(PROPS).toHaveLength(25);
+    const match = createMatch("PROPS", 91);
+    expect(applyCommand(match, 0, {
+      type: "SET_PROP_LOADOUT",
+      loadout: { active: [3, 8], passive: [{ id: 12, level: 1 }, { id: 16, level: 1 }, { id: 22, level: 3 }] },
+    }).ok).toBe(true);
+    expect(match.players[0].maxHp).toBe(8);
+    expect(match.players[1].maxHp).toBe(6);
+  });
+
+  it("applies the package training-spell and trap values", () => {
+    const match = createMatch("PROP-EFFECT", 92);
+    const player = match.players[0];
+    player.units = [{ id: "blade", kind: "刀", level: 1, cell: cellIndex(2, 7), cooldownMs: 0, attackCount: 0 }];
+    expect(applyCommand(match, 0, { type: "SET_PROP_LOADOUT", loadout: { active: [3, 8], passive: [] } }).ok).toBe(true);
+    expect(applyCommand(match, 0, { type: "USE_PROP", propId: 3, targetUnitId: "blade" }).ok).toBe(true);
+    expect(player.units[0]?.level).toBe(2);
+    expect(player.props?.cooldowns[3]).toBe(65_000);
+    expect(applyCommand(match, 0, { type: "USE_PROP", propId: 8, targetCell: cellIndex(0, 9) }).ok).toBe(true);
+    player.phase = "battle";
+    player.spawnMs = 999_999;
+    player.enemies = [{ id: "trap-target", hp: 10, maxHp: 10, progress: 0, boss: false, stunnedMs: 0 }];
+    stepMatch(match, 100);
+    expect(player.enemies[0]?.stunnedMs).toBe(4_900);
   });
 });

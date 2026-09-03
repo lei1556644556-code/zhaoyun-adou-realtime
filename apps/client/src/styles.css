@@ -72,6 +72,23 @@ button { touch-action: manipulation; }
 .lobby h1 { margin: 0; font-family: "STKaiti", "KaiTi", serif; font-size: clamp(54px, 6.6vw, 90px); line-height: 1; color: #314f45; letter-spacing: -.07em; }
 .lobby h1 span { display: block; margin-bottom: 16px; color: #9f513f; font: 800 .28em/1.2 "Microsoft YaHei", sans-serif; letter-spacing: .12em; }
 .lead { max-width: 650px; margin: 27px 0 32px; color: #5f675f; font-size: clamp(15px, 1.45vw, 19px); line-height: 1.8; }
+.prop-armory { margin: 18px 0; border: 1px solid rgba(75,103,88,.22); border-radius: 12px; background: rgba(255,255,255,.34); }
+.prop-armory summary { display: flex; justify-content: space-between; gap: 12px; padding: 13px 15px; cursor: pointer; color: #35574b; font-weight: 900; }
+.prop-armory summary b { color: #95503d; font-size: 12px; }
+.prop-armory > p { margin: 0; padding: 0 15px 12px; color: #737970; font-size: 12px; line-height: 1.55; }
+.prop-armory h3 { margin: 8px 15px; color: #4c5f55; font-size: 13px; }
+.prop-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; max-height: 250px; overflow: auto; padding: 0 12px 12px; }
+.empty-props { grid-column: 1 / -1; margin: 0; border: 1px dashed rgba(72,96,83,.3); border-radius: 9px; padding: 13px; color: #7d827a; font-size: 11px; text-align: center; }
+.prop-card { min-width: 0; border: 1px solid color-mix(in srgb, var(--prop-color), transparent 52%); border-radius: 9px; padding: 8px; background: rgba(248,244,231,.8); color: #46564e; cursor: pointer; text-align: left; }
+.prop-card.is-selected { box-shadow: inset 0 0 0 2px var(--prop-color), 0 5px 14px rgba(34,55,46,.15); background: rgba(255,255,255,.96); }
+.prop-card > span { display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 6px; }
+.prop-card > span i { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; background: #3d5b50; color: var(--prop-color); font: 900 18px/1 "KaiTi", serif; font-style: normal; }
+.prop-card > span strong { overflow: hidden; color: #334b41; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.prop-card > span em { color: var(--prop-color); font-size: 9px; font-style: normal; font-weight: 900; }
+.prop-card > small { display: block; min-height: 34px; margin-top: 6px; font-size: 10px; line-height: 1.45; }
+.prop-card > b { color: #8c5945; font-size: 9px; }
+.prop-card label { display: flex; align-items: center; justify-content: space-between; margin-top: 5px; font-size: 10px; }
+.prop-card select { border: 1px solid rgba(64,91,78,.25); border-radius: 5px; background: #fffaf0; }
 .field-label { display: block; margin: 0 0 8px; color: var(--muted); font-size: 13px; font-weight: 800; }
 .text-input { width: 100%; min-height: 50px; border: 1px solid rgba(58,90,78,.3); border-radius: 9px; padding: 0 15px; background: rgba(255,255,255,.7); color: var(--ink); outline: none; }
 .text-input:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(69,107,93,.13); }
@@ -94,6 +111,8 @@ button { touch-action: manipulation; }
 .account-strip i[data-tone="syncing"] { color: #a77939; }
 .account-strip i[data-tone="error"] { color: #b5473e; }
 .account-strip button { border: 0; padding: 7px 9px; background: transparent; color: #836052; cursor: pointer; font-size: 12px; }
+.account-strip .account-economy { flex: 0 0 auto; min-width: 62px; border-left: 1px solid rgba(64,91,78,.14); padding-left: 12px; }
+.account-strip .account-economy strong { color: #95503d; font-size: 14px; }
 
 .battle-shell { --game-width: 640px; max-width: 1080px; margin: 0 auto; }
 .battle-toolbar { min-height: 52px; display: flex; align-items: center; gap: 18px; margin-bottom: 10px; padding: 8px 14px; border: 1px solid rgba(226,202,150,.4); border-radius: 10px; background: rgba(248,242,226,.96); box-shadow: 0 10px 30px rgba(0,0,0,.18); }
@@ -136,6 +155,16 @@ button { touch-action: manipulation; }
 .event-box span, .opponent-box span, .opponent-box small { display: block; color: #777d75; font-size: 11px; }
 .event-box strong, .opponent-box strong { display: block; margin-top: 6px; color: #3d544b; line-height: 1.45; }
 .opponent-box small { margin-top: 5px; }
+.active-props { margin-top: 18px; }
+.active-props > b { color: #3f5b50; font-size: 13px; }
+.active-props > small { display: block; margin-top: 7px; color: #7b7c73; font-size: 10px; line-height: 1.5; }
+.active-prop-bar { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 8px; }
+.active-prop-bar > span { grid-column: 1 / -1; border: 1px dashed rgba(74,102,88,.3); border-radius: 8px; padding: 9px; color: #85877e; font-size: 11px; text-align: center; }
+.active-prop-bar button { display: grid; grid-template-columns: 28px 1fr; grid-template-rows: auto auto; align-items: center; column-gap: 7px; border: 1px solid color-mix(in srgb, var(--prop-color), transparent 44%); border-radius: 9px; padding: 7px; background: rgba(255,255,255,.55); color: #40564d; cursor: pointer; text-align: left; }
+.active-prop-bar button i { grid-row: 1 / 3; display: grid; place-items: center; width: 28px; height: 34px; border-radius: 6px; background: #385348; color: var(--prop-color); font: 900 18px/1 "KaiTi", serif; font-style: normal; }
+.active-prop-bar button b { font-size: 11px; }
+.active-prop-bar button small { color: #8e5844; font-size: 9px; }
+.active-prop-bar button:disabled { opacity: .48; cursor: not-allowed; }
 .howto { margin-top: 22px; color: #626b64; font-size: 13px; line-height: 1.65; }
 .howto b { color: #3f5b50; }
 .howto ol { margin: 8px 0 0; padding-left: 21px; }
@@ -166,6 +195,41 @@ button { touch-action: manipulation; }
 .unit-inspector-skill { margin: 12px 0 0; border-left: 3px solid #b18d47; padding: 9px 10px; background: rgba(204,187,147,.2); color: #536057; font-size: 12px; line-height: 1.65; }
 @keyframes inspector-in { from { opacity: 0; transform: translateY(14px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
 
+.postgame-overlay { position: fixed; z-index: 90; inset: 0; display: grid; place-items: center; overflow-y: auto; padding: max(18px, env(safe-area-inset-top)) 18px max(18px, env(safe-area-inset-bottom)); background: rgba(21,39,33,.8); backdrop-filter: blur(8px); }
+.postgame-card { width: min(860px, 100%); max-height: calc(100dvh - 36px); overflow-y: auto; border: 1px solid rgba(229,195,118,.68); border-radius: 20px; padding: clamp(24px, 4vw, 42px); background: linear-gradient(145deg, #fbf5e5, #e8dcc0); box-shadow: 0 30px 100px rgba(0,0,0,.55), inset 0 0 0 5px rgba(119,87,51,.07); animation: inspector-in .24s ease-out both; }
+.postgame-card > h2 { margin: 0; color: #315348; font: 900 clamp(36px, 6vw, 60px)/1 "STKaiti", "KaiTi", serif; }
+.result-pane { margin-top: 25px; }
+.result-pane > p { color: #6d756d; font-size: 13px; line-height: 1.7; }
+.gold-reward { display: flex; align-items: end; justify-content: space-between; border-block: 1px solid rgba(95,92,69,.2); padding: 18px 0; }
+.gold-reward span { color: #667169; font-weight: 900; }
+.gold-reward strong { color: #a45a38; font: 900 52px/1 Georgia, serif; }
+.gold-reward strong::before { content: "◆ "; color: #d3a944; font-size: 24px; }
+.postgame-actions { display: grid; grid-template-columns: 1fr 1.35fr; gap: 10px; margin-top: 20px; }
+.shop-pane { margin-top: 20px; }
+.shop-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.shop-heading div { display: flex; flex-direction: column; }
+.shop-heading span { color: #787d75; font-size: 11px; }
+.shop-heading strong { color: #9c543b; font-size: 28px; }
+.shop-heading p { max-width: 430px; margin: 0; color: #70776f; font-size: 12px; line-height: 1.6; }
+.shop-offers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 18px; }
+.shop-offer { position: relative; overflow: hidden; border: 1px solid color-mix(in srgb, var(--prop-color), transparent 40%); border-radius: 13px; padding: 15px; background: rgba(255,255,255,.56); }
+.shop-offer > i { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 10px; background: #385348; color: var(--prop-color); font: 900 27px/1 "KaiTi", serif; font-style: normal; }
+.shop-offer > span { position: absolute; top: 15px; right: 13px; color: var(--prop-color); font-size: 10px; font-weight: 900; }
+.shop-offer h3 { margin: 11px 0 5px; color: #344d42; font-size: 16px; }
+.shop-offer p { min-height: 53px; margin: 0; color: #70766f; font-size: 11px; line-height: 1.55; }
+.shop-offer button { width: 100%; min-height: 38px; margin-top: 12px; border: 0; border-radius: 7px; background: #496e5f; color: #fff5dc; cursor: pointer; font-size: 11px; font-weight: 900; }
+.shop-offer button:disabled { opacity: .45; cursor: default; }
+.lottery-panel { margin-top: 18px; border-top: 1px solid rgba(92,91,69,.2); padding-top: 16px; }
+.lottery-panel > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.lottery-panel b { color: #3f5a50; }
+.lottery-panel small { color: #827c70; }
+.lottery-slots { display: grid; grid-template-columns: repeat(8, 1fr); gap: 5px; margin: 10px 0; }
+.lottery-slots span { display: grid; place-items: center; min-height: 50px; border: 1px solid color-mix(in srgb, var(--prop-color), transparent 48%); border-radius: 7px; padding: 4px; background: rgba(255,255,255,.48); color: #47584f; font-size: 10px; font-weight: 900; text-align: center; }
+.lottery-slots span.is-winner { color: #713d2c; box-shadow: inset 0 0 0 3px var(--prop-color), 0 0 18px var(--prop-color); animation: prize-pulse .7s ease-in-out 2; }
+@keyframes prize-pulse { 50% { transform: translateY(-5px) scale(1.06); } }
+.lottery-panel > button, .shop-close { width: 100%; }
+.shop-close { margin-top: 10px; }
+
 .toast { position: fixed; z-index: 100; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom)); max-width: min(90vw, 520px); transform: translate(-50%, 18px); opacity: 0; pointer-events: none; border: 1px solid rgba(232,207,153,.45); border-radius: 8px; padding: 12px 18px; background: #30493f; color: #fff2d1; box-shadow: 0 14px 50px rgba(0,0,0,.38); transition: opacity .18s ease, transform .18s ease; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
@@ -180,6 +244,7 @@ button { touch-action: manipulation; }
   .lobby-art::after { background: linear-gradient(0deg, rgba(245,238,220,.96), transparent 62%); }
   .lobby-art img { object-position: 45% 40%; }
   .lobby-copy { padding: 22px 22px 30px; }
+  .prop-picker { max-height: 310px; }
   .battle-layout { grid-template-columns: minmax(0, var(--game-width)); }
   .game-frame { max-height: none; }
   .tactics-panel { width: min(640px, 100%); }
@@ -195,6 +260,10 @@ button { touch-action: manipulation; }
   .lobby { min-height: 100dvh; border: 0; border-radius: 0; }
   .lobby-art { min-height: 245px; }
   .lobby-copy { padding: 16px 18px 26px; }
+  .account-strip { flex-wrap: wrap; }
+  .account-strip > div:first-child { flex-basis: 44%; }
+  .account-strip i { order: 5; flex: 1 0 100%; }
+  .prop-picker { grid-template-columns: 1fr; }
   .lobby h1 { font-size: clamp(52px, 17vw, 76px); }
   .lead { margin: 18px 0 22px; font-size: 14px; }
   .primary-actions, .room-actions { flex-direction: column; }
@@ -215,6 +284,16 @@ button { touch-action: manipulation; }
   .unit-inspector-portrait { flex-basis: 72px; width: 72px; height: 72px; }
   .unit-inspector-portrait img { width: 70px; height: 70px; }
   .unit-inspector h2 { font-size: 26px; }
+  .postgame-overlay { place-items: end center; padding: 0; }
+  .postgame-card { width: 100%; max-height: 92dvh; border-width: 1px 0 0; border-radius: 22px 22px 0 0; padding: 22px 16px calc(20px + env(safe-area-inset-bottom)); }
+  .postgame-actions, .shop-offers { grid-template-columns: 1fr; }
+  .shop-heading { align-items: start; flex-direction: column; gap: 7px; }
+  .shop-offer { display: grid; grid-template-columns: 44px 1fr auto; align-items: center; gap: 9px; }
+  .shop-offer > span { position: static; grid-column: 3; grid-row: 1; }
+  .shop-offer h3 { grid-column: 2; grid-row: 1; margin: 0; }
+  .shop-offer p { grid-column: 1 / -1; min-height: 0; }
+  .shop-offer button { grid-column: 1 / -1; margin-top: 0; }
+  .lottery-slots { grid-template-columns: repeat(4, 1fr); }
 }
 
 @media (prefers-reduced-motion: reduce) {

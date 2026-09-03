@@ -29,6 +29,9 @@ export const TOKEN_POOL = [
   ["苞", 1], ["翼", 1], ["盖", 1], ["祖", 1], ["刘", 1], ["备", 1],
 ] as const;
 
+/** 安装包的新号前三日会在基础池额外塞入两枚铲子：11/109 -> 13/111。 */
+export const EARLY_ACCOUNT_SHOVEL_BONUS = 2;
+
 export type SoldierKind = "刀" | "弓" | "枪" | "骑";
 export type TokenKind = (typeof TOKEN_POOL)[number][0];
 export type MapCode = `${0 | 1 | 2}_${0 | 1}`;
@@ -72,6 +75,66 @@ export const GENERALS: Record<string, {
 
 export const LEVEL_ATTACK = [1, 1.5, 2.1, 2.73, 3.276] as const;
 export const LEVEL_SPEED = [1, 1.3, 1.56, 1.794, 1.9734] as const;
+
+export type PropRarity = 0 | 1 | 2 | 3;
+export type ActivePropId = 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 21;
+export type PassivePropId = 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 22 | 24;
+export type BattlePropId = ActivePropId | PassivePropId;
+export type PropTarget = "own-unit" | "enemy-area" | "road-cell" | "self" | "reserve" | "passive";
+
+export interface PropConfig {
+  id: number;
+  key: string;
+  name: string;
+  intro: string;
+  price: number;
+  cooldownMs: number;
+  rarity: PropRarity;
+  target: PropTarget | "supply" | "outside-battle";
+  /** 安装包字段 ja/Ha，保留为原始配置合同，不擅自解释成别的经济系统。 */
+  ja?: number;
+  ha?: number;
+  levels?: readonly number[];
+  levelValues?: readonly number[];
+  upgradePrices?: readonly number[];
+  upgradeJa?: readonly number[];
+  upgradeHa?: readonly number[];
+}
+
+/** 1.0.9 安装包 25 项道具原表；主动栏仅 ACTIVE_PROP_IDS，被动栏仅 PASSIVE_PROP_IDS。 */
+export const PROPS: readonly PropConfig[] = [
+  { id: 0, key: "shovel", name: "铲子", intro: "一把可以开荒的铲子", price: 999, cooldownMs: 0, rarity: 3, target: "supply" },
+  { id: 1, key: "bulldozer", name: "推土车", intro: "将敌人向后推，阿斗安全无忧", price: 999, cooldownMs: 0, rarity: 3, target: "supply" },
+  { id: 2, key: "writingBrush", name: "毛笔", intro: "可以逆天改字", price: 50, cooldownMs: 30_000, rarity: 2, target: "own-unit", ja: 10, ha: 12 },
+  { id: 3, key: "trainingSpell", name: "练兵符", intro: "拖到单位上有概率升一级或降一级", price: 60, cooldownMs: 65_000, rarity: 2, target: "own-unit", ja: 8, ha: 8 },
+  { id: 4, key: "upLvlSpell", name: "神兵符", intro: "拖到单位上升一级", price: 90, cooldownMs: 55_000, rarity: 3, target: "own-unit", ja: 5, ha: 3 },
+  { id: 5, key: "lifePill", name: "包子", intro: "55%概率给阿斗续一条命，45%概率减少一条命", price: 50, cooldownMs: 90_000, rarity: 1, target: "self", ja: 10, ha: 12 },
+  { id: 6, key: "longRange", name: "御敌千里", intro: "使目标单位攻击范围翻倍，全局生效", price: 30, cooldownMs: 60_000, rarity: 0, target: "own-unit", ja: 20, ha: 25 },
+  { id: 7, key: "inkstone", name: "砚台", intro: "半径1.5格内敌方部队攻速-20%，持续5秒", price: 30, cooldownMs: 90_000, rarity: 0, target: "enemy-area", ja: 20, ha: 25 },
+  { id: 8, key: "trap", name: "陷阱", intro: "首名踩中的敌人眩晕5秒", price: 35, cooldownMs: 50_000, rarity: 0, target: "road-cell", ja: 15, ha: 20 },
+  { id: 9, key: "landmine", name: "地雷", intro: "首名踩中的敌人引爆地雷", price: 50, cooldownMs: 55_000, rarity: 1, target: "road-cell", ja: 10, ha: 12 },
+  { id: 10, key: "attSpeedSpell", name: "攻速符", intro: "目标单位攻速+40%，全局生效", price: 80, cooldownMs: 90_000, rarity: 2, target: "own-unit", ja: 6, ha: 4 },
+  { id: 11, key: "exorcismSpell", name: "降妖符", intro: "Boss施法有50%失败率，并反噬Boss自身血量", price: 80, cooldownMs: -1, rarity: 2, target: "passive", ja: 6, ha: 4 },
+  { id: 12, key: "farmer", name: "农民", intro: "每30秒刷出农民；农民每20秒+1馒头，升级生产速度翻倍", price: 90, cooldownMs: -1, rarity: 2, target: "passive", ja: 5, ha: 3 },
+  { id: 13, key: "recruit", name: "招贤榜", intro: "每个武将姓名字独立50%追加一份权重（安装包实际算法）", price: 90, cooldownMs: -1, rarity: 2, target: "passive", ja: 8, ha: 8 },
+  { id: 14, key: "allAttSpeedSpell", name: "攻速符(全体)", intro: "双方所有单位攻速+10%，全局生效", price: 60, cooldownMs: -1, rarity: 1, target: "passive", ja: 8, ha: 8 },
+  { id: 15, key: "goingHandInHand", name: "齐头并进", intro: "我方攻速+50%，对方攻速+30%，全局生效", price: 90, cooldownMs: -1, rarity: 2, target: "passive", ja: 5, ha: 3 },
+  { id: 16, key: "xuMingPill", name: "续命丹", intro: "我方阿斗+5条命，对方阿斗+3条命", price: 50, cooldownMs: -1, rarity: 0, target: "passive", ja: 10, ha: 12 },
+  { id: 17, key: "daBuPill", name: "大补丸", intro: "我方阿斗+3条命", price: 40, cooldownMs: -1, rarity: 0, target: "passive", ja: 12, ha: 15 },
+  { id: 18, key: "silt", name: "淤泥", intro: "我方道路上的敌人移速-10%，全局生效", price: 40, cooldownMs: -1, rarity: 0, target: "passive", ja: 12, ha: 15 },
+  { id: 19, key: "superShovel", name: "洛阳铲", intro: "每60秒生成一个铲子", price: 120, cooldownMs: -1, rarity: 3, target: "passive", ja: 3, ha: 1 },
+  { id: 20, key: "meteor", name: "陨石", intro: "敌人接近阿斗时落下陨石消灭敌人；冷却5分钟", price: 150, cooldownMs: -1, rarity: 3, target: "passive", ja: 2, ha: 1 },
+  { id: 21, key: "trashCan", name: "垃圾桶", intro: "回收一枚营地文字，获得1馒头", price: 150, cooldownMs: 0, rarity: 3, target: "reserve", ja: 2, ha: 1 },
+  { id: 22, key: "promotionOrder", name: "升职令", intro: "新征士兵有5%/10%/15%概率升为2级", price: 100, cooldownMs: -1, rarity: 1, target: "passive", ja: 8, ha: 5, levels: [1, 2, 3], levelValues: [5, 10, 15], upgradePrices: [100, 100, 150], upgradeJa: [8, 5, 3], upgradeHa: [5, 3, 2] },
+  { id: 23, key: "marchPill", name: "行军丹", intro: "体力+10", price: 40, cooldownMs: 0, rarity: 0, target: "outside-battle", ja: 12, ha: 15 },
+  { id: 24, key: "goldSeeker", name: "摸金校尉", intro: "让所有铲子变成金铲子，铲出宝箱", price: 150, cooldownMs: -1, rarity: 3, target: "passive", ja: 2, ha: 1 },
+] as const;
+
+export const ACTIVE_PROP_IDS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 21] as const satisfies readonly ActivePropId[];
+export const PASSIVE_PROP_IDS = [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24] as const satisfies readonly PassivePropId[];
+export const PROP_RARITY_NAMES = ["稀有", "卓越", "史诗", "传说"] as const;
+export const PROP_RARITY_COLORS = ["#95e45a", "#2dddff", "#D955FF", "#E99431"] as const;
+export function propConfig(id: number) { return PROPS.find((prop) => prop.id === id); }
 
 export const WAVES = [
   [10, 10], [11, 16], [12, 26], [13, 41], [15, 61], [16, 92], [18, 138], [19, 200],

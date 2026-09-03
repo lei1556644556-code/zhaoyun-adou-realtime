@@ -1,11 +1,13 @@
 import {
-  BOSS_CHANCES, BOSS_MILESTONES, DIFFICULTY_CURVES, DIFFICULTY_WEIGHTS,
-  GAME_CONFIG, GENERALS, HERO_PAIRS, LEVEL_ATTACK, LEVEL_SPEED, SOLDIERS, TOKEN_POOL, WAVES,
-  cellCode, cellCoords, initialOpenCells, pathPoint,
+  ACTIVE_PROP_IDS, BOSS_CHANCES, BOSS_MILESTONES, DIFFICULTY_CURVES, DIFFICULTY_WEIGHTS,
+  EARLY_ACCOUNT_SHOVEL_BONUS, GAME_CONFIG, GENERALS, HERO_PAIRS, LEVEL_ATTACK, LEVEL_SPEED,
+  MAP_LAYOUTS, PASSIVE_PROP_IDS, PROPS, SOLDIERS, TOKEN_POOL, WAVES, cellCode, cellCoords, initialOpenCells, pathPoint,
 } from "./config";
 import type {
-  CommandResult, GameCommand, MatchSnapshot, PlayerBattleState, PlayerSlot, ReserveItem, UnitState,
+  CommandResult, GameCommand, MatchSnapshot, PlayerBattleState, PlayerPropState, PlayerSlot, PropLoadout,
+  ReserveItem, UnitState,
 } from "./types";
+import type { ActivePropId, PassivePropId, SoldierKind } from "./config";
 
 export interface Rng { next(): number; }
 
@@ -30,6 +32,45 @@ function weightedIndex(rng: Rng, weights: readonly number[]) {
   return weights.length - 1;
 }
 
+const ORIGINAL_CELL_PX = 80;
+const ENEMY_CELL_HALF = 0.5;
+
+/** 安装包 d.Si：攻击圆半径先减 1px，再与敌军完整一格碰撞盒判交；擦边即命中。 */
+export function attackRangeIntersectsCell(
+  center: { x: number; y: number }, enemyCenter: { x: number; y: number }, rangeCells: number,
+) {
+  const radius = Math.max(0, rangeCells - 1 / ORIGINAL_CELL_PX);
+  const closestX = Math.max(enemyCenter.x - ENEMY_CELL_HALF, Math.min(center.x, enemyCenter.x + ENEMY_CELL_HALF));
+  const closestY = Math.max(enemyCenter.y - ENEMY_CELL_HALF, Math.min(center.y, enemyCenter.y + ENEMY_CELL_HALF));
+  const dx = center.x - closestX;
+  const dy = center.y - closestY;
+  return dx * dx + dy * dy <= radius * radius;
+}
+
+function emptyPropState(): PlayerPropState {
+  return {
+    configured: false, loadout: { active: [], passive: [] }, cooldowns: {}, placed: [],
+    farmerSpawnMs: 30_000, superShovelMs: 60_000, meteorMs: 300_000,
+  };
+}
+
+function ensureProps(player: PlayerBattleState) {
+  player.props ??= emptyPropState();
+  player.props.cooldowns ??= {};
+  player.props.placed ??= [];
+  player.props.shovelSupplyClaimed ??= false;
+  return player.props;
+}
+
+function passiveLevel(player: PlayerBattleState | undefined, id: PassivePropId) {
+  if (!player) return 0;
+  return ensureProps(player).loadout.passive.find((entry) => entry.id === id)?.level ?? 0;
+}
+
+function hasPassive(player: PlayerBattleState | undefined, id: PassivePropId) {
+  return passiveLevel(player, id) > 0;
+}
+
 function createPlayer(slot: PlayerSlot, mapIndex: number): PlayerBattleState {
   const firstWave = WAVES[0];
   return {
@@ -37,7 +78,7 @@ function createPlayer(slot: PlayerSlot, mapIndex: number): PlayerBattleState {
     buns: GAME_CONFIG.startBuns, recruitCost: GAME_CONFIG.recruitBase, recruitCount: 0,
     wave: 1, phase: "preparing", prepareMs: GAME_CONFIG.prepareMs,
     interwaveMs: 0, spawnMs: GAME_CONFIG.spawnMs, remainingToSpawn: firstWave[0],
-    units: [], reserve: [], unlockedCells: initialOpenCells(mapIndex), enemies: [], lastEvent: "等待双方布阵",
+    units: [], reserve: [], unlockedCells: initialOpenCells(mapIndex), enemies: [], props: emptyPropState(), lastEvent: "等待双方布阵",
   };
 }
 
@@ -52,16 +93,22 @@ export function createMatch(roomId: string, seed: number, mapIndex = 0): MatchSn
   };
 }
 
-function unitStats(unit: UnitState) {
+function unitStats(unit: UnitState, player?: PlayerBattleState, opponent?: PlayerBattleState) {
   const hero = GENERALS[unit.kind];
   const soldier = SOLDIERS[unit.kind as keyof typeof SOLDIERS];
   const base = hero ?? soldier;
   if (!base) return null;
   const levelIndex = Math.min(unit.level, base.maxLevel) - 1;
+  const universalSpeed = (hasPassive(player, 14) ? 0.1 : 0)
+    + (opponent && hasPassive(opponent, 14) ? 0.1 : 0);
+  const togetherSpeed = (hasPassive(player, 15) ? 0.5 : 0) + (hasPassive(opponent, 15) ? 0.3 : 0);
+  const speedMultiplier = Math.max(0.05,
+    1 + universalSpeed + togetherSpeed + ((unit.attackSpeedMultiplier ?? 1) - 1)
+      + ((unit.temporaryAttackSpeedMultiplier ?? 1) - 1));
   return {
     attack: base.attack * (LEVEL_ATTACK[levelIndex] ?? 1),
-    intervalMs: base.intervalMs / (LEVEL_SPEED[levelIndex] ?? 1),
-    range: base.range,
+    intervalMs: base.intervalMs / (LEVEL_SPEED[levelIndex] ?? 1) / speedMultiplier,
+    range: base.range * (unit.rangeMultiplier ?? 1),
     maxLevel: base.maxLevel,
   };
 }
@@ -76,10 +123,19 @@ function recruit(player: PlayerBattleState, rng: Rng): string | null {
   player.buns += recycled - player.recruitCost;
   player.recruitCount += 1;
   player.recruitCost = GAME_CONFIG.recruitBase + player.recruitCount * GAME_CONFIG.recruitStep;
+  const pool = TOKEN_POOL.map(([kind, weight]) => [kind,
+    kind === "铲子" && ensureProps(player).earlyAccountShovelBonus ? weight + EARLY_ACCOUNT_SHOVEL_BONUS : weight,
+  ] as [typeof kind, number]);
+  if (hasPassive(player, 13)) {
+    const excluded = new Set(["刀", "弓", "枪", "骑", "铲子", "农"]);
+    for (const entry of pool) if (!excluded.has(entry[0]) && rng.next() < 0.5) entry[1] *= 2;
+  }
+  const promotionChance = [0.05, 0.1, 0.15][Math.max(0, Math.min(2, passiveLevel(player, 22) - 1))] ?? 0;
   player.reserve = Array.from({ length: GAME_CONFIG.reserveSize }, (_, slot) => {
-    const kindIndex = weightedIndex(rng, TOKEN_POOL.map((entry) => entry[1]));
-    const kind = TOKEN_POOL[kindIndex]?.[0] ?? "刀";
-    return { id: `r-${player.slot}-${player.recruitCount}-${slot}-${Math.floor(rng.next() * 1e7)}`, kind, level: 1, slot };
+    const kindIndex = weightedIndex(rng, pool.map((entry) => entry[1]));
+    const kind = pool[kindIndex]?.[0] ?? "刀";
+    const level = kind in SOLDIERS && promotionChance > 0 && rng.next() < promotionChance ? 2 : 1;
+    return { id: `r-${player.slot}-${player.recruitCount}-${slot}-${Math.floor(rng.next() * 1e7)}`, kind, level, slot };
   });
   player.lastEvent = recycled > 0
     ? `回收${recycled}馒头，征得五枚棋子`
@@ -166,6 +222,7 @@ function adjacentCellExcluding(player: PlayerBattleState, targetCell: number, ex
 function reserveToUnit(item: ReserveItem, cell: number, secondaryCell?: number): UnitState {
   return {
     id: item.id.replace(/^r-/, "u-"), kind: item.kind, level: item.level, cell,
+    ...(item.incomeMs === undefined ? {} : { incomeMs: item.incomeMs }),
     ...(secondaryCell === undefined ? {} : {
       secondaryCell,
       parts: item.parts ?? [item.kind[0] ?? "", item.kind[1] ?? ""] as [string, string],
@@ -177,6 +234,7 @@ function reserveToUnit(item: ReserveItem, cell: number, secondaryCell?: number):
 function unitToReserve(unit: UnitState, slot: number, secondarySlot?: number): ReserveItem {
   return {
     id: unit.id.replace(/^u-/, "r-"), kind: unit.kind, level: unit.level, slot,
+    ...(unit.incomeMs === undefined ? {} : { incomeMs: unit.incomeMs }),
     ...(secondarySlot === undefined ? {} : {
       secondarySlot,
       parts: unit.parts ?? [unit.kind[0] ?? "", unit.kind[1] ?? ""] as [string, string],
@@ -468,12 +526,165 @@ function mergeById(player: PlayerBattleState, sourceId: string, targetId: string
   return dropUnit(player, sourceId, target.cell);
 }
 
+function normalizeLoadout(loadout: PropLoadout): PropLoadout | null {
+  const active = [...new Set(loadout.active)];
+  const passive = loadout.passive.filter((entry, index, entries) => entries.findIndex((other) => other.id === entry.id) === index)
+    .map((entry) => ({ id: entry.id, level: entry.id === 22 ? Math.max(1, Math.min(3, Math.floor(entry.level))) : 1 }));
+  if (active.length > 2 || passive.length > 6) return null;
+  if (active.some((id) => !ACTIVE_PROP_IDS.includes(id))) return null;
+  if (passive.some((entry) => !PASSIVE_PROP_IDS.includes(entry.id))) return null;
+  return { active, passive };
+}
+
+function setPropLoadout(snapshot: MatchSnapshot, player: PlayerBattleState, loadout: PropLoadout, earlyAccountShovelBonus = false): string | null {
+  if (snapshot.phase !== "preparing") return "只能在准备阶段装配道具";
+  const props = ensureProps(player);
+  if (props.configured) return "本局道具已经装配";
+  const normalized = normalizeLoadout(loadout);
+  if (!normalized) return "主动道具最多2件、被动道具最多6件，且不可重复";
+  props.configured = true;
+  props.earlyAccountShovelBonus = earlyAccountShovelBonus;
+  props.loadout = normalized;
+  for (const id of normalized.active) props.cooldowns[id] = 0;
+  if (hasPassive(player, 16)) {
+    player.maxHp += 5; player.hp += 5;
+    const opponent = snapshot.players[player.slot === 0 ? 1 : 0];
+    opponent.maxHp += 3; opponent.hp += 3;
+  }
+  if (hasPassive(player, 17)) { player.maxHp += 3; player.hp += 3; }
+  player.lastEvent = normalized.active.length || normalized.passive.length
+    ? `装配道具：${[...normalized.active, ...normalized.passive.map((entry) => entry.id)].map((id) => PROPS[id]?.name).join("、")}`
+    : "本局未装配道具";
+  return null;
+}
+
+function rerollUnitKind(player: PlayerBattleState, unit: UnitState, rng: Rng) {
+  const pool = TOKEN_POOL
+    .filter(([kind]) => kind !== unit.kind && kind !== "铲子")
+    .map(([kind, weight]) => [kind, weight] as const);
+  const index = weightedIndex(rng, pool.map((entry) => entry[1]));
+  unit.kind = pool[index]?.[0] ?? "刀";
+  unit.secondaryCell = undefined;
+  unit.parts = undefined;
+  unit.cooldownMs = 0;
+  unit.attackCount = 0;
+  player.lastEvent = `毛笔改字为「${unit.kind}」`;
+}
+
+function validRoadCell(mapIndex: number, cell: number) {
+  return Number.isInteger(cell) && cell >= 0 && cell < GAME_CONFIG.rows * GAME_CONFIG.columns && cellCode(mapIndex, cell) === "0_0";
+}
+
+function useProp(
+  snapshot: MatchSnapshot, player: PlayerBattleState,
+  command: Extract<GameCommand, { type: "USE_PROP" }>, rng: Rng,
+): string | null {
+  const props = ensureProps(player);
+  if (!props.loadout.active.includes(command.propId)) return "本局未装配该主动道具";
+  const config = PROPS[command.propId];
+  if (!config) return "道具配置不存在";
+  if ((props.cooldowns[command.propId] ?? 0) > 0) return "道具冷却中";
+  const opponent = snapshot.players[player.slot === 0 ? 1 : 0];
+  const ownUnit = command.targetUnitId ? player.units.find((unit) => unit.id === command.targetUnitId) : undefined;
+
+  if ([2, 3, 4, 6, 10].includes(command.propId) && !ownUnit) return "请先选择己方单位";
+  if (command.propId === 2 && ownUnit) rerollUnitKind(player, ownUnit, rng);
+  if ((command.propId === 3 || command.propId === 4) && ownUnit) {
+    const maxLevel = maxLevelForKind(ownUnit.kind);
+    if (!maxLevel) return "该文字不能升级";
+    if (command.propId === 4) ownUnit.level = Math.min(maxLevel, ownUnit.level + 1);
+    else if (ownUnit.level <= 2) ownUnit.level = Math.min(maxLevel, ownUnit.level + 1);
+    else {
+      const downChance = ownUnit.level === 3 ? 0.3 : 0.4;
+      ownUnit.level = rng.next() < downChance ? Math.max(1, ownUnit.level - 1) : Math.min(maxLevel, ownUnit.level + 1);
+    }
+    ownUnit.cooldownMs = 0;
+    ownUnit.attackCount = 0;
+    player.lastEvent = `${config.name}：${ownUnit.kind}升降至Lv.${ownUnit.level}`;
+  }
+  if (command.propId === 5) {
+    const gain = rng.next() < 0.55;
+    player.hp = Math.max(0, Math.min(player.maxHp, player.hp + (gain ? 1 : -1)));
+    player.lastEvent = gain ? "包子生效：阿斗+1命" : "包子反噬：阿斗-1命";
+  }
+  if (command.propId === 6 && ownUnit) {
+    ownUnit.rangeMultiplier = 2;
+    player.lastEvent = `御敌千里：${ownUnit.kind}射程翻倍`;
+  }
+  if (command.propId === 7) {
+    const target = command.targetEnemyId ? opponent.units.find((unit) => unit.id === command.targetEnemyId) : undefined;
+    if (!target) return "请在对方部队中选择砚台落点";
+    const origin = cellCoords(target.cell);
+    for (const unit of opponent.units) {
+      const point = cellCoords(unit.cell);
+      if (Math.hypot(point.x - origin.x, point.y - origin.y) <= 1.5) {
+        unit.temporaryAttackSpeedMultiplier = 0.8;
+        unit.temporaryAttackSpeedMs = 5_000;
+      }
+    }
+    player.lastEvent = "砚台生效：敌方范围攻速-20%，持续5秒";
+  }
+  if (command.propId === 8 || command.propId === 9) {
+    if (command.targetCell === undefined || !validRoadCell(snapshot.mapIndex, command.targetCell)) return "只能放在己方棕色行军路上";
+    if (props.placed.some((placed) => placed.cell === command.targetCell)) return "该路格已有陷阱或地雷";
+    props.placed.push({ id: `prop-${player.slot}-${snapshot.stateVersion + 1}`, propId: command.propId, cell: command.targetCell });
+    player.lastEvent = `${config.name}已放置`;
+  }
+  if (command.propId === 10 && ownUnit) {
+    ownUnit.attackSpeedMultiplier = 1.4;
+    player.lastEvent = `攻速符：${ownUnit.kind}攻速+40%`;
+  }
+  if (command.propId === 21) {
+    const item = command.reserveId ? player.reserve.find((candidate) => candidate.id === command.reserveId) : undefined;
+    if (!item) return "请选择营地内要回收的文字";
+    player.reserve = player.reserve.filter((candidate) => candidate.id !== item.id);
+    player.buns += 1;
+    player.lastEvent = `垃圾桶回收「${item.kind}」，+1馒头`;
+  }
+  props.cooldowns[command.propId] = Math.max(0, config.cooldownMs);
+  return null;
+}
+
+/**
+ * 安装包 nB：只有初始白色布阵格均被占用、营地没有铲子且仍有空位时，
+ * 才出现局内铲子补给；一次最多补足两个营地格。
+ */
+export function shovelSupplyCount(snapshot: MatchSnapshot, player: PlayerBattleState) {
+  const props = ensureProps(player);
+  if (props.shovelSupplyClaimed || player.reserve.some((item) => item.kind === "铲子")) return 0;
+  const occupied = new Set(player.units.flatMap((unit) => unit.secondaryCell === undefined
+    ? [unit.cell] : [unit.cell, unit.secondaryCell]));
+  if (initialOpenCells(snapshot.mapIndex).some((cell) => !occupied.has(cell))) return 0;
+  return Array.from({ length: GAME_CONFIG.reserveSize }, (_, slot) => slot)
+    .filter((slot) => !reserveAtSlot(player, slot)).slice(0, 2).length;
+}
+
+function claimShovelSupply(snapshot: MatchSnapshot, player: PlayerBattleState): string | null {
+  const props = ensureProps(player);
+  if (props.shovelSupplyClaimed) return "本局铲子补给已经领取";
+  if (player.reserve.some((item) => item.kind === "铲子")) return "营地已有铲子，无需补给";
+  const supplyCount = shovelSupplyCount(snapshot, player);
+  if (!supplyCount) return "填满初始白色布阵格后才会出现铲子补给";
+  const freeSlots = Array.from({ length: GAME_CONFIG.reserveSize }, (_, slot) => slot)
+    .filter((slot) => !reserveAtSlot(player, slot)).slice(0, supplyCount);
+  for (const targetSlot of freeSlots) player.reserve.push({
+    id: `r-${player.slot}-ad-shovel-${snapshot.stateVersion + 1}-${targetSlot}`,
+    kind: "铲子", level: 1, slot: targetSlot,
+  });
+  props.shovelSupplyClaimed = true;
+  player.lastEvent = `直接领取${freeSlots.length}把铲子（原广告补给）`;
+  return null;
+}
+
 export function applyCommand(snapshot: MatchSnapshot, slot: PlayerSlot, command: GameCommand): CommandResult {
   const player = snapshot.players[slot];
   if (snapshot.phase === "finished") return { commandId: "", ok: false, code: "ERR_MATCH_ENDED", message: "对局已结束", stateVersion: snapshot.stateVersion };
   const rng = createRng(snapshot.seed ^ ((snapshot.stateVersion + 1) * 0x9E3779B1) ^ (slot * 977));
   let error: string | null = null;
   if (command.type === "RECRUIT") error = recruit(player, rng);
+  if (command.type === "SET_PROP_LOADOUT") error = setPropLoadout(snapshot, player, command.loadout, command.earlyAccountShovelBonus);
+  if (command.type === "USE_PROP") error = useProp(snapshot, player, command, rng);
+  if (command.type === "CLAIM_SHOVEL_SUPPLY") error = claimShovelSupply(snapshot, player);
   if (command.type === "DROP_RESERVE") error = dropReserve(snapshot, player, command.reserveId, command.targetCell);
   if (command.type === "DROP_RESERVE_TO_SLOT") error = dropReserveToSlot(player, command.reserveId, command.targetSlot);
   if (command.type === "DROP_UNIT") error = dropUnit(player, command.unitId, command.targetCell);
@@ -509,8 +720,9 @@ function damage(enemy: PlayerBattleState["enemies"][number], amount: number) {
 }
 
 function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: number) {
+  const opponent = snapshot.players[player.slot === 0 ? 1 : 0];
   for (const unit of player.units) {
-    const stats = unitStats(unit);
+    const stats = unitStats(unit, player, opponent);
     if (!stats || player.enemies.length === 0) continue;
     unit.cooldownMs -= deltaMs;
     if (unit.cooldownMs > 0) continue;
@@ -519,7 +731,7 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
     const position = { x: (firstPosition.x + secondPosition.x) / 2, y: (firstPosition.y + secondPosition.y) / 2 };
     const inRange = player.enemies.filter((enemy) => {
       const point = pathPoint(snapshot.mapIndex, enemy.progress);
-      return Math.hypot(point.x - position.x, point.y - position.y) <= stats.range;
+      return attackRangeIntersectsCell(position, point, stats.range);
     });
     if (inRange.length === 0) continue;
     const target = unit.kind === "弓" || unit.kind === "黄忠" || unit.kind === "黄祖"
@@ -578,6 +790,100 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
   }
 }
 
+function firstEmptyReserveSlot(player: PlayerBattleState) {
+  for (let slot = 0; slot < GAME_CONFIG.reserveSize; slot += 1) if (!reserveAtSlot(player, slot)) return slot;
+  return null;
+}
+
+function expandedPath(mapIndex: number) {
+  const source = MAP_LAYOUTS[mapIndex]?.path ?? MAP_LAYOUTS[0]!.path;
+  const result: Array<{ x: number; y: number }> = [];
+  for (let index = 0; index < source.length; index += 1) {
+    const point = source[index]!;
+    const previous = source[index - 1];
+    if (!previous) { result.push({ x: point[0], y: point[1] }); continue; }
+    const dx = Math.sign(point[0] - previous[0]);
+    const dy = Math.sign(point[1] - previous[1]);
+    const steps = Math.max(Math.abs(point[0] - previous[0]), Math.abs(point[1] - previous[1]));
+    for (let step = 1; step <= steps; step += 1) result.push({ x: previous[0] + dx * step, y: previous[1] + dy * step });
+  }
+  return result;
+}
+
+function tickProps(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: number) {
+  const props = ensureProps(player);
+  for (const id of props.loadout.active) props.cooldowns[id] = Math.max(0, (props.cooldowns[id] ?? 0) - deltaMs);
+  for (const unit of player.units) {
+    if ((unit.temporaryAttackSpeedMs ?? 0) > 0) {
+      unit.temporaryAttackSpeedMs = Math.max(0, (unit.temporaryAttackSpeedMs ?? 0) - deltaMs);
+      if (unit.temporaryAttackSpeedMs === 0) unit.temporaryAttackSpeedMultiplier = 1;
+    }
+    if (unit.kind === "农") {
+      unit.incomeMs = (unit.incomeMs ?? 20_000) - deltaMs;
+      if (unit.incomeMs <= 0) { player.buns += 1; unit.incomeMs += 20_000; }
+    }
+  }
+  for (const item of player.reserve) if (item.kind === "农") {
+    item.incomeMs = (item.incomeMs ?? 20_000) - deltaMs;
+    if (item.incomeMs <= 0) { player.buns += 1; item.incomeMs += 20_000; }
+  }
+
+  if (hasPassive(player, 12)) {
+    props.farmerSpawnMs -= deltaMs;
+    if (props.farmerSpawnMs <= 0) {
+      props.farmerSpawnMs += 30_000;
+      const cell = player.unlockedCells.find((candidate) => !unitAtCell(player, candidate));
+      if (cell !== undefined) player.units.push({ id: `farmer-${player.slot}-${snapshot.tick}`, kind: "农", level: 1, cell, cooldownMs: 0, attackCount: 0, incomeMs: 20_000 });
+      else {
+        const slot = firstEmptyReserveSlot(player);
+        if (slot !== null) player.reserve.push({ id: `farmer-r-${player.slot}-${snapshot.tick}`, kind: "农", level: 1, slot, incomeMs: 20_000 });
+      }
+    }
+  }
+  if (hasPassive(player, 19)) {
+    props.superShovelMs -= deltaMs;
+    if (props.superShovelMs <= 0) {
+      props.superShovelMs += 60_000;
+      const slot = firstEmptyReserveSlot(player);
+      if (slot !== null) player.reserve.push({ id: `super-shovel-${player.slot}-${snapshot.tick}`, kind: "铲子", level: 1, slot });
+    }
+  }
+  if (hasPassive(player, 20)) {
+    props.meteorMs = Math.max(0, props.meteorMs - deltaMs);
+    const endCells = expandedPath(snapshot.mapIndex).slice(-6);
+    const threatened = player.enemies.some((enemy) => {
+      const point = pathPoint(snapshot.mapIndex, enemy.progress);
+      return endCells.some((cell) => Math.hypot(point.x - cell.x, point.y - cell.y) <= 1);
+    });
+    if (threatened && props.meteorMs === 0) {
+      player.enemies = player.enemies.filter((enemy) => {
+        const point = pathPoint(snapshot.mapIndex, enemy.progress);
+        return !endCells.some((cell) => Math.hypot(point.x - cell.x, point.y - cell.y) <= 1);
+      });
+      props.meteorMs = 300_000;
+      player.lastEvent = "陨石落下，清除阿斗附近敌军";
+    }
+  }
+
+  for (const placed of [...props.placed]) {
+    const cell = cellCoords(placed.cell);
+    const trigger = player.enemies.find((enemy) => {
+      const point = pathPoint(snapshot.mapIndex, enemy.progress);
+      return Math.hypot(point.x - cell.x, point.y - cell.y) <= 0.25;
+    });
+    if (!trigger) continue;
+    if (placed.propId === 8) trigger.stunnedMs = Math.max(trigger.stunnedMs, 5_000);
+    else {
+      player.enemies = player.enemies.filter((enemy) => {
+        const point = pathPoint(snapshot.mapIndex, enemy.progress);
+        return Math.hypot(point.x - cell.x, point.y - cell.y) > 0.75;
+      });
+    }
+    props.placed = props.placed.filter((candidate) => candidate.id !== placed.id);
+    player.lastEvent = placed.propId === 8 ? "陷阱触发：敌人眩晕5秒" : "地雷触发：范围敌军被消灭";
+  }
+}
+
 function advanceWave(player: PlayerBattleState) {
   if (player.wave >= GAME_CONFIG.maxWaves) {
     player.phase = "finished";
@@ -599,6 +905,7 @@ function tickPlayer(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs:
     return;
   }
   if (player.phase !== "battle") return;
+  tickProps(snapshot, player, deltaMs);
   player.spawnMs -= deltaMs;
   if (player.remainingToSpawn > 0 && player.spawnMs <= 0) {
     spawnEnemy(snapshot, player);
@@ -607,7 +914,8 @@ function tickPlayer(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs:
   attack(snapshot, player, deltaMs);
   for (const enemy of player.enemies) {
     enemy.stunnedMs = Math.max(0, enemy.stunnedMs - deltaMs);
-    if (enemy.stunnedMs === 0) enemy.progress += deltaMs * (enemy.boss ? 0.000018 : 0.000026);
+    const siltMultiplier = hasPassive(player, 18) ? 0.9 : 1;
+    if (enemy.stunnedMs === 0) enemy.progress += deltaMs * (enemy.boss ? 0.000018 : 0.000026) * siltMultiplier;
   }
   const escaped = player.enemies.filter((enemy) => enemy.progress >= 1);
   if (escaped.length) {
