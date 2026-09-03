@@ -1,13 +1,13 @@
 import Phaser from "phaser";
 import {
-  GAME_CONFIG, GENERALS, MAP_LAYOUTS, SOLDIERS, attackRangeIntersectsCell, cellCode, cellCoords, cellIndex, pathPoint,
-  type CombatEffectEvent, type HeroRarity, type MatchSnapshot, type PlayerBattleState, type PlayerSlot,
+  GAME_CONFIG, GENERALS, MAP_LAYOUTS, PROPS, SOLDIERS, attackRangeIntersectsCell, cellCode, cellCoords, cellIndex, pathPoint,
+  type ActivePropId, type CombatEffectEvent, type HeroRarity, type MatchSnapshot, type PlayerBattleState, type PlayerSlot,
 } from "@adou/shared";
 import { allImageAssets, HERO_ASSET_KEYS, IMAGE_ASSETS, TROOP_ASSET_KEYS } from "./assets";
 import {
-  BATTLE_INPUT, BATTLE_LAYOUT, battleDropTargetAt, createPointerGesture, isTapGesture, updatePointerGesture,
+  BATTLE_INPUT, BATTLE_LAYOUT, activePropDropTargetAt, battleDropTargetAt, createPointerGesture, isTapGesture, updatePointerGesture,
   worldDragThreshold,
-  type DragSource, type PointerGesture,
+  type ActivePropDropPayload, type DragSource, type PointerGesture,
 } from "./battleInteraction";
 
 const WIDTH = GAME_CONFIG.designWidth;
@@ -36,6 +36,7 @@ type PointerAction =
     }
   | { type: "recruit" };
 type ActivePointer = { gesture: PointerGesture; action: PointerAction };
+type PropDragPointer = { propId: ActivePropId; clientX: number; clientY: number };
 const PIECE_DISPLAY_MODE_KEY = "adou-piece-display-mode-v1";
 
 export class BattleScene extends Phaser.Scene {
@@ -43,7 +44,9 @@ export class BattleScene extends Phaser.Scene {
   private slot: PlayerSlot = 0;
   private mapGraphics!: Phaser.GameObjects.Graphics;
   private tileLayer!: Phaser.GameObjects.Container;
+  private selectionGraphics!: Phaser.GameObjects.Graphics;
   private stateLayer!: Phaser.GameObjects.Container;
+  private propTargetGraphics!: Phaser.GameObjects.Graphics;
   private effectsLayer!: Phaser.GameObjects.Container;
   private dragLayer!: Phaser.GameObjects.Container;
   private playedEffectIds = new Set<string>();
@@ -54,7 +57,7 @@ export class BattleScene extends Phaser.Scene {
   private draggingType: DragSource | null = null;
   private draggingPartIndex: 0 | 1 | null = null;
   private selectedUnit: InspectSelection | null = null;
-  private pendingRoadProp: 8 | 9 | null = null;
+  private activePropDrag: { propId: ActivePropId; hover: ActivePropDropPayload | null } | null = null;
   private mapSignature = "";
   private pieceDisplayMode: PieceDisplayMode = localStorage.getItem(PIECE_DISPLAY_MODE_KEY) === "text" ? "text" : "image";
 
@@ -69,7 +72,9 @@ export class BattleScene extends Phaser.Scene {
     this.drawBackdrop();
     this.mapGraphics = this.add.graphics().setDepth(1);
     this.tileLayer = this.add.container(0, 0).setDepth(2);
+    this.selectionGraphics = this.add.graphics().setDepth(4);
     this.stateLayer = this.add.container(0, 0).setDepth(5);
+    this.propTargetGraphics = this.add.graphics().setDepth(20);
     this.effectsLayer = this.add.container(0, 0).setDepth(80);
     this.dragLayer = this.add.container(0, 0).setDepth(1000);
     this.input.on("pointermove", this.onPointerMove, this);
@@ -78,19 +83,15 @@ export class BattleScene extends Phaser.Scene {
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]) => {
       if (this.activePointer) return;
       if (currentlyOver.length !== 0) return;
-      if (this.pendingRoadProp) {
-        const targetCell = this.pointToCell(pointer.worldX, pointer.worldY);
-        if (targetCell !== null) this.game.events.emit("battle:prop-target-cell", { propId: this.pendingRoadProp, targetCell });
-        this.pendingRoadProp = null;
-        this.renderState();
-        return;
-      }
       this.clearInspection(true);
     });
     this.game.events.on("battle:snapshot", this.onSnapshot, this);
     this.game.events.on("battle:piece-mode", this.onPieceDisplayMode, this);
     this.game.events.on("battle:inspect-clear", this.onInspectClear, this);
-    this.game.events.on("battle:prop-target-mode", this.onPropTargetMode, this);
+    this.game.events.on("battle:prop-drag-start", this.onPropDragStart, this);
+    this.game.events.on("battle:prop-drag-move", this.onPropDragMove, this);
+    this.game.events.on("battle:prop-drag-end", this.onPropDragEnd, this);
+    this.game.events.on("battle:prop-drag-cancel", this.onPropDragCancel, this);
     this.game.events.on(Phaser.Core.Events.BLUR, this.onPointerCancel, this);
     this.game.events.emit("battle:scene-ready");
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
@@ -100,9 +101,13 @@ export class BattleScene extends Phaser.Scene {
       this.game.events.off("battle:snapshot", this.onSnapshot, this);
       this.game.events.off("battle:piece-mode", this.onPieceDisplayMode, this);
       this.game.events.off("battle:inspect-clear", this.onInspectClear, this);
-      this.game.events.off("battle:prop-target-mode", this.onPropTargetMode, this);
+      this.game.events.off("battle:prop-drag-start", this.onPropDragStart, this);
+      this.game.events.off("battle:prop-drag-move", this.onPropDragMove, this);
+      this.game.events.off("battle:prop-drag-end", this.onPropDragEnd, this);
+      this.game.events.off("battle:prop-drag-cancel", this.onPropDragCancel, this);
       this.game.events.off(Phaser.Core.Events.BLUR, this.onPointerCancel, this);
       this.resetPointerState();
+      this.onPropDragCancel();
     });
   }
 
@@ -226,18 +231,18 @@ export class BattleScene extends Phaser.Scene {
       this.game.events.emit("battle:inspect", {
         kind: active.action.inspectKind, level: active.action.level, ...active.action.selection,
       });
-      this.renderState();
+      this.drawSelectedRange();
       return;
     }
-    this.renderState();
   }
 
   private onPointerCancel() {
     if (!this.activePointer) return;
     const object = this.activePointer.action.type === "piece" ? this.activePointer.action.object : undefined;
+    const wasDragging = this.isDragging;
     this.activePointer = null;
     this.resetDragState(object);
-    this.renderState();
+    if (wasDragging) this.renderState();
   }
 
   private resetDragState(object?: Phaser.GameObjects.Container) {
@@ -256,9 +261,113 @@ export class BattleScene extends Phaser.Scene {
     this.resetDragState(object);
   }
 
-  private onPropTargetMode(propId: 8 | 9 | null) {
-    this.pendingRoadProp = propId;
-    this.renderState();
+  private clientToWorld(clientX: number, clientY: number) {
+    const rect = this.game.canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0
+      || clientX < rect.left || clientX >= rect.right || clientY < rect.top || clientY >= rect.bottom) return null;
+    return {
+      x: (clientX - rect.left) * WIDTH / rect.width,
+      y: (clientY - rect.top) * HEIGHT / rect.height,
+    };
+  }
+
+  private propDropAt(payload: PropDragPointer) {
+    if (!this.snapshot) return null;
+    const point = this.clientToWorld(payload.clientX, payload.clientY);
+    return point ? activePropDropTargetAt(this.snapshot, this.slot, payload.propId, point) : null;
+  }
+
+  private onPropDragStart(propId: ActivePropId) {
+    this.activePropDrag = { propId, hover: null };
+    this.game.canvas.classList.add("is-prop-targeting");
+    this.drawActivePropTargets();
+  }
+
+  private onPropDragMove(payload: PropDragPointer) {
+    if (!this.activePropDrag || this.activePropDrag.propId !== payload.propId) return;
+    this.activePropDrag.hover = this.propDropAt(payload);
+    this.drawActivePropTargets();
+  }
+
+  private onPropDragEnd(payload: PropDragPointer) {
+    if (!this.activePropDrag || this.activePropDrag.propId !== payload.propId) return;
+    const target = this.propDropAt(payload);
+    this.onPropDragCancel();
+    if (target) this.game.events.emit("battle:prop-drop", target);
+    else this.game.events.emit("battle:prop-drop-miss", { propId: payload.propId });
+  }
+
+  private onPropDragCancel() {
+    this.activePropDrag = null;
+    this.propTargetGraphics?.clear();
+    this.game.canvas.classList.remove("is-prop-targeting");
+  }
+
+  private activePropTargetKey(target: ActivePropDropPayload | null) {
+    if (!target) return "";
+    if ("targetUnitId" in target) return `unit:${target.targetUnitId}`;
+    if ("targetEnemyId" in target) return `enemy:${target.targetEnemyId}`;
+    if ("targetCell" in target) return `cell:${target.targetCell}`;
+    return `reserve:${target.reserveId}`;
+  }
+
+  private drawActivePropTargets() {
+    const graphics = this.propTargetGraphics;
+    graphics.clear();
+    if (!this.snapshot || !this.activePropDrag) return;
+    const { propId, hover } = this.activePropDrag;
+    const targetType = PROPS[propId]?.target;
+    const hoveredKey = this.activePropTargetKey(hover);
+    const color = propId === 9 ? 0xff806c : propId === 8 ? 0xffd86f : 0xffe49a;
+    const strokeTargetCell = (cell: number, key: string, mirror = false) => {
+      const point = cellCoords(cell);
+      const x = mirror ? GAME_CONFIG.columns - 1 - point.x : point.x;
+      const y = mirror ? GAME_CONFIG.rows - 1 - point.y : point.y;
+      const hovered = key === hoveredKey;
+      graphics.fillStyle(color, hovered ? 0.38 : 0.13)
+        .fillRoundedRect(x * CELL + 6, MAP_TOP + y * CELL + 6, CELL - 12, CELL - 12, 10);
+      graphics.lineStyle(hovered ? 7 : 3, color, hovered ? 1 : 0.82)
+        .strokeRoundedRect(x * CELL + 6, MAP_TOP + y * CELL + 6, CELL - 12, CELL - 12, 10);
+    };
+
+    if (targetType === "road-cell") {
+      for (let cell = 0; cell < GAME_CONFIG.columns * GAME_CONFIG.rows; cell += 1) {
+        if (cellCode(this.snapshot.mapIndex, cell) === "0_0") strokeTargetCell(cell, `cell:${cell}`);
+      }
+      return;
+    }
+    if (targetType === "own-unit") {
+      for (const unit of this.snapshot.players[this.slot].units) {
+        const key = `unit:${unit.id}`;
+        strokeTargetCell(unit.cell, key);
+        if (unit.secondaryCell !== undefined) strokeTargetCell(unit.secondaryCell, key);
+      }
+      return;
+    }
+    if (targetType === "enemy-area") {
+      const opponent = this.snapshot.players[this.slot === 0 ? 1 : 0];
+      for (const unit of opponent.units) {
+        const key = `enemy:${unit.id}`;
+        strokeTargetCell(unit.cell, key, true);
+        if (unit.secondaryCell !== undefined) strokeTargetCell(unit.secondaryCell, key, true);
+      }
+      return;
+    }
+    if (targetType === "reserve") {
+      const mine = this.snapshot.players[this.slot];
+      for (const item of mine.reserve) {
+        const key = `reserve:${item.id}`;
+        for (const reserveSlot of item.secondarySlot === undefined ? [item.slot] : [item.slot, item.secondarySlot]) {
+          const hovered = key === hoveredKey;
+          graphics.fillStyle(color, hovered ? 0.38 : 0.13).fillRoundedRect(
+            CAMP_X + reserveSlot * CAMP_CELL + 5, CAMP_Y + 5, CAMP_CELL - 10, CAMP_CELL - 10, 8,
+          );
+          graphics.lineStyle(hovered ? 7 : 3, color, hovered ? 1 : 0.82).strokeRoundedRect(
+            CAMP_X + reserveSlot * CAMP_CELL + 5, CAMP_Y + 5, CAMP_CELL - 10, CAMP_CELL - 10, 8,
+          );
+        }
+      }
+    }
   }
 
   private onInspectClear() {
@@ -269,7 +378,7 @@ export class BattleScene extends Phaser.Scene {
     if (!this.selectedUnit && !hidePanel) return;
     this.selectedUnit = null;
     if (hidePanel) this.game.events.emit("battle:inspect-hide");
-    this.renderState();
+    this.drawSelectedRange();
   }
 
   private onPieceDisplayMode(mode: PieceDisplayMode) {
@@ -331,7 +440,7 @@ export class BattleScene extends Phaser.Scene {
     this.drawUnits(opponent, true, false);
     this.drawUnits(mine, false, true);
     this.drawCamp(mine);
-    this.drawPropRoadHints();
+    this.drawActivePropTargets();
     if (this.isDragging && this.draggingType) {
       const dragged = this.dragLayer.getAt(0) as Phaser.GameObjects.Container | null;
       this.drawDropHints(this.draggingType, dragged?.getData("kind") as string ?? "");
@@ -340,6 +449,8 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private drawSelectedRange() {
+    const graphics = this.selectionGraphics;
+    graphics.clear();
     if (!this.snapshot || !this.selectedUnit) return;
     if (!this.selectedUnit.unitId) return;
     const owner = this.snapshot.players[this.selectedUnit.ownerSlot];
@@ -355,9 +466,8 @@ export class BattleScene extends Phaser.Scene {
     const second = unit.secondaryCell === undefined ? first : cellCoords(unit.secondaryCell);
     const center = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
     const range = stats.range * (unit.rangeMultiplier ?? 1);
-    const pulse = 0.2 + Math.sin(this.snapshot.tick * 0.35) * 0.04;
+    const alpha = 0.2;
     const color = mirror ? 0x7ec7d0 : 0xffd35c;
-    const graphics = this.add.graphics();
     for (let y = 0; y < GAME_CONFIG.rows; y += 1) for (let x = 0; x < GAME_CONFIG.columns; x += 1) {
       const code = cellCode(this.snapshot.mapIndex, cellIndex(x, y));
       const roadSide = Number(code[2]);
@@ -367,7 +477,7 @@ export class BattleScene extends Phaser.Scene {
       if (!attackRangeIntersectsCell(center, { x: canonicalX, y: canonicalY }, range)) continue;
       const px = x * CELL + 7;
       const py = MAP_TOP + y * CELL + 7;
-      graphics.fillStyle(color, pulse).fillRoundedRect(px, py, CELL - 14, CELL - 14, 9);
+      graphics.fillStyle(color, alpha).fillRoundedRect(px, py, CELL - 14, CELL - 14, 9);
       graphics.lineStyle(3, color, 0.88).strokeRoundedRect(px, py, CELL - 14, CELL - 14, 9);
     }
     const displayedFirst = mirror
@@ -379,21 +489,6 @@ export class BattleScene extends Phaser.Scene {
     for (const point of [displayedFirst, displayedSecond]) {
       graphics.lineStyle(5, color, 1).strokeCircle((point.x + 0.5) * CELL, MAP_TOP + (point.y + 0.5) * CELL, 36);
     }
-    this.stateLayer.add(graphics);
-  }
-
-  private drawPropRoadHints() {
-    if (!this.snapshot || !this.pendingRoadProp) return;
-    const graphics = this.add.graphics();
-    for (let cell = 0; cell < GAME_CONFIG.columns * GAME_CONFIG.rows; cell += 1) {
-      if (cellCode(this.snapshot.mapIndex, cell) !== "0_0") continue;
-      const point = cellCoords(cell);
-      graphics.fillStyle(this.pendingRoadProp === 8 ? 0xe6bd54 : 0xd7624f, 0.28)
-        .fillRoundedRect(point.x * CELL + 6, MAP_TOP + point.y * CELL + 6, CELL - 12, CELL - 12, 10);
-      graphics.lineStyle(4, this.pendingRoadProp === 8 ? 0xffdc75 : 0xff8a70, 0.96)
-        .strokeRoundedRect(point.x * CELL + 6, MAP_TOP + point.y * CELL + 6, CELL - 12, CELL - 12, 10);
-    }
-    this.stateLayer.add(graphics);
   }
 
   private drawMap() {
@@ -1043,11 +1138,6 @@ export class BattleScene extends Phaser.Scene {
       }
     }
     this.stateLayer.add(hint);
-  }
-
-  private pointToCell(x: number, y: number) {
-    const target = battleDropTargetAt({ x, y }, "generalPart");
-    return target.type === "cell" ? target.targetCell : null;
   }
 
   private drawResult() {

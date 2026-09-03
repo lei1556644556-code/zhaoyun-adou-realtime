@@ -1,4 +1,7 @@
-import { GAME_CONFIG, cellIndex, type GameCommand } from "@adou/shared";
+import {
+  GAME_CONFIG, PROPS, cellCode, cellCoords, cellIndex,
+  type ActivePropId, type GameCommand, type MatchSnapshot, type PlayerSlot,
+} from "@adou/shared";
 
 export const BATTLE_INPUT = {
   mouseDragThresholdPx: 7,
@@ -47,6 +50,12 @@ export type BattleCampDropPayload = Readonly<{
   id: string;
   targetSlot: number;
 }>;
+
+export type ActivePropDropPayload =
+  | Readonly<{ propId: ActivePropId; targetUnitId: string }>
+  | Readonly<{ propId: ActivePropId; targetEnemyId: string }>
+  | Readonly<{ propId: ActivePropId; targetCell: number }>
+  | Readonly<{ propId: ActivePropId; reserveId: string }>;
 
 export function createPointerGesture(pointerId: number, start: Point, threshold: number): PointerGesture {
   return { pointerId, start, current: start, threshold, dragging: false };
@@ -107,4 +116,48 @@ export function commandForBattleCampDrop(payload: BattleCampDropPayload): GameCo
   return payload.sourceType === "reserve"
     ? { type: "DROP_RESERVE_TO_SLOT", reserveId: payload.id, targetSlot: payload.targetSlot }
     : { type: "DROP_UNIT_TO_RESERVE", unitId: payload.id, targetSlot: payload.targetSlot };
+}
+
+/**
+ * Resolves only the visible object beneath a dragged prop. Cooldowns, occupied
+ * road cells, eligible unit kinds, and every other rule stay authoritative in
+ * the shared simulation.
+ */
+export function activePropDropTargetAt(
+  snapshot: MatchSnapshot,
+  viewerSlot: PlayerSlot,
+  propId: ActivePropId,
+  point: Point,
+): ActivePropDropPayload | null {
+  const target = PROPS[propId]?.target;
+  const mine = snapshot.players[viewerSlot];
+  const opponent = snapshot.players[viewerSlot === 0 ? 1 : 0];
+
+  if (target === "reserve") {
+    const camp = battleDropTargetAt(point, "reserve");
+    if (camp.type !== "camp") return null;
+    const item = mine.reserve.find((candidate) => candidate.slot === camp.targetSlot || candidate.secondarySlot === camp.targetSlot);
+    return item ? { propId, reserveId: item.id } : null;
+  }
+
+  const board = battleDropTargetAt(point, "generalPart");
+  if (board.type !== "cell") return null;
+  if (target === "road-cell") {
+    return cellCode(snapshot.mapIndex, board.targetCell) === "0_0" ? { propId, targetCell: board.targetCell } : null;
+  }
+  if (target === "own-unit") {
+    const unit = mine.units.find((candidate) => candidate.cell === board.targetCell || candidate.secondaryCell === board.targetCell);
+    return unit ? { propId, targetUnitId: unit.id } : null;
+  }
+  if (target === "enemy-area") {
+    const displayed = cellCoords(board.targetCell);
+    const canonicalCell = cellIndex(GAME_CONFIG.columns - 1 - displayed.x, GAME_CONFIG.rows - 1 - displayed.y);
+    const unit = opponent.units.find((candidate) => candidate.cell === canonicalCell || candidate.secondaryCell === canonicalCell);
+    return unit ? { propId, targetEnemyId: unit.id } : null;
+  }
+  return null;
+}
+
+export function commandForActivePropDrop(payload: ActivePropDropPayload): GameCommand {
+  return { type: "USE_PROP", ...payload };
 }

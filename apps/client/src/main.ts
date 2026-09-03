@@ -8,8 +8,9 @@ import {
 import { IMAGE_ASSETS } from "./game/assets";
 import { createGame } from "./game/BattleScene";
 import {
-  commandForBattleCampDrop, commandForBattleDrop,
-  type BattleCampDropPayload, type BattleDropPayload,
+  BATTLE_INPUT, commandForActivePropDrop, commandForBattleCampDrop, commandForBattleDrop,
+  createPointerGesture, updatePointerGesture,
+  type ActivePropDropPayload, type BattleCampDropPayload, type BattleDropPayload, type PointerGesture,
 } from "./game/battleInteraction";
 import { PracticeEngine } from "./game/PracticeEngine";
 import { RealtimeClient } from "./net/RealtimeClient";
@@ -87,7 +88,13 @@ app.innerHTML = `
         <button class="exit-match" id="exit-match">退出本局</button>
       </header>
       <div class="battle-layout">
-        <section class="playfield-card" aria-label="赵云与阿斗战场"><div id="game" class="game-frame"></div></section>
+        <section class="playfield-card" aria-label="赵云与阿斗战场">
+          <div class="battle-skill-dock active-props" id="battle-skill-dock">
+            <div><b>主动道具</b><small id="prop-target-hint">按住道具，拖到高亮目标。</small></div>
+            <div id="active-prop-bar" class="active-prop-bar"></div>
+          </div>
+          <div id="game" class="game-frame"></div>
+        </section>
         <aside class="tactics-panel">
           <p class="eyebrow">战局状态</p>
           <h2 id="map-title">巨鹿</h2>
@@ -97,7 +104,6 @@ app.innerHTML = `
           </dl>
           <div class="event-box"><span>当前事件</span><strong id="last-event">等待开局</strong></div>
           <div class="opponent-box"><span>对手</span><strong id="opponent-name">演武军士</strong><small id="opponent-status">等待布阵</small></div>
-          <div class="active-props"><b>主动道具</b><div id="active-prop-bar" class="active-prop-bar"></div><small id="prop-target-hint">先轻点目标，再使用对应道具。</small></div>
           <div class="howto">
             <b>操作方法</b>
             <ol>
@@ -106,6 +112,7 @@ app.innerHTML = `
               <li>轻点棋子（不拖动）可查看实际攻击、攻速、射程与技能。</li>
               <li>姓名两字合将后占两格；上阵后拖出任一字即可拆分。</li>
               <li>铲子拖到高亮草格可扩一格。</li>
+              <li>主动道具从上方图标拖到高亮目标；包子轻点即用。</li>
               <li>棕色只走敌兵，白色才可布阵，绿色草地不可通行或放置。</li>
             </ol>
           </div>
@@ -179,9 +186,15 @@ let cloudSaveInFlight: Promise<void> | null = null;
 let propLoadout: PropLoadout = { active: [], passive: [] };
 let economy: AccountEconomy = freshEconomy();
 let inspectedTarget: { kind: string; level: number; unitId?: string; reserveId?: string; ownerSlot?: PlayerSlot } | null = null;
-let pendingRoadProp: 8 | 9 | null = null;
 let loadoutSentKey = "";
 let shownFinishedKey = "";
+let activePropPointer: {
+  propId: ActivePropId;
+  button: HTMLButtonElement;
+  gesture: PointerGesture;
+  ghost: HTMLButtonElement | null;
+} | null = null;
+let suppressActivePropClick = false;
 
 const ACTIVE_MODE_KEY = "adou-active-mode-v1";
 const PRACTICE_SAVE_KEY = "adou-practice-save-v1";
@@ -314,35 +327,140 @@ function renderActiveProps() {
   const mine = snapshot?.players[slot];
   const active = mine?.props?.loadout.active ?? propLoadout.active;
   const supplyCount = mine && snapshot ? shovelSupplyCount(snapshot, mine) : 0;
-  const supply = supplyCount > 0
-    ? `<button type="button" data-claim-shovels style="--prop-color:#e99431"><i>铲</i><b>${supplyCount}把铲子</b><small>直接领取·原广告</small></button>`
-    : "";
-  const equipped = active.map((id) => {
-    const prop = PROPS[id]!;
+  const structureKey = `${supplyCount > 0 ? "supply" : ""}:${active.join(",")}`;
+  if (bar.dataset.structureKey !== structureKey) {
+    const buttons: HTMLElement[] = [];
+    if (supplyCount > 0) {
+      const supply = document.createElement("button");
+      supply.type = "button";
+      supply.dataset.claimShovels = "";
+      supply.style.setProperty("--prop-color", "#e99431");
+      supply.innerHTML = "<i>铲</i><b></b><small>直接领取·原广告</small>";
+      buttons.push(supply);
+    }
+    for (const id of active) {
+      const prop = PROPS[id]!;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.useProp = String(id);
+      button.style.setProperty("--prop-color", PROP_RARITY_COLORS[prop.rarity]);
+      button.setAttribute("aria-describedby", "prop-target-hint");
+      button.innerHTML = `<i>${prop.name[0]}</i><b>${prop.name}</b><small></small>`;
+      buttons.push(button);
+    }
+    if (buttons.length === 0) {
+      const empty = document.createElement("span");
+      empty.textContent = "本局未装配主动道具";
+      buttons.push(empty);
+    }
+    bar.replaceChildren(...buttons);
+    bar.dataset.structureKey = structureKey;
+  }
+  const supply = bar.querySelector<HTMLButtonElement>("[data-claim-shovels]");
+  if (supply) supply.querySelector("b")!.textContent = `${supplyCount}把铲子`;
+  for (const id of active) {
+    const button = bar.querySelector<HTMLButtonElement>(`[data-use-prop="${id}"]`);
+    if (!button) continue;
     const cooldown = mine?.props?.cooldowns[id] ?? 0;
-    return `<button type="button" data-use-prop="${id}" ${cooldown > 0 ? "disabled" : ""} style="--prop-color:${PROP_RARITY_COLORS[prop.rarity]}"><i>${prop.name[0]}</i><b>${prop.name}</b><small>${cooldown > 0 ? `${Math.ceil(cooldown / 1000)}秒` : "可使用"}</small></button>`;
-  }).join("");
-  bar.innerHTML = supply + equipped;
+    button.disabled = cooldown > 0;
+    button.querySelector("small")!.textContent = cooldown > 0
+      ? `${Math.ceil(cooldown / 1000)}秒`
+      : PROPS[id]?.target === "self" ? "轻点使用" : "拖动使用";
+  }
+}
+
+function activePropInstruction(propId: ActivePropId) {
+  const prop = PROPS[propId]!;
+  if (prop.target === "own-unit") return `把${prop.name}拖到己方单位上`;
+  if (prop.target === "enemy-area") return `把${prop.name}拖到敌方单位上作为落点`;
+  if (prop.target === "road-cell") return `把${prop.name}拖到己方棕色道路上`;
+  if (prop.target === "reserve") return `把${prop.name}拖到营地文字上`;
+  return `轻点${prop.name}即可使用`;
 }
 
 function useActiveProp(propId: ActivePropId) {
   if (!commandSink) return;
-  if (propId === 8 || propId === 9) {
-    pendingRoadProp = propId;
-    get("prop-target-hint").textContent = `请点击己方棕色道路放置${PROPS[propId]?.name}`;
-    game.events.emit("battle:prop-target-mode", propId);
+  if (PROPS[propId]?.target === "self") {
+    commandSink({ type: "USE_PROP", propId });
     return;
   }
-  if ([2, 3, 4, 6, 10].includes(propId)) {
-    if (!inspectedTarget?.unitId || inspectedTarget.ownerSlot !== slot) { showToast("请先轻点一个己方单位"); return; }
-    commandSink({ type: "USE_PROP", propId, targetUnitId: inspectedTarget.unitId });
-  } else if (propId === 7) {
-    if (!inspectedTarget?.unitId || inspectedTarget.ownerSlot === slot) { showToast("请先轻点一个对方单位作为砚台落点"); return; }
-    commandSink({ type: "USE_PROP", propId, targetEnemyId: inspectedTarget.unitId });
-  } else if (propId === 21) {
-    if (!inspectedTarget?.reserveId) { showToast("请先轻点营地内要回收的文字"); return; }
-    commandSink({ type: "USE_PROP", propId, reserveId: inspectedTarget.reserveId });
-  } else commandSink({ type: "USE_PROP", propId });
+  const instruction = activePropInstruction(propId);
+  get("prop-target-hint").textContent = instruction;
+  showToast(instruction);
+}
+
+function beginActivePropPointer(event: PointerEvent, button: HTMLButtonElement) {
+  if (activePropPointer || button.disabled || !event.isPrimary) return;
+  const propId = Number(button.dataset.useProp) as ActivePropId;
+  const threshold = event.pointerType === "touch" ? BATTLE_INPUT.touchDragThresholdPx : BATTLE_INPUT.mouseDragThresholdPx;
+  activePropPointer = {
+    propId,
+    button,
+    gesture: createPointerGesture(event.pointerId, { x: event.clientX, y: event.clientY }, threshold),
+    ghost: null,
+  };
+  button.classList.add("is-pressed");
+  button.setPointerCapture?.(event.pointerId);
+}
+
+function beginActivePropDrag(event: PointerEvent) {
+  if (!activePropPointer || activePropPointer.ghost) return;
+  const { button, propId } = activePropPointer;
+  const ghost = button.cloneNode(true) as HTMLButtonElement;
+  const rect = button.getBoundingClientRect();
+  ghost.classList.remove("is-pressed");
+  ghost.classList.add("active-prop-drag-ghost");
+  ghost.disabled = false;
+  ghost.style.width = `${Math.max(86, rect.width)}px`;
+  document.body.append(ghost);
+  activePropPointer.ghost = ghost;
+  button.classList.add("is-drag-source");
+  document.body.classList.add("is-dragging-prop");
+  hideUnitInspector();
+  get("prop-target-hint").textContent = activePropInstruction(propId);
+  game.events.emit("battle:prop-drag-start", propId);
+  moveActivePropGhost(event);
+}
+
+function moveActivePropGhost(event: PointerEvent) {
+  if (!activePropPointer?.ghost) return;
+  activePropPointer.ghost.style.left = `${event.clientX}px`;
+  activePropPointer.ghost.style.top = `${event.clientY}px`;
+  game.events.emit("battle:prop-drag-move", {
+    propId: activePropPointer.propId, clientX: event.clientX, clientY: event.clientY,
+  });
+}
+
+function finishActivePropPointer(event: PointerEvent, cancelled = false) {
+  if (!activePropPointer || activePropPointer.gesture.pointerId !== event.pointerId) return;
+  const update = updatePointerGesture(activePropPointer.gesture, event.pointerId, { x: event.clientX, y: event.clientY });
+  activePropPointer.gesture = update.gesture;
+  if (update.beganDrag) beginActivePropDrag(event);
+  const dragged = Boolean(activePropPointer.ghost);
+  const propId = activePropPointer.propId;
+  if (dragged) {
+    event.preventDefault();
+    suppressActivePropClick = true;
+    if (cancelled) game.events.emit("battle:prop-drag-cancel");
+    else game.events.emit("battle:prop-drag-end", { propId, clientX: event.clientX, clientY: event.clientY });
+  }
+  activePropPointer.button.classList.remove("is-pressed", "is-drag-source");
+  activePropPointer.ghost?.remove();
+  document.body.classList.remove("is-dragging-prop");
+  activePropPointer = null;
+  if (dragged) window.setTimeout(() => { suppressActivePropClick = false; }, 0);
+}
+
+function moveActivePropPointer(event: PointerEvent) {
+  if (!activePropPointer) return;
+  const update = updatePointerGesture(activePropPointer.gesture, event.pointerId, { x: event.clientX, y: event.clientY });
+  if (!update.accepted) return;
+  activePropPointer.gesture = update.gesture;
+  if (update.beganDrag) beginActivePropDrag(event);
+  if (update.gesture.dragging) {
+    event.preventDefault();
+    moveActivePropGhost(event);
+  }
 }
 
 function unitArtPath(kind: string) {
@@ -437,7 +555,8 @@ function battlefieldDimensions() {
   const singleColumn = viewportWidth <= 880;
   const shellWidth = Math.min(1080, viewportWidth - horizontalPadding);
   const maxWidth = Math.max(180, Math.min(640, singleColumn ? shellWidth : shellWidth - 340 - 16));
-  const availableHeight = Math.max(390, viewportHeight - verticalPadding - (toolbar?.offsetHeight ?? 52) - 10);
+  const skillDock = document.getElementById("battle-skill-dock");
+  const availableHeight = Math.max(390, viewportHeight - verticalPadding - (toolbar?.offsetHeight ?? 52) - (skillDock?.offsetHeight ?? 0) - 10);
   const fitWidth = Math.min(maxWidth, availableHeight * GAME_CONFIG.designWidth / GAME_CONFIG.designHeight);
   return { fitWidth, maxWidth };
 }
@@ -796,10 +915,14 @@ function updateSnapshot(next: MatchSnapshot) {
 game.events.on("battle:recruit", () => commandSink?.({ type: "RECRUIT" }));
 game.events.on("battle:inspect", (payload: { kind: string; level: number; unitId?: string; reserveId?: string; ownerSlot?: PlayerSlot }) => showUnitInspector(payload));
 game.events.on("battle:inspect-hide", () => hideUnitInspector(false));
-game.events.on("battle:prop-target-cell", (payload: { propId: 8 | 9; targetCell: number }) => {
-  pendingRoadProp = null;
-  get("prop-target-hint").textContent = "先轻点目标，再使用对应道具。";
-  commandSink?.({ type: "USE_PROP", propId: payload.propId, targetCell: payload.targetCell });
+game.events.on("battle:prop-drop", (payload: ActivePropDropPayload) => {
+  get("prop-target-hint").textContent = "按住道具，拖到高亮目标。";
+  commandSink?.(commandForActivePropDrop(payload));
+});
+game.events.on("battle:prop-drop-miss", (payload: { propId: ActivePropId }) => {
+  const instruction = activePropInstruction(payload.propId);
+  get("prop-target-hint").textContent = instruction;
+  showToast(`没有放到有效目标：${instruction}`);
 });
 game.events.on("battle:drop", (payload: BattleDropPayload) => {
   if (!snapshot || !commandSink) return;
@@ -817,7 +940,16 @@ for (const pickerId of ["active-prop-picker", "passive-prop-picker"]) {
     if (button) toggleProp(Number(button.dataset.propId));
   });
 }
-get("active-prop-bar").addEventListener("click", (event) => {
+const activePropBar = get("active-prop-bar");
+activePropBar.addEventListener("pointerdown", (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-use-prop]");
+  if (button) beginActivePropPointer(event, button);
+});
+document.addEventListener("pointermove", moveActivePropPointer, { passive: false });
+document.addEventListener("pointerup", (event) => finishActivePropPointer(event));
+document.addEventListener("pointercancel", (event) => finishActivePropPointer(event, true));
+activePropBar.addEventListener("click", (event) => {
+  if (suppressActivePropClick) { event.preventDefault(); return; }
   const supply = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-claim-shovels]");
   if (supply && !supply.disabled) { commandSink?.({ type: "CLAIM_SHOVEL_SUPPLY" }); return; }
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-use-prop]");
@@ -877,10 +1009,9 @@ get("piece-mode-toggle").addEventListener("click", () => {
 get("unit-inspector-close").addEventListener("click", () => hideUnitInspector());
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
-  if (pendingRoadProp) {
-    pendingRoadProp = null;
-    game.events.emit("battle:prop-target-mode", null);
-    get("prop-target-hint").textContent = "先轻点目标，再使用对应道具。";
+  if (activePropPointer) {
+    const pointerId = activePropPointer.gesture.pointerId;
+    finishActivePropPointer(new PointerEvent("pointercancel", { pointerId }), true);
   }
   hideUnitInspector();
 });
@@ -1026,6 +1157,7 @@ async function initializeAuth() {
 }
 
 if (interactionTestMode) {
+  propLoadout = { active: [8, 5], passive: [] };
   authScreen.hidden = true;
   lobby.hidden = false;
   game.events.once("battle:scene-ready", () => {

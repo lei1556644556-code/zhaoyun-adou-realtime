@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { GAME_CONFIG, cellCoords, createMatch } from "@adou/shared";
 import {
   BATTLE_INPUT,
   BATTLE_LAYOUT,
+  activePropDropTargetAt,
   battleDropTargetAt,
+  commandForActivePropDrop,
   commandForBattleCampDrop,
   commandForBattleDrop,
   createPointerGesture,
@@ -71,5 +74,52 @@ describe("battle command wiring", () => {
       .toEqual({ type: "DROP_RESERVE_TO_SLOT", reserveId: "r-2", targetSlot: 4 });
     expect(commandForBattleCampDrop({ sourceType: "unit", id: "u-2", targetSlot: 0 }))
       .toEqual({ type: "DROP_UNIT_TO_RESERVE", unitId: "u-2", targetSlot: 0 });
+  });
+});
+
+describe("active prop dragging", () => {
+  const cellCenter = (cell: number, mirror = false) => {
+    const point = cellCoords(cell);
+    const x = mirror ? GAME_CONFIG.columns - 1 - point.x : point.x;
+    const y = mirror ? GAME_CONFIG.rows - 1 - point.y : point.y;
+    return {
+      x: (x + 0.5) * BATTLE_LAYOUT.cellSize,
+      y: BATTLE_LAYOUT.mapTop + (y + 0.5) * BATTLE_LAYOUT.cellSize,
+    };
+  };
+
+  it("resolves own units, mirrored enemy anchors, own road cells and camp items", () => {
+    const snapshot = createMatch("prop-drag", 7, 0);
+    snapshot.players[0].units.push({
+      id: "own-1", kind: "刀", level: 1, cell: 67, cooldownMs: 0, attackCount: 0,
+    });
+    snapshot.players[1].units.push({
+      id: "enemy-anchor", kind: "弓", level: 1, cell: 10, cooldownMs: 0, attackCount: 0,
+    });
+    snapshot.players[0].reserve.push({ id: "reserve-2", kind: "赵", level: 1, slot: 2 });
+
+    expect(activePropDropTargetAt(snapshot, 0, 3, cellCenter(67)))
+      .toEqual({ propId: 3, targetUnitId: "own-1" });
+    expect(activePropDropTargetAt(snapshot, 0, 7, cellCenter(10, true)))
+      .toEqual({ propId: 7, targetEnemyId: "enemy-anchor" });
+    expect(activePropDropTargetAt(snapshot, 0, 8, cellCenter(48)))
+      .toEqual({ propId: 8, targetCell: 48 });
+    expect(activePropDropTargetAt(snapshot, 0, 21, {
+      x: BATTLE_LAYOUT.campX + BATTLE_LAYOUT.campCell * 2.5,
+      y: BATTLE_LAYOUT.campY + BATTLE_LAYOUT.campCell / 2,
+    })).toEqual({ propId: 21, reserveId: "reserve-2" });
+  });
+
+  it("does not turn misses or non-targeted props into commands", () => {
+    const snapshot = createMatch("prop-miss", 8, 0);
+    expect(activePropDropTargetAt(snapshot, 0, 3, cellCenter(67))).toBeNull();
+    expect(activePropDropTargetAt(snapshot, 0, 5, cellCenter(48))).toBeNull();
+  });
+
+  it("maps a resolved drop to the existing authoritative USE_PROP command", () => {
+    expect(commandForActivePropDrop({ propId: 10, targetUnitId: "own-2" }))
+      .toEqual({ type: "USE_PROP", propId: 10, targetUnitId: "own-2" });
+    expect(commandForActivePropDrop({ propId: 9, targetCell: 55 }))
+      .toEqual({ type: "USE_PROP", propId: 9, targetCell: 55 });
   });
 });
