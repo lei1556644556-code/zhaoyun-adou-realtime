@@ -26,15 +26,18 @@ export function acceptanceSnapshot(): MatchSnapshot {
 }
 
 export async function mockAuthenticatedAccount(page: Page, snapshot = acceptanceSnapshot()) {
+  const createdAt = "2026-01-01T00:00:00.000Z";
   const user = {
     id: QA_USER_ID, aud: "authenticated", role: "authenticated", email: "qa@example.invalid",
-    email_confirmed_at: "2026-01-01T00:00:00.000Z", created_at: "2026-01-01T00:00:00.000Z",
+    email_confirmed_at: createdAt, created_at: createdAt,
     user_metadata: { username: "验收玩家" }, app_metadata: {},
   };
   const session = {
     access_token: "qa-access-token", refresh_token: "qa-refresh-token", token_type: "bearer",
     expires_in: 31_536_000, expires_at: 4_102_444_800, user,
   };
+  let progressRevision = 0;
+  let storedProgress = { version: 1 as const, savedAt: 1, activeMode: "practice" as const, practiceSnapshot: snapshot };
   await page.addInitScript(({ key, value }) => localStorage.setItem(key, JSON.stringify(value)), {
     key: AUTH_STORAGE_KEY, value: session,
   });
@@ -48,7 +51,31 @@ export async function mockAuthenticatedAccount(page: Page, snapshot = acceptance
         headers: { "content-range": "0-0/1" },
         body: JSON.stringify({
           user_id: QA_USER_ID, display_name: "验收玩家", username_normalized: "验收玩家",
-          progress: { version: 1, savedAt: 1, activeMode: "practice", practiceSnapshot: snapshot },
+          progress: storedProgress, progress_revision: progressRevision,
+          created_at: createdAt, updated_at: createdAt,
+        }),
+      });
+      return;
+    }
+    if (url.pathname === "/rest/v1/rpc/zhaoyun_adou_save_progress" && request.method() === "POST") {
+      const payload = request.postDataJSON() as { p_expected_revision: number; p_progress: typeof storedProgress };
+      if (payload.p_expected_revision !== progressRevision) {
+        await route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ code: "40001", message: "progress revision conflict" }),
+        });
+        return;
+      }
+      storedProgress = payload.p_progress;
+      progressRevision += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          saved_progress: storedProgress,
+          saved_revision: progressRevision,
+          saved_at: new Date().toISOString(),
         }),
       });
       return;
