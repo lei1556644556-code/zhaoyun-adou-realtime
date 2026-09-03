@@ -12,7 +12,7 @@
 | [`battle-event`](./battle-event.md) | 02 战斗内核 | 03、04、06、07 | 事件有稳定 ID，不允许一次事件重复播放 |
 | [`battle-presentation`](./battle-presentation.md) | 04 美术表现 | 03、06、07、08 | 只消费稳定事件与资源键，不实现规则判定 |
 | `match-transport` | 06 实时联机 | 03、05、07 | 人机与联机实现相同端口 |
-| `account-progress` | 05 账号经济 | 03、06、08 | 按账号隔离，迁移可回滚 |
+| [`account-progress`](./account-progress.md) | 05 账号经济 | 03、06、08 | 按账号隔离，迁移可回滚 |
 | [`asset-manifest`](./asset-manifest.md) | 04 美术表现 | 03、08 | 使用稳定资源键，不把文件名当规则值 |
 | `runtime-config` | 08 集成发布 | 05、06 | 环境显式注入，浏览器只接收 publishable 配置 |
 

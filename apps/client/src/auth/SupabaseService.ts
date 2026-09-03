@@ -1,167 +1,115 @@
-import { createClient, type Session, type SupabaseClient } from "@supabase/supabase-js";
-import type { MatchSnapshot, PropLoadout } from "@adou/shared";
+import type { Session } from "@supabase/supabase-js";
 
-const PROFILE_TABLE = "zhaoyun_adou_profiles";
+import { AccountPersistenceError, readablePersistenceError } from "./errors";
+import { createPersistenceServices, type PersistenceServices } from "./persistence";
+import type { AccountIdentity, CloudProgress, PlayerProfile, StorageLike } from "./types";
 
-export interface OwnedProp {
-  id: number;
-  level: number;
+export type { AccountEconomy, OwnedProp, ShopOffer } from "../economy/types";
+export type { CloudProgress, PlayerProfile } from "./types";
+export { normalizeUsername, validateCredentials } from "./AccountStore";
+
+function browserStorage(): StorageLike {
+  if (typeof localStorage !== "undefined") return localStorage;
+  throw new AccountPersistenceError("AUTH_CONFIGURATION", "当前运行环境没有可用的本地存储");
 }
 
-export interface ShopOffer {
-  id: number;
-  /** 原包每个商品独立 10% 出现广告购买；网页版本直接免费领取。 */
-  freeByAd: boolean;
-  claimed?: boolean;
-}
-
-export interface AccountEconomy {
-  dayKey: string;
-  gold: number;
-  stamina: number;
-  winDay: number;
-  loseDay: number;
-  ownedProps: OwnedProp[];
-  completedMatchKeys: string[];
-  pendingResult?: { matchKey: string; won: boolean; baseReward: number };
-  pendingShop?: { matchKey: string; offers: ShopOffer[]; lotteryIds: number[]; lotteryUsed: boolean; lotteryWinnerId?: number };
-}
-
-export interface CloudProgress {
-  version: 1;
-  savedAt: number;
-  activeMode: "practice" | "online" | null;
-  practiceSnapshot?: MatchSnapshot;
-  propLoadout?: PropLoadout;
-  economy?: AccountEconomy;
-}
-
-export interface PlayerProfile {
-  userId: string;
-  username: string;
-  createdAt: string;
-  progress: CloudProgress | null;
-}
-
-interface ProfileRow {
-  user_id: string;
-  display_name: string;
-  username_normalized: string;
-  progress: CloudProgress | null;
-}
-
-export function normalizeUsername(value: string) {
-  return value.normalize("NFKC").trim().toLocaleLowerCase("zh-CN");
-}
-
-export function validateCredentials(username: string, password: string) {
-  const displayName = username.normalize("NFKC").trim();
-  const normalized = normalizeUsername(displayName);
-  if (displayName.length < 2 || displayName.length > 16) throw new Error("账号需为 2–16 个字符");
-  if (!/^[\p{L}\p{N}_-]+$/u.test(displayName)) throw new Error("账号只能使用中英文字母、数字、下划线或短横线");
-  if (password.length < 6 || password.length > 72) throw new Error("密码需为 6–72 个字符");
-  return { displayName, normalized };
-}
-
-async function usernameEmail(normalized: string) {
-  const bytes = new TextEncoder().encode(`zhaoyun-adou:${normalized}`);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-  return `u_${hex.slice(0, 48)}@accounts.zhaoyun-adou.game`;
-}
-
-function readableAuthError(message: string) {
-  if (/already registered|already exists/i.test(message)) return "这个账号已被注册，请直接登录";
-  if (/invalid login credentials/i.test(message)) return "账号或密码不正确";
-  if (/password/i.test(message)) return "密码不符合要求，请至少输入 6 位";
-  if (/rate limit/i.test(message)) return "操作太频繁，请稍后再试";
-  if (/fetch|network/i.test(message)) return "无法连接云端，请检查网络后重试";
-  return message;
-}
-
+/**
+ * Backward-compatible facade for the current composition root.
+ * New code should depend on AccountStore and ProgressStore from createPersistenceServices instead.
+ */
 export class SupabaseService {
-  private client: SupabaseClient;
+  readonly mode: PersistenceServices["mode"];
+  readonly statusLabel: PersistenceServices["statusLabel"];
+  private readonly services: PersistenceServices;
 
-  constructor(connection: { url: string; publishableKey: string }) {
-    this.client = createClient(connection.url, connection.publishableKey, {
-      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+  constructor(connection: { url: string; publishableKey: string }, storage: StorageLike = browserStorage()) {
+    this.services = createPersistenceServices({
+      environment: {
+        VITE_SUPABASE_URL: connection.url,
+        VITE_SUPABASE_PUBLISHABLE_KEY: connection.publishableKey,
+      },
+      storage,
     });
+    this.mode = this.services.mode;
+    this.statusLabel = this.services.statusLabel;
   }
 
-  async session() {
-    const { data, error } = await this.client.auth.getSession();
-    if (error) throw new Error(readableAuthError(error.message));
-    return data.session;
+  async session(): Promise<Session | null> {
+    if (this.services.mode === "local-development") return null;
+    try {
+      const result = await this.services.client.auth.getSession();
+      if (result.error) throw result.error;
+      if (!result.data.session) return null;
+      const verified = await this.services.client.auth.getUser();
+      if (verified.error) throw verified.error;
+      return verified.data.user?.id === result.data.session.user.id ? result.data.session : null;
+    } catch (error) {
+      throw readablePersistenceError(error);
+    }
   }
 
   async signUp(username: string, password: string) {
-    const { displayName, normalized } = validateCredentials(username, password);
-    const email = await usernameEmail(normalized);
-    const { data, error } = await this.client.auth.signUp({
-      email,
-      password,
-      options: { data: { username: displayName, username_normalized: normalized } },
-    });
-    if (error) throw new Error(readableAuthError(error.message));
-    if (!data.session || !data.user) throw new Error("注册成功但未自动登录，请检查 Supabase 是否关闭了邮箱确认");
-    await this.ensureProfile(data.session, displayName, normalized);
-    return this.loadProfile(data.session);
+    const services = this.cloudServices();
+    const identity = await services.accountStore.signUp({ username, password });
+    return this.profile(identity);
   }
 
   async signIn(username: string, password: string) {
-    const { displayName, normalized } = validateCredentials(username, password);
-    const email = await usernameEmail(normalized);
-    const { data, error } = await this.client.auth.signInWithPassword({ email, password });
-    if (error || !data.session) throw new Error(readableAuthError(error?.message ?? "登录失败"));
-    await this.ensureProfile(data.session, displayName, normalized);
-    return this.loadProfile(data.session);
+    const services = this.cloudServices();
+    const identity = await services.accountStore.signIn({ username, password });
+    return this.profile(identity);
+  }
+
+  /** Explicit, password-free entry point. It must be labelled as device-only by the consumer. */
+  async enterLocalDevelopment(username: string) {
+    if (this.services.mode !== "local-development") {
+      throw new AccountPersistenceError("AUTH_CONFIGURATION", "云端已配置，不能进入本地开发身份");
+    }
+    const identity = await this.services.accountStore.enterLocalDevelopment(username);
+    return this.profile(identity);
   }
 
   async signOut() {
-    const { error } = await this.client.auth.signOut();
-    if (error) throw new Error(readableAuthError(error.message));
+    await this.services.accountStore.signOut();
   }
 
   async loadProfile(session: Session): Promise<PlayerProfile> {
-    const { data, error } = await this.client
-      .from(PROFILE_TABLE)
-      .select("user_id,display_name,username_normalized,progress")
-      .eq("user_id", session.user.id)
-      .maybeSingle<ProfileRow>();
-    if (error) throw new Error(this.profileError(error.message));
-    const metadataName = String(session.user.user_metadata.username ?? "玩家");
-    return {
-      userId: session.user.id,
-      username: data?.display_name || metadataName,
-      createdAt: session.user.created_at,
-      progress: data?.progress ?? null,
-    };
+    const services = this.cloudServices();
+    const identity = await services.accountStore.restore();
+    if (!identity || identity.userId !== session.user.id) {
+      throw new AccountPersistenceError("AUTH_INVALID_CREDENTIALS", "当前 Supabase 会话已失效，请重新登录");
+    }
+    return this.profile(identity);
   }
 
   async saveProgress(profile: PlayerProfile, progress: CloudProgress) {
-    const { error } = await this.client.from(PROFILE_TABLE).upsert({
-      user_id: profile.userId,
-      display_name: profile.username,
-      username_normalized: normalizeUsername(profile.username),
-      progress,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: "user_id" });
-    if (error) throw new Error(this.profileError(error.message));
+    if (profile.assurance === "supabase" && this.services.mode !== "cloud") {
+      throw new AccountPersistenceError("AUTH_CONFIGURATION", "云端账号不能写入本地开发存档");
+    }
+    if (profile.assurance === "local-development" && this.services.mode !== "local-development") {
+      throw new AccountPersistenceError("AUTH_CONFIGURATION", "本地开发身份不能写入云端存档");
+    }
+    const saved = await this.services.progressStore.save(profile.userId, progress, profile.progressRevision);
+    profile.progress = saved.progress;
+    profile.progressRevision = saved.revision;
   }
 
-  private async ensureProfile(session: Session, displayName: string, normalized: string) {
-    const { error } = await this.client.from(PROFILE_TABLE).upsert({
-      user_id: session.user.id,
-      display_name: displayName,
-      username_normalized: normalized,
-      progress: { version: 1, savedAt: Date.now(), activeMode: null },
-    }, { onConflict: "user_id", ignoreDuplicates: true });
-    if (error) throw new Error(this.profileError(error.message));
+  private async profile(identity: AccountIdentity): Promise<PlayerProfile> {
+    const record = await this.services.progressStore.load(identity.userId);
+    return {
+      ...identity,
+      progress: record?.progress ?? null,
+      progressRevision: record?.revision ?? 0,
+    };
   }
 
-  private profileError(message: string) {
-    if (/zhaoyun_adou_profiles|schema cache|relation/i.test(message)) return "云存档表尚未初始化，请先执行项目内的 Supabase 数据库迁移";
-    if (/duplicate key/i.test(message)) return "这个账号已被注册，请换一个账号";
-    return readableAuthError(message);
+  private cloudServices(): Extract<PersistenceServices, { mode: "cloud" }> {
+    if (this.services.mode !== "cloud") {
+      throw new AccountPersistenceError(
+        "AUTH_UNAVAILABLE",
+        "未配置 Supabase，当前只能使用“本地开发模式 · 未认证 · 仅此设备”；请由集成入口显式调用 enterLocalDevelopment",
+      );
+    }
+    return this.services;
   }
 }
