@@ -288,6 +288,59 @@ describe("board, camp, merge, range, and prop regressions", () => {
     }
   });
 
+  it("does not accumulate attack debt while enemies remain outside every soldier's range", () => {
+    for (const kind of Object.keys(SOLDIERS)) {
+      const match = createMatch(`NO-ATTACK-DEBT-${kind}`, 121);
+      const player = match.players[0];
+      player.phase = "battle";
+      player.spawnMs = 999_999;
+      player.remainingToSpawn = 1;
+      player.units = [unit("attacker", kind, 1, cellIndex(4, 7))];
+      player.enemies = [{ id: "waiting", hp: 1_000, maxHp: 1_000, progress: 0, boss: false, stunnedMs: 100_000 }];
+
+      for (let index = 0; index < 50; index += 1) stepMatch(match, 100);
+      expect(player.units[0]).toMatchObject({ cooldownMs: 0, attackCount: 0 });
+
+      player.enemies[0]!.progress = 7 / 17;
+      stepMatch(match, 100);
+      expect(player.units[0]?.attackCount).toBe(1);
+      stepMatch(match, 100);
+      expect(player.units[0]?.attackCount).toBe(1);
+    }
+  });
+
+  it("self-heals negative cooldowns restored from affected snapshots without burst attacks", () => {
+    const match = createMatch("NEGATIVE-COOLDOWN", 122);
+    const player = match.players[0];
+    player.phase = "battle";
+    player.spawnMs = 999_999;
+    player.remainingToSpawn = 1;
+    player.units = [{ ...unit("spear", "枪", 1, cellIndex(2, 7)), cooldownMs: -5_000 }];
+    player.enemies = [{ id: "target", hp: 1_000, maxHp: 1_000, progress: 5 / 17, boss: false, stunnedMs: 0 }];
+
+    stepMatch(match, 100);
+    expect(player.units[0]).toMatchObject({ attackCount: 1, cooldownMs: 700 });
+    stepMatch(match, 100);
+    expect(player.units[0]?.attackCount).toBe(1);
+  });
+
+  it("does not let later units attack a target already killed in the same tick", () => {
+    const match = createMatch("NO-OVERKILL", 123);
+    const player = match.players[0];
+    player.phase = "battle";
+    player.spawnMs = 999_999;
+    player.remainingToSpawn = 1;
+    player.units = [2, 3, 4].map((x, index) => unit(`spear-${index}`, "枪", 1, cellIndex(x, 7)));
+    player.enemies = [{ id: "one-hp", hp: 1, maxHp: 1, progress: 5 / 17, boss: false, stunnedMs: 0 }];
+
+    stepMatch(match, 100);
+    expect(player.units.map((candidate) => candidate.attackCount)).toEqual([1, 0, 0]);
+    expect(match.combatEvents).toEqual([
+      expect.objectContaining({ unitId: "spear-0", targetId: "one-hp" }),
+    ]);
+    expect(player.enemies).toEqual([]);
+  });
+
   it("emits prop use and rejects using the trash can on a shovel atomically", () => {
     const match = createMatch("PROP-CONTRACT", 112);
     const player = match.players[0];

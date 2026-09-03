@@ -978,17 +978,22 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
   const opponent = snapshot.players[player.slot === 0 ? 1 : 0];
   for (const unit of player.units) {
     const stats = unitStats(unit, player, opponent);
-    if (!stats || player.enemies.length === 0) continue;
-    unit.cooldownMs -= deltaMs;
-    if (unit.cooldownMs > 0) continue;
+    if (!stats) continue;
+    // 空窗期只让冷却恢复到“可攻击”，绝不能积累负冷却债务；否则敌人
+    // 入射程后会每个 Tick 补发一次历史攻击。保留本 Tick 的少量超时量，
+    // 让固定步长下的平均攻击间隔继续贴近配置值。
+    const elapsedCooldown = Math.max(0, unit.cooldownMs) - deltaMs;
+    unit.cooldownMs = Math.max(0, elapsedCooldown);
+    if (player.enemies.length === 0) continue;
     const firstPosition = cellCoords(unit.cell);
     const secondPosition = unit.secondaryCell === undefined ? firstPosition : cellCoords(unit.secondaryCell);
     const position = { x: (firstPosition.x + secondPosition.x) / 2, y: (firstPosition.y + secondPosition.y) / 2 };
     const inRange = player.enemies.filter((enemy) => {
+      if (enemy.hp <= 0) return false;
       const point = pathPoint(snapshot.mapIndex, enemy.progress);
       return attackRangeIntersectsCell(position, point, stats.range);
     });
-    if (inRange.length === 0) continue;
+    if (inRange.length === 0 || elapsedCooldown > 0) continue;
     const target = unit.kind === "弓" || unit.kind === "黄忠" || unit.kind === "黄祖"
       ? [...inRange].sort((a, b) => b.progress - a.progress)[0]!
       : [...inRange].sort((a, b) => {
@@ -997,7 +1002,7 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
         })[0]!;
     damage(target, stats.attack);
     unit.attackCount += 1;
-    unit.cooldownMs += stats.intervalMs;
+    unit.cooldownMs = Math.max(0, stats.intervalMs + elapsedCooldown);
     const effect = emitBattleEvent(snapshot, {
       type: "attack",
       slot: player.slot,
