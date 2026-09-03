@@ -4,8 +4,8 @@ import {
   MAP_LAYOUTS, PASSIVE_PROP_IDS, PROPS, SOLDIERS, TOKEN_POOL, WAVES, cellCode, cellCoords, initialOpenCells, pathPoint,
 } from "./config";
 import type {
-  CommandResult, GameCommand, MatchSnapshot, PlayerBattleState, PlayerPropState, PlayerSlot, PropLoadout,
-  ReserveItem, UnitState,
+  BattleEvent, BattleEventPayload, CommandEnvelope, CommandErrorCode, CommandFailure, CommandResult, GameCommand,
+  MatchSnapshot, PlayerBattleState, PlayerPropState, PlayerSlot, PropLoadout, ReserveItem, UnitState,
 } from "./types";
 import type { ActivePropId, PassivePropId, SoldierKind } from "./config";
 
@@ -20,6 +20,47 @@ export function createRng(seed: number): Rng {
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   }};
+}
+
+function hydrateSnapshot(snapshot: MatchSnapshot) {
+  const incomingVersion = (snapshot as unknown as { snapshotVersion?: number }).snapshotVersion;
+  if (incomingVersion !== undefined && incomingVersion !== 1) {
+    throw new RangeError(`不支持的快照版本：${incomingVersion}`);
+  }
+  snapshot.snapshotVersion ??= 1;
+  snapshot.events ??= [];
+  snapshot.eventSequence ??= 0;
+  snapshot.combatEvents ??= [];
+  snapshot.acceptedCommands ??= {};
+  snapshot.lastClientSeq ??= [0, 0];
+  snapshot.simulationTimeMs ??= Number.isFinite(snapshot.serverTime) ? snapshot.serverTime : 0;
+  snapshot.serverTime = snapshot.simulationTimeMs;
+}
+
+function beginTransition(snapshot: MatchSnapshot) {
+  snapshot.events = [];
+  snapshot.combatEvents = [];
+}
+
+function emitBattleEvent<const Payload extends BattleEventPayload>(snapshot: MatchSnapshot, payload: Payload) {
+  snapshot.eventSequence += 1;
+  const event = {
+    ...payload,
+    id: `event-${snapshot.eventSequence}`,
+    tick: snapshot.tick,
+    stateVersion: snapshot.stateVersion + 1,
+  } as BattleEvent & Payload;
+  snapshot.events.push(event);
+  if (event.type === "attack") snapshot.combatEvents.push(event);
+  return event;
+}
+
+function unitCells(unit: UnitState) {
+  return unit.secondaryCell === undefined ? [unit.cell] : [unit.cell, unit.secondaryCell];
+}
+
+function reserveSlots(item: ReserveItem) {
+  return item.secondarySlot === undefined ? [item.slot] : [item.slot, item.secondarySlot];
 }
 
 function weightedIndex(rng: Rng, weights: readonly number[]) {
@@ -83,13 +124,17 @@ function createPlayer(slot: PlayerSlot, mapIndex: number): PlayerBattleState {
 }
 
 export function createMatch(roomId: string, seed: number, mapIndex = 0): MatchSnapshot {
-  const normalizedMap = Math.max(0, Math.min(3, Math.floor(mapIndex)));
-  const planningRng = createRng(seed);
+  const normalizedSeed = Number.isFinite(seed) ? seed >>> 0 : 0;
+  const normalizedMap = Number.isFinite(mapIndex) ? Math.max(0, Math.min(MAP_LAYOUTS.length - 1, Math.floor(mapIndex))) : 0;
+  const planningRng = createRng(normalizedSeed);
   const difficultyCurve = weightedIndex(planningRng, DIFFICULTY_WEIGHTS);
   const bossWaves = BOSS_MILESTONES.filter((_, index) => planningRng.next() < (BOSS_CHANCES[index] ?? 0));
   return {
-    roomId, tick: 0, stateVersion: 0, seed, mapIndex: normalizedMap, phase: "preparing", difficultyCurve, bossWaves,
-    players: [createPlayer(0, normalizedMap), createPlayer(1, normalizedMap)], combatEvents: [], winner: null, serverTime: Date.now(),
+    snapshotVersion: 1, roomId, tick: 0, stateVersion: 0, simulationTimeMs: 0,
+    seed: normalizedSeed, mapIndex: normalizedMap, phase: "preparing", difficultyCurve, bossWaves,
+    players: [createPlayer(0, normalizedMap), createPlayer(1, normalizedMap)],
+    events: [], eventSequence: 0, combatEvents: [], acceptedCommands: {}, lastClientSeq: [0, 0],
+    winner: null, serverTime: 0,
   };
 }
 
@@ -117,10 +162,11 @@ function recycleValue(items: readonly ReserveItem[]) {
   return items.reduce((sum, item) => sum + (item.kind === "铲子" ? 1 : 2 ** Math.max(0, item.level - 1)), 0);
 }
 
-function recruit(player: PlayerBattleState, rng: Rng): string | null {
+function recruit(snapshot: MatchSnapshot, player: PlayerBattleState, rng: Rng): string | null {
   const recycled = recycleValue(player.reserve);
-  if (player.buns + recycled < player.recruitCost) return "馒头不足";
-  player.buns += recycled - player.recruitCost;
+  const spent = player.recruitCost;
+  if (player.buns + recycled < spent) return "馒头不足";
+  player.buns += recycled - spent;
   player.recruitCount += 1;
   player.recruitCost = GAME_CONFIG.recruitBase + player.recruitCount * GAME_CONFIG.recruitStep;
   const pool = TOKEN_POOL.map(([kind, weight]) => [kind,
@@ -140,6 +186,10 @@ function recruit(player: PlayerBattleState, rng: Rng): string | null {
   player.lastEvent = recycled > 0
     ? `回收${recycled}馒头，征得五枚棋子`
     : `征兵五枚：${player.reserve.map((item) => item.kind).join("、")}`;
+  emitBattleEvent(snapshot, {
+    type: "recruited", slot: player.slot, reserveIds: player.reserve.map((item) => item.id),
+    spentBuns: spent, recycledBuns: recycled,
+  });
   return null;
 }
 
@@ -329,6 +379,7 @@ function dropReserve(snapshot: MatchSnapshot, player: PlayerBattleState, reserve
     player.unlockedCells.push(targetCell);
     player.reserve = player.reserve.filter((candidate) => candidate.id !== reserveId);
     player.lastEvent = "铲子开垦一格";
+    emitBattleEvent(snapshot, { type: "cell-unlocked", slot: player.slot, cell: targetCell, sourceReserveId: reserveId });
     return null;
   }
   if (!canBuild(player, targetCell)) return "只能放入己方已开放白格";
@@ -339,6 +390,10 @@ function dropReserve(snapshot: MatchSnapshot, player: PlayerBattleState, reserve
       if (error) return error;
       player.reserve = player.reserve.filter((candidate) => candidate.id !== reserveId);
       player.lastEvent = `合成「${target.kind}」Lv.${target.level}`;
+      emitBattleEvent(snapshot, {
+        type: "units-merged", slot: player.slot, sourceId: reserveId, targetId: target.id,
+        resultKind: target.kind, resultLevel: target.level, location: "board", cells: unitCells(target),
+      });
       return null;
     }
     const excluded = new Set([item.id, target.id]);
@@ -354,36 +409,46 @@ function dropReserve(snapshot: MatchSnapshot, player: PlayerBattleState, reserve
     if (target.secondaryCell !== undefined && targetCompanion === undefined) return "替换两格武将需要营地相邻空格";
     const sourceCells = sourceCompanion === undefined ? [targetCell] : [targetCell, sourceCompanion].sort((a, b) => a - b);
     const targetSlots = targetCompanion === undefined ? [item.slot] : [item.slot, targetCompanion].sort((a, b) => a - b);
+    const deployed = reserveToUnit(item, sourceCells[0]!, sourceCells[1]);
+    const returned = unitToReserve(target, targetSlots[0]!, targetSlots[1]);
     player.reserve = player.reserve.filter((candidate) => candidate.id !== item.id);
     player.units = player.units.filter((candidate) => candidate.id !== target.id);
-    player.units.push(reserveToUnit(item, sourceCells[0]!, sourceCells[1]));
-    player.reserve.push(unitToReserve(target, targetSlots[0]!, targetSlots[1]));
+    player.units.push(deployed);
+    player.reserve.push(returned);
     player.lastEvent = `上阵「${item.kind}」，替换「${target.kind}」`;
+    emitBattleEvent(snapshot, {
+      type: "units-swapped", slot: player.slot,
+      placements: [{ id: deployed.id, cells: unitCells(deployed) }, { id: returned.id, slots: reserveSlots(returned) }],
+    });
     return null;
   }
   if (item.secondarySlot !== undefined && GENERALS[item.kind]) {
     const companionCell = emptyAdjacentBuildCell(player, targetCell);
     if (companionCell === null) return "两字武将需要占用棋盘相邻两格";
     const cells = [targetCell, companionCell].sort((a, b) => a - b);
-    player.units.push({
+    const unit: UnitState = {
       id: item.id.replace(/^r-/, "u-"), kind: item.kind, level: item.level,
       cell: cells[0]!, secondaryCell: cells[1]!, parts: item.parts ?? [item.kind[0] ?? "", item.kind[1] ?? ""],
       cooldownMs: 0, attackCount: 0,
-    });
+    };
+    player.units.push(unit);
     player.reserve = player.reserve.filter((candidate) => candidate.id !== reserveId);
     player.lastEvent = `上阵武将「${item.kind}」`;
+    emitBattleEvent(snapshot, { type: "unit-deployed", slot: player.slot, unitId: unit.id, unitKind: unit.kind, cells: unitCells(unit) });
     return null;
   }
-  player.units.push({
+  const unit: UnitState = {
     id: item.id.replace(/^r-/, "u-"), kind: item.kind, level: item.level, cell: targetCell,
     cooldownMs: 0, attackCount: 0,
-  });
+  };
+  player.units.push(unit);
   player.reserve = player.reserve.filter((candidate) => candidate.id !== reserveId);
   player.lastEvent = `上阵「${item.kind}」`;
+  emitBattleEvent(snapshot, { type: "unit-deployed", slot: player.slot, unitId: unit.id, unitKind: unit.kind, cells: unitCells(unit) });
   return null;
 }
 
-function dropReserveToSlot(player: PlayerBattleState, reserveId: string, targetSlot: number): string | null {
+function dropReserveToSlot(snapshot: MatchSnapshot, player: PlayerBattleState, reserveId: string, targetSlot: number): string | null {
   if (!validReserveSlot(targetSlot)) return "营地目标格不存在";
   const source = player.reserve.find((item) => item.id === reserveId);
   if (!source) return "营地棋子不存在";
@@ -395,6 +460,10 @@ function dropReserveToSlot(player: PlayerBattleState, reserveId: string, targetS
       if (error) return error;
       player.reserve = player.reserve.filter((item) => item.id !== source.id);
       player.lastEvent = `营地合成「${target.kind}」Lv.${target.level}`;
+      emitBattleEvent(snapshot, {
+        type: "units-merged", slot: player.slot, sourceId: source.id, targetId: target.id,
+        resultKind: target.kind, resultLevel: target.level, location: "reserve", slots: reserveSlots(target),
+      });
       return null;
     }
     const excluded = new Set([source.id, target.id]);
@@ -415,6 +484,10 @@ function dropReserveToSlot(player: PlayerBattleState, reserveId: string, targetS
     target.slot = targetSlots[0]!;
     target.secondarySlot = targetSlots[1];
     player.lastEvent = `营地交换「${source.kind}」与「${target.kind}」`;
+    emitBattleEvent(snapshot, {
+      type: "units-swapped", slot: player.slot,
+      placements: [{ id: source.id, slots: reserveSlots(source) }, { id: target.id, slots: reserveSlots(target) }],
+    });
     return null;
   }
   if (source.secondarySlot !== undefined) {
@@ -427,10 +500,11 @@ function dropReserveToSlot(player: PlayerBattleState, reserveId: string, targetS
     source.slot = targetSlot;
   }
   player.lastEvent = `移动营地棋子「${source.kind}」`;
+  emitBattleEvent(snapshot, { type: "reserve-moved", slot: player.slot, reserveId: source.id, slots: reserveSlots(source) });
   return null;
 }
 
-function dropUnitToReserve(player: PlayerBattleState, unitId: string, targetSlot: number): string | null {
+function dropUnitToReserve(snapshot: MatchSnapshot, player: PlayerBattleState, unitId: string, targetSlot: number): string | null {
   if (!validReserveSlot(targetSlot)) return "营地目标格不存在";
   const source = player.units.find((unit) => unit.id === unitId);
   if (!source) return "单位不存在";
@@ -442,6 +516,10 @@ function dropUnitToReserve(player: PlayerBattleState, unitId: string, targetSlot
       if (error) return error;
       player.units = player.units.filter((unit) => unit.id !== source.id);
       player.lastEvent = `营地合成「${target.kind}」Lv.${target.level}`;
+      emitBattleEvent(snapshot, {
+        type: "units-merged", slot: player.slot, sourceId: source.id, targetId: target.id,
+        resultKind: target.kind, resultLevel: target.level, location: "reserve", slots: reserveSlots(target),
+      });
       return null;
     }
     const excluded = new Set([source.id, target.id]);
@@ -450,28 +528,40 @@ function dropUnitToReserve(player: PlayerBattleState, unitId: string, targetSlot
       : adjacentCellExcluding(player, source.cell, excluded) ?? undefined;
     if (target.secondarySlot !== undefined && targetCompanion === undefined) return "替换两格武将需要棋盘相邻空格";
     const targetCells = targetCompanion === undefined ? [source.cell] : [source.cell, targetCompanion].sort((a, b) => a - b);
+    const returned = unitToReserve(source, targetSlot);
+    const deployed = reserveToUnit(target, targetCells[0]!, targetCells[1]);
     player.units = player.units.filter((unit) => unit.id !== source.id);
     player.reserve = player.reserve.filter((item) => item.id !== target.id);
-    player.reserve.push(unitToReserve(source, targetSlot));
-    player.units.push(reserveToUnit(target, targetCells[0]!, targetCells[1]));
+    player.reserve.push(returned);
+    player.units.push(deployed);
     player.lastEvent = `「${source.kind}」回营，替换「${target.kind}」`;
+    emitBattleEvent(snapshot, {
+      type: "units-swapped", slot: player.slot,
+      placements: [{ id: returned.id, slots: reserveSlots(returned) }, { id: deployed.id, cells: unitCells(deployed) }],
+    });
     return null;
   }
+  const returned = unitToReserve(source, targetSlot);
   player.units = player.units.filter((unit) => unit.id !== source.id);
-  player.reserve.push({ id: source.id.replace(/^u-/, "r-"), kind: source.kind, level: source.level, slot: targetSlot });
+  player.reserve.push(returned);
   player.lastEvent = `「${source.kind}」返回营地`;
+  emitBattleEvent(snapshot, {
+    type: "unit-returned", slot: player.slot, unitId: source.id, unitKind: source.kind, slots: reserveSlots(returned),
+  });
   return null;
 }
 
-function dropUnit(player: PlayerBattleState, unitId: string, targetCell: number): string | null {
+function dropUnit(snapshot: MatchSnapshot, player: PlayerBattleState, unitId: string, targetCell: number): string | null {
   if (!canBuild(player, targetCell)) return "只能放入己方已开放白格";
   const source = player.units.find((candidate) => candidate.id === unitId);
   if (!source) return "单位不存在";
   const target = unitAtCell(player, targetCell);
   if (!target) {
     if (source.secondaryCell !== undefined) return "两格武将需要先拆字再移动";
+    const fromCells = unitCells(source);
     source.cell = targetCell;
     player.lastEvent = `移动「${source.kind}」`;
+    emitBattleEvent(snapshot, { type: "unit-moved", slot: player.slot, unitId: source.id, fromCells, toCells: unitCells(source) });
     return null;
   }
   if (target.id === source.id) return null;
@@ -480,6 +570,10 @@ function dropUnit(player: PlayerBattleState, unitId: string, targetCell: number)
     if (error) return error;
     player.units = player.units.filter((candidate) => candidate.id !== source.id);
     player.lastEvent = `合成「${target.kind}」Lv.${target.level}`;
+    emitBattleEvent(snapshot, {
+      type: "units-merged", slot: player.slot, sourceId: source.id, targetId: target.id,
+      resultKind: target.kind, resultLevel: target.level, location: "board", cells: unitCells(target),
+    });
     return null;
   }
   const sourceCell = source.cell;
@@ -495,6 +589,10 @@ function dropUnit(player: PlayerBattleState, unitId: string, targetCell: number)
     target.secondaryCell = targetCells[1]!;
   }
   player.lastEvent = `交换「${source.kind}」与「${target.kind}」`;
+  emitBattleEvent(snapshot, {
+    type: "units-swapped", slot: player.slot,
+    placements: [{ id: source.id, cells: unitCells(source) }, { id: target.id, cells: unitCells(target) }],
+  });
   return null;
 }
 
@@ -513,23 +611,29 @@ function splitGeneral(snapshot: MatchSnapshot, player: PlayerBattleState, unitId
     cooldownMs: 0, attackCount: 0,
   });
   player.units = player.units.filter((unit) => unit.id !== general.id);
-  player.units.push(makePart(otherIndex, cells[otherIndex]), makePart(partIndex, targetCell));
+  const partsAfterSplit = [makePart(otherIndex, cells[otherIndex]), makePart(partIndex, targetCell)];
+  player.units.push(...partsAfterSplit);
   player.lastEvent = `拆分「${general.kind}」为「${parts[0]}」「${parts[1]}」`;
+  emitBattleEvent(snapshot, {
+    type: "general-split", slot: player.slot, generalId: general.id,
+    parts: partsAfterSplit.map((part) => ({ id: part.id, kind: part.kind, cell: part.cell })),
+  });
   return null;
 }
 
-function mergeById(player: PlayerBattleState, sourceId: string, targetId: string): string | null {
+function mergeById(snapshot: MatchSnapshot, player: PlayerBattleState, sourceId: string, targetId: string): string | null {
   if (sourceId === targetId) return "不能与自身合成";
   const source = player.units.find((item) => item.id === sourceId);
   const target = player.units.find((item) => item.id === targetId);
   if (!source || !target) return "单位不存在";
-  return dropUnit(player, sourceId, target.cell);
+  return dropUnit(snapshot, player, sourceId, target.cell);
 }
 
 function normalizeLoadout(loadout: PropLoadout): PropLoadout | null {
   const active = [...new Set(loadout.active)];
   const passive = loadout.passive.filter((entry, index, entries) => entries.findIndex((other) => other.id === entry.id) === index)
     .map((entry) => ({ id: entry.id, level: entry.id === 22 ? Math.max(1, Math.min(3, Math.floor(entry.level))) : 1 }));
+  if (active.length !== loadout.active.length || passive.length !== loadout.passive.length) return null;
   if (active.length > 2 || passive.length > 6) return null;
   if (active.some((id) => !ACTIVE_PROP_IDS.includes(id))) return null;
   if (passive.some((entry) => !PASSIVE_PROP_IDS.includes(entry.id))) return null;
@@ -636,12 +740,19 @@ function useProp(
   }
   if (command.propId === 21) {
     const item = command.reserveId ? player.reserve.find((candidate) => candidate.id === command.reserveId) : undefined;
-    if (!item) return "请选择营地内要回收的文字";
+    if (!item || item.kind === "铲子") return "请选择营地内要回收的文字";
     player.reserve = player.reserve.filter((candidate) => candidate.id !== item.id);
     player.buns += 1;
     player.lastEvent = `垃圾桶回收「${item.kind}」，+1馒头`;
   }
   props.cooldowns[command.propId] = Math.max(0, config.cooldownMs);
+  emitBattleEvent(snapshot, {
+    type: "prop-used", slot: player.slot, propId: command.propId,
+    ...(command.targetUnitId === undefined ? {} : { targetUnitId: command.targetUnitId }),
+    ...(command.targetEnemyId === undefined ? {} : { targetEnemyId: command.targetEnemyId }),
+    ...(command.targetCell === undefined ? {} : { targetCell: command.targetCell }),
+    ...(command.reserveId === undefined ? {} : { reserveId: command.reserveId }),
+  });
   return null;
 }
 
@@ -667,37 +778,181 @@ function claimShovelSupply(snapshot: MatchSnapshot, player: PlayerBattleState): 
   if (!supplyCount) return "填满初始白色布阵格后才会出现铲子补给";
   const freeSlots = Array.from({ length: GAME_CONFIG.reserveSize }, (_, slot) => slot)
     .filter((slot) => !reserveAtSlot(player, slot)).slice(0, supplyCount);
-  for (const targetSlot of freeSlots) player.reserve.push({
-    id: `r-${player.slot}-ad-shovel-${snapshot.stateVersion + 1}-${targetSlot}`,
-    kind: "铲子", level: 1, slot: targetSlot,
-  });
+  const reserveIds: string[] = [];
+  for (const targetSlot of freeSlots) {
+    const id = `r-${player.slot}-ad-shovel-${snapshot.stateVersion + 1}-${targetSlot}`;
+    player.reserve.push({ id, kind: "铲子", level: 1, slot: targetSlot });
+    reserveIds.push(id);
+  }
   props.shovelSupplyClaimed = true;
   player.lastEvent = `直接领取${freeSlots.length}把铲子（原广告补给）`;
+  emitBattleEvent(snapshot, { type: "reserve-granted", slot: player.slot, reserveIds, reason: "shovel-supply" });
   return null;
 }
 
+function dispatchCommand(snapshot: MatchSnapshot, player: PlayerBattleState, command: GameCommand): string | null {
+  const rng = createRng(snapshot.seed ^ ((snapshot.stateVersion + 1) * 0x9E3779B1) ^ (player.slot * 977));
+  switch (command.type) {
+    case "RECRUIT": return recruit(snapshot, player, rng);
+    case "SET_PROP_LOADOUT": return setPropLoadout(snapshot, player, command.loadout, command.earlyAccountShovelBonus);
+    case "USE_PROP": return useProp(snapshot, player, command, rng);
+    case "CLAIM_SHOVEL_SUPPLY": return claimShovelSupply(snapshot, player);
+    case "DROP_RESERVE": return dropReserve(snapshot, player, command.reserveId, command.targetCell);
+    case "DROP_RESERVE_TO_SLOT": return dropReserveToSlot(snapshot, player, command.reserveId, command.targetSlot);
+    case "DROP_UNIT": return dropUnit(snapshot, player, command.unitId, command.targetCell);
+    case "DROP_UNIT_TO_RESERVE": return dropUnitToReserve(snapshot, player, command.unitId, command.targetSlot);
+    case "SPLIT_GENERAL": return splitGeneral(snapshot, player, command.unitId, command.partIndex, command.targetCell);
+    case "MOVE": return dropUnit(snapshot, player, command.unitId, command.targetCell);
+    case "MERGE": return mergeById(snapshot, player, command.sourceId, command.targetId);
+    default: return "未知命令";
+  }
+}
+
+function failure(
+  snapshot: MatchSnapshot, commandId: string, code: CommandErrorCode, message: string,
+): CommandFailure {
+  return { commandId, ok: false, duplicate: false, code, message, stateVersion: snapshot.stateVersion };
+}
+
+/**
+ * 0.x 本地调用兼容入口。网络和可重试调用应使用 executeCommand，
+ * 由完整 CommandEnvelope 提供幂等与乐观并发保护。
+ */
 export function applyCommand(snapshot: MatchSnapshot, slot: PlayerSlot, command: GameCommand): CommandResult {
+  hydrateSnapshot(snapshot);
+  if ((slot !== 0 && slot !== 1) || !validGameCommand(command)) {
+    return failure(snapshot, "", "ERR_INVALID_COMMAND", "命令格式非法");
+  }
   const player = snapshot.players[slot];
-  if (snapshot.phase === "finished") return { commandId: "", ok: false, code: "ERR_MATCH_ENDED", message: "对局已结束", stateVersion: snapshot.stateVersion };
-  const rng = createRng(snapshot.seed ^ ((snapshot.stateVersion + 1) * 0x9E3779B1) ^ (slot * 977));
-  let error: string | null = null;
-  if (command.type === "RECRUIT") error = recruit(player, rng);
-  if (command.type === "SET_PROP_LOADOUT") error = setPropLoadout(snapshot, player, command.loadout, command.earlyAccountShovelBonus);
-  if (command.type === "USE_PROP") error = useProp(snapshot, player, command, rng);
-  if (command.type === "CLAIM_SHOVEL_SUPPLY") error = claimShovelSupply(snapshot, player);
-  if (command.type === "DROP_RESERVE") error = dropReserve(snapshot, player, command.reserveId, command.targetCell);
-  if (command.type === "DROP_RESERVE_TO_SLOT") error = dropReserveToSlot(player, command.reserveId, command.targetSlot);
-  if (command.type === "DROP_UNIT") error = dropUnit(player, command.unitId, command.targetCell);
-  if (command.type === "DROP_UNIT_TO_RESERVE") error = dropUnitToReserve(player, command.unitId, command.targetSlot);
-  if (command.type === "SPLIT_GENERAL") error = splitGeneral(snapshot, player, command.unitId, command.partIndex, command.targetCell);
-  if (command.type === "MOVE") error = dropUnit(player, command.unitId, command.targetCell);
-  if (command.type === "MERGE") error = mergeById(player, command.sourceId, command.targetId);
+  if (snapshot.phase === "finished") return failure(snapshot, "", "ERR_MATCH_ENDED", "对局已结束");
+
+  const draft = cloneSnapshot(snapshot);
+  beginTransition(draft);
+  const error = dispatchCommand(draft, draft.players[slot], command);
   if (error) return {
-    commandId: "", ok: false, code: error === "馒头不足" ? "ERR_NOT_ENOUGH_BUN" : "ERR_INVALID_COMMAND",
+    commandId: "", ok: false, duplicate: false,
+    code: error === "馒头不足" ? "ERR_NOT_ENOUGH_BUN" : "ERR_INVALID_COMMAND",
     message: error, stateVersion: snapshot.stateVersion,
   };
+
+  beginTransition(snapshot);
+  const commitError = dispatchCommand(snapshot, player, command);
+  if (commitError) throw new Error(`命令校验与提交结果不一致：${commitError}`);
   snapshot.stateVersion += 1;
-  return { commandId: "", ok: true, stateVersion: snapshot.stateVersion };
+  return { commandId: "", ok: true, duplicate: false, stateVersion: snapshot.stateVersion };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isNonEmptyString(value: unknown) {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isCellOrSlot(value: unknown) {
+  return Number.isSafeInteger(value);
+}
+
+function validGameCommand(value: unknown): value is GameCommand {
+  if (!isRecord(value) || typeof value.type !== "string") return false;
+  switch (value.type) {
+    case "RECRUIT":
+    case "CLAIM_SHOVEL_SUPPLY":
+      return true;
+    case "SET_PROP_LOADOUT": {
+      if (!isRecord(value.loadout) || !Array.isArray(value.loadout.active) || !Array.isArray(value.loadout.passive)) return false;
+      if (value.earlyAccountShovelBonus !== undefined && typeof value.earlyAccountShovelBonus !== "boolean") return false;
+      return value.loadout.active.every((id) => Number.isSafeInteger(id))
+        && value.loadout.passive.every((entry) => isRecord(entry) && Number.isSafeInteger(entry.id) && Number.isFinite(entry.level));
+    }
+    case "USE_PROP":
+      return Number.isSafeInteger(value.propId)
+        && (value.targetUnitId === undefined || isNonEmptyString(value.targetUnitId))
+        && (value.targetEnemyId === undefined || isNonEmptyString(value.targetEnemyId))
+        && (value.targetCell === undefined || isCellOrSlot(value.targetCell))
+        && (value.reserveId === undefined || isNonEmptyString(value.reserveId));
+    case "DROP_RESERVE":
+      return isNonEmptyString(value.reserveId) && isCellOrSlot(value.targetCell);
+    case "DROP_RESERVE_TO_SLOT":
+      return isNonEmptyString(value.reserveId) && isCellOrSlot(value.targetSlot);
+    case "DROP_UNIT":
+    case "MOVE":
+      return isNonEmptyString(value.unitId) && isCellOrSlot(value.targetCell);
+    case "DROP_UNIT_TO_RESERVE":
+      return isNonEmptyString(value.unitId) && isCellOrSlot(value.targetSlot);
+    case "SPLIT_GENERAL":
+      return isNonEmptyString(value.unitId)
+        && (value.partIndex === 0 || value.partIndex === 1)
+        && isCellOrSlot(value.targetCell);
+    case "MERGE":
+      return isNonEmptyString(value.sourceId) && isNonEmptyString(value.targetId);
+    default:
+      return false;
+  }
+}
+
+function validEnvelope(envelope: CommandEnvelope) {
+  return isRecord(envelope)
+    && typeof envelope.commandId === "string"
+    && envelope.commandId.length > 0
+    && envelope.commandId.length <= 128
+    && Number.isSafeInteger(envelope.clientSeq)
+    && envelope.clientSeq > 0
+    && Number.isSafeInteger(envelope.expectedStateVersion)
+    && envelope.expectedStateVersion >= 0
+    && validGameCommand(envelope.command);
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (isRecord(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  return JSON.stringify(value) ?? "null";
+}
+
+function sameAcceptedCommand(record: MatchSnapshot["acceptedCommands"][string], slot: PlayerSlot, envelope: CommandEnvelope) {
+  return record.slot === slot
+    && record.clientSeq === envelope.clientSeq
+    && record.expectedStateVersion === envelope.expectedStateVersion
+    && canonicalJson(record.command) === canonicalJson(envelope.command);
+}
+
+/** 权威命令入口：校验版本和席位序号，并把成功命令的幂等记录持久化进快照。 */
+export function executeCommand(snapshot: MatchSnapshot, slot: PlayerSlot, envelope: CommandEnvelope): CommandResult {
+  hydrateSnapshot(snapshot);
+  if ((slot !== 0 && slot !== 1) || !validEnvelope(envelope)) {
+    return failure(snapshot, isRecord(envelope) && typeof envelope.commandId === "string" ? envelope.commandId : "", "ERR_INVALID_ENVELOPE", "命令信封格式非法");
+  }
+
+  const accepted = Object.prototype.hasOwnProperty.call(snapshot.acceptedCommands, envelope.commandId)
+    ? snapshot.acceptedCommands[envelope.commandId]
+    : undefined;
+  if (accepted) {
+    if (!sameAcceptedCommand(accepted, slot, envelope)) {
+      return failure(snapshot, envelope.commandId, "ERR_COMMAND_ID_CONFLICT", "命令 ID 已被另一意图使用");
+    }
+    return { ...accepted.result, duplicate: true };
+  }
+  if (envelope.expectedStateVersion > snapshot.stateVersion) {
+    return failure(snapshot, envelope.commandId, "ERR_STATE_VERSION", "命令引用了尚不存在的状态版本");
+  }
+  if (envelope.clientSeq <= snapshot.lastClientSeq[slot]) {
+    return failure(snapshot, envelope.commandId, "ERR_CLIENT_SEQUENCE", "客户端命令序号重复或倒退");
+  }
+
+  const applied = applyCommand(snapshot, slot, envelope.command);
+  if (!applied.ok) return { ...applied, commandId: envelope.commandId };
+  const result = { ...applied, commandId: envelope.commandId };
+
+  snapshot.lastClientSeq[slot] = envelope.clientSeq;
+  Object.defineProperty(snapshot.acceptedCommands, envelope.commandId, {
+    configurable: true, enumerable: true, writable: true,
+    value: {
+      slot, clientSeq: envelope.clientSeq, expectedStateVersion: envelope.expectedStateVersion,
+      command: structuredClone(envelope.command), result: { ...result },
+    },
+  });
+  return result;
 }
 
 function spawnEnemy(snapshot: MatchSnapshot, player: PlayerBattleState) {
@@ -743,21 +998,20 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
     damage(target, stats.attack);
     unit.attackCount += 1;
     unit.cooldownMs += stats.intervalMs;
-    const effect = {
-      id: `fx-${snapshot.tick}-${player.slot}-${unit.id}-${unit.attackCount}`,
+    const effect = emitBattleEvent(snapshot, {
+      type: "attack",
       slot: player.slot,
       unitId: unit.id,
       unitKind: unit.kind,
       sourceCell: unit.cell,
-      secondaryCell: unit.secondaryCell,
+      ...(unit.secondaryCell === undefined ? {} : { secondaryCell: unit.secondaryCell }),
       targetId: target.id,
       targetProgress: target.progress,
       targetBoss: target.boss,
       damage: stats.attack,
       hitCount: 1,
       special: false,
-    };
-    snapshot.combatEvents.push(effect);
+    } as Extract<BattleEventPayload, { type: "attack" }>);
 
     if (unit.kind === "枪") {
       const next = inRange.filter((enemy) => enemy.id !== target.id).sort((a, b) => Math.abs(a.progress - target.progress) - Math.abs(b.progress - target.progress))[0];
@@ -786,6 +1040,10 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
     player.enemies = player.enemies.filter((enemy) => enemy.hp > 0);
     const reward = defeated.reduce((sum, enemy) => sum + (enemy.boss ? GAME_CONFIG.bossKillBuns : GAME_CONFIG.normalKillBuns), 0);
     player.buns += reward;
+    for (const enemy of defeated) emitBattleEvent(snapshot, {
+      type: "enemy-defeated", slot: player.slot, enemyId: enemy.id, boss: enemy.boss,
+      rewardBuns: enemy.boss ? GAME_CONFIG.bossKillBuns : GAME_CONFIG.normalKillBuns,
+    });
     player.lastEvent = defeated.some((enemy) => enemy.boss) ? `击败Boss，+${reward}馒头` : `击败敌人，+${reward}馒头`;
   }
 }
@@ -833,10 +1091,18 @@ function tickProps(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: 
     if (props.farmerSpawnMs <= 0) {
       props.farmerSpawnMs += 30_000;
       const cell = player.unlockedCells.find((candidate) => !unitAtCell(player, candidate));
-      if (cell !== undefined) player.units.push({ id: `farmer-${player.slot}-${snapshot.tick}`, kind: "农", level: 1, cell, cooldownMs: 0, attackCount: 0, incomeMs: 20_000 });
+      if (cell !== undefined) {
+        const unit = { id: `farmer-${player.slot}-${snapshot.tick}`, kind: "农", level: 1, cell, cooldownMs: 0, attackCount: 0, incomeMs: 20_000 };
+        player.units.push(unit);
+        emitBattleEvent(snapshot, { type: "unit-deployed", slot: player.slot, unitId: unit.id, unitKind: unit.kind, cells: [unit.cell] });
+      }
       else {
         const slot = firstEmptyReserveSlot(player);
-        if (slot !== null) player.reserve.push({ id: `farmer-r-${player.slot}-${snapshot.tick}`, kind: "农", level: 1, slot, incomeMs: 20_000 });
+        if (slot !== null) {
+          const item = { id: `farmer-r-${player.slot}-${snapshot.tick}`, kind: "农", level: 1, slot, incomeMs: 20_000 };
+          player.reserve.push(item);
+          emitBattleEvent(snapshot, { type: "reserve-granted", slot: player.slot, reserveIds: [item.id], reason: "farmer" });
+        }
       }
     }
   }
@@ -845,7 +1111,11 @@ function tickProps(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: 
     if (props.superShovelMs <= 0) {
       props.superShovelMs += 60_000;
       const slot = firstEmptyReserveSlot(player);
-      if (slot !== null) player.reserve.push({ id: `super-shovel-${player.slot}-${snapshot.tick}`, kind: "铲子", level: 1, slot });
+      if (slot !== null) {
+        const item = { id: `super-shovel-${player.slot}-${snapshot.tick}`, kind: "铲子", level: 1, slot };
+        player.reserve.push(item);
+        emitBattleEvent(snapshot, { type: "reserve-granted", slot: player.slot, reserveIds: [item.id], reason: "super-shovel" });
+      }
     }
   }
   if (hasPassive(player, 20)) {
@@ -856,12 +1126,17 @@ function tickProps(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: 
       return endCells.some((cell) => Math.hypot(point.x - cell.x, point.y - cell.y) <= 1);
     });
     if (threatened && props.meteorMs === 0) {
+      const defeatedIds = player.enemies.filter((enemy) => {
+        const point = pathPoint(snapshot.mapIndex, enemy.progress);
+        return endCells.some((cell) => Math.hypot(point.x - cell.x, point.y - cell.y) <= 1);
+      }).map((enemy) => enemy.id);
       player.enemies = player.enemies.filter((enemy) => {
         const point = pathPoint(snapshot.mapIndex, enemy.progress);
         return !endCells.some((cell) => Math.hypot(point.x - cell.x, point.y - cell.y) <= 1);
       });
       props.meteorMs = 300_000;
       player.lastEvent = "陨石落下，清除阿斗附近敌军";
+      emitBattleEvent(snapshot, { type: "prop-triggered", slot: player.slot, propId: 20, targetIds: defeatedIds });
     }
   }
 
@@ -872,8 +1147,16 @@ function tickProps(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: 
       return Math.hypot(point.x - cell.x, point.y - cell.y) <= 0.25;
     });
     if (!trigger) continue;
-    if (placed.propId === 8) trigger.stunnedMs = Math.max(trigger.stunnedMs, 5_000);
+    let targetIds: string[];
+    if (placed.propId === 8) {
+      trigger.stunnedMs = Math.max(trigger.stunnedMs, 5_000);
+      targetIds = [trigger.id];
+    }
     else {
+      targetIds = player.enemies.filter((enemy) => {
+        const point = pathPoint(snapshot.mapIndex, enemy.progress);
+        return Math.hypot(point.x - cell.x, point.y - cell.y) <= 0.75;
+      }).map((enemy) => enemy.id);
       player.enemies = player.enemies.filter((enemy) => {
         const point = pathPoint(snapshot.mapIndex, enemy.progress);
         return Math.hypot(point.x - cell.x, point.y - cell.y) > 0.75;
@@ -881,6 +1164,7 @@ function tickProps(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: 
     }
     props.placed = props.placed.filter((candidate) => candidate.id !== placed.id);
     player.lastEvent = placed.propId === 8 ? "陷阱触发：敌人眩晕5秒" : "地雷触发：范围敌军被消灭";
+    emitBattleEvent(snapshot, { type: "prop-triggered", slot: player.slot, propId: placed.propId, targetIds });
   }
 }
 
@@ -921,8 +1205,13 @@ function tickPlayer(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs:
   if (escaped.length) {
     player.enemies = player.enemies.filter((enemy) => enemy.progress < 1);
     player.hp = Math.max(0, player.hp - escaped.length);
-    player.buns += escaped.length * GAME_CONFIG.hpLostBuns;
-    player.lastEvent = `阿斗受击 ×${escaped.length}，+${escaped.length * GAME_CONFIG.hpLostBuns}馒头`;
+    const awardedBuns = escaped.length * GAME_CONFIG.hpLostBuns;
+    player.buns += awardedBuns;
+    player.lastEvent = `阿斗受击 ×${escaped.length}，+${awardedBuns}馒头`;
+    emitBattleEvent(snapshot, {
+      type: "player-damaged", slot: player.slot, escapedCount: escaped.length,
+      remainingHp: player.hp, awardedBuns,
+    });
   }
   if (player.remainingToSpawn === 0 && player.enemies.length === 0) {
     player.interwaveMs += deltaMs;
@@ -931,10 +1220,13 @@ function tickPlayer(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs:
 }
 
 export function stepMatch(snapshot: MatchSnapshot, deltaMs: number) {
+  hydrateSnapshot(snapshot);
+  if (!Number.isFinite(deltaMs) || deltaMs <= 0) throw new RangeError("deltaMs 必须是大于 0 的有限毫秒值");
   if (snapshot.phase === "finished" || snapshot.phase === "waiting") return snapshot;
-  snapshot.combatEvents = [];
+  beginTransition(snapshot);
   snapshot.tick += 1;
-  snapshot.serverTime += deltaMs;
+  snapshot.simulationTimeMs += deltaMs;
+  snapshot.serverTime = snapshot.simulationTimeMs;
   snapshot.players.forEach((player) => tickPlayer(snapshot, player, deltaMs));
   if (snapshot.players.some((player) => player.phase === "battle")) snapshot.phase = "battle";
   const dead = snapshot.players.map((player) => player.hp <= 0);
@@ -944,11 +1236,14 @@ export function stepMatch(snapshot: MatchSnapshot, deltaMs: number) {
     if ((dead[0] && dead[1]) || (survived[0] && survived[1])) snapshot.winner = "draw";
     else snapshot.winner = (dead[0] || survived[1]) ? 1 : 0;
     snapshot.players.forEach((player) => { player.phase = "finished"; });
+    emitBattleEvent(snapshot, { type: "match-finished", winner: snapshot.winner });
   }
   snapshot.stateVersion += 1;
   return snapshot;
 }
 
 export function cloneSnapshot(snapshot: MatchSnapshot): MatchSnapshot {
-  return structuredClone(snapshot);
+  const clone = structuredClone(snapshot);
+  hydrateSnapshot(clone);
+  return clone;
 }

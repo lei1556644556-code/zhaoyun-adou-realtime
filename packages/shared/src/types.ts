@@ -1,4 +1,4 @@
-import type { ActivePropId, PassivePropId } from "./config";
+import type { ActivePropId, BattlePropId, PassivePropId } from "./config";
 
 export type PlayerSlot = 0 | 1;
 export type MatchPhase = "waiting" | "preparing" | "battle" | "finished";
@@ -70,20 +70,139 @@ export interface PlayerPropState {
   shovelSupplyClaimed?: boolean;
 }
 
-export interface CombatEffectEvent {
+export interface BattleEventBase {
+  /** 对局内单调生成、永不复用的事件 ID。 */
   id: string;
-  slot: PlayerSlot;
-  unitId: string;
-  unitKind: string;
-  sourceCell: number;
-  secondaryCell?: number;
-  targetId: string;
-  targetProgress: number;
-  targetBoss: boolean;
-  damage: number;
-  hitCount: number;
-  special: boolean;
+  /** 产生事件的模拟 Tick；玩家命令不会额外推进 Tick。 */
+  tick: number;
+  /** 产生事件的状态转换版本。 */
+  stateVersion: number;
 }
+
+export type BattleEventPayload =
+  | {
+    type: "recruited";
+    slot: PlayerSlot;
+    reserveIds: string[];
+    spentBuns: number;
+    recycledBuns: number;
+  }
+  | {
+    type: "reserve-granted";
+    slot: PlayerSlot;
+    reserveIds: string[];
+    reason: "shovel-supply" | "farmer" | "super-shovel";
+  }
+  | {
+    type: "unit-deployed";
+    slot: PlayerSlot;
+    unitId: string;
+    unitKind: string;
+    cells: number[];
+  }
+  | {
+    type: "unit-moved";
+    slot: PlayerSlot;
+    unitId: string;
+    fromCells: number[];
+    toCells: number[];
+  }
+  | {
+    type: "unit-returned";
+    slot: PlayerSlot;
+    unitId: string;
+    unitKind: string;
+    slots: number[];
+  }
+  | {
+    type: "units-swapped";
+    slot: PlayerSlot;
+    placements: Array<{ id: string; cells?: number[]; slots?: number[] }>;
+  }
+  | {
+    type: "units-merged";
+    slot: PlayerSlot;
+    sourceId: string;
+    targetId: string;
+    resultKind: string;
+    resultLevel: number;
+    location: "board" | "reserve";
+    cells?: number[];
+    slots?: number[];
+  }
+  | {
+    type: "general-split";
+    slot: PlayerSlot;
+    generalId: string;
+    parts: Array<{ id: string; kind: string; cell: number }>;
+  }
+  | {
+    type: "cell-unlocked";
+    slot: PlayerSlot;
+    cell: number;
+    sourceReserveId: string;
+  }
+  | {
+    type: "reserve-moved";
+    slot: PlayerSlot;
+    reserveId: string;
+    slots: number[];
+  }
+  | {
+    type: "prop-used";
+    slot: PlayerSlot;
+    propId: ActivePropId;
+    targetUnitId?: string;
+    targetEnemyId?: string;
+    targetCell?: number;
+    reserveId?: string;
+  }
+  | {
+    type: "prop-triggered";
+    slot: PlayerSlot;
+    propId: BattlePropId;
+    targetIds: string[];
+  }
+  | {
+    type: "attack";
+    slot: PlayerSlot;
+    unitId: string;
+    unitKind: string;
+    sourceCell: number;
+    secondaryCell?: number;
+    targetId: string;
+    targetProgress: number;
+    targetBoss: boolean;
+    damage: number;
+    hitCount: number;
+    special: boolean;
+  }
+  | {
+    type: "enemy-defeated";
+    slot: PlayerSlot;
+    enemyId: string;
+    boss: boolean;
+    rewardBuns: number;
+  }
+  | {
+    type: "player-damaged";
+    slot: PlayerSlot;
+    escapedCount: number;
+    remainingHp: number;
+    awardedBuns: number;
+  }
+  | {
+    type: "match-finished";
+    winner: PlayerSlot | "draw";
+  };
+
+/** 可 JSON 序列化、只描述已结算事实的一次性战斗事件。 */
+export type BattleEvent = BattleEventPayload extends infer Payload
+  ? Payload extends object ? BattleEventBase & Payload : never
+  : never;
+
+/** @deprecated 攻击事件兼容别名；新消费者应读取 MatchSnapshot.events。 */
+export type CombatEffectEvent = Extract<BattleEvent, { type: "attack" }>;
 
 export interface PlayerBattleState {
   slot: PlayerSlot;
@@ -109,18 +228,31 @@ export interface PlayerBattleState {
 }
 
 export interface MatchSnapshot {
+  /** 可持久化快照的结构版本。 */
+  snapshotVersion: 1;
   roomId: string;
   tick: number;
   stateVersion: number;
+  /** 从对局创建开始累计的确定性逻辑毫秒数。 */
+  simulationTimeMs: number;
   seed: number;
   mapIndex: number;
   phase: MatchPhase;
   difficultyCurve: number;
   bossWaves: number[];
   players: [PlayerBattleState, PlayerBattleState];
-  /** 当前权威 Tick 内发生的攻击；客户端只据此播放表现，不参与伤害计算。 */
+  /** 最近一次成功命令或模拟步产生的一次性事件。 */
+  events: BattleEvent[];
+  /** 下一个事件 ID 的持久化序号。 */
+  eventSequence: number;
+  /** @deprecated 当前转换中的攻击事件兼容视图。 */
   combatEvents: CombatEffectEvent[];
+  /** 已成功接受的命令；用于存档/重连后的幂等重试。 */
+  acceptedCommands: Record<string, AcceptedCommandRecord>;
+  /** 每个席位最后成功接受的客户端序号。 */
+  lastClientSeq: [number, number];
   winner: PlayerSlot | "draw" | null;
+  /** @deprecated 与 simulationTimeMs 同步的 0.x 兼容字段，不表示墙钟。 */
   serverTime: number;
 }
 
@@ -144,10 +276,40 @@ export interface CommandEnvelope {
   command: GameCommand;
 }
 
-export interface CommandResult {
+export type CommandErrorCode =
+  | "ERR_INVALID_ENVELOPE"
+  | "ERR_COMMAND_ID_CONFLICT"
+  | "ERR_STATE_VERSION"
+  | "ERR_CLIENT_SEQUENCE"
+  | "ERR_MATCH_ENDED"
+  | "ERR_NOT_ENOUGH_BUN"
+  | "ERR_INVALID_COMMAND";
+
+export interface CommandSuccess {
   commandId: string;
-  ok: boolean;
-  code?: string;
-  message?: string;
+  ok: true;
+  duplicate: boolean;
+  /** 成功结果不携带错误；保留可选键以兼容 0.x 消费者的直接读取。 */
+  code?: never;
+  message?: never;
   stateVersion: number;
+}
+
+export interface CommandFailure {
+  commandId: string;
+  ok: false;
+  duplicate: false;
+  code: CommandErrorCode;
+  message: string;
+  stateVersion: number;
+}
+
+export type CommandResult = CommandSuccess | CommandFailure;
+
+export interface AcceptedCommandRecord {
+  slot: PlayerSlot;
+  clientSeq: number;
+  expectedStateVersion: number;
+  command: GameCommand;
+  result: CommandSuccess;
 }
