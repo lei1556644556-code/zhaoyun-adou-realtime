@@ -27,6 +27,8 @@ export class BattleScene extends Phaser.Scene {
   private effectsLayer!: Phaser.GameObjects.Container;
   private dragLayer!: Phaser.GameObjects.Container;
   private playedEffectIds = new Set<string>();
+  /** 指针按下到越过拖动阈值前也必须保留当前棋子，避免10Hz快照将它销毁。 */
+  private pointerHeld = false;
   private isDragging = false;
   private draggingId: string | null = null;
   private draggingType: DragSource | null = null;
@@ -58,6 +60,7 @@ export class BattleScene extends Phaser.Scene {
       this.selectedUnit = null;
       this.game.events.emit("battle:inspect-hide");
       this.isDragging = true;
+      this.pointerHeld = false;
       this.draggingId = object.getData("sourceId") as string;
       this.draggingType = object.getData("sourceType") as DragSource;
       this.draggingPartIndex = (object.getData("partIndex") as 0 | 1 | undefined) ?? null;
@@ -76,6 +79,7 @@ export class BattleScene extends Phaser.Scene {
       const cell = this.pointToCell(object.x, object.y);
       const campSlot = this.pointToCampSlot(object.x, object.y);
       this.isDragging = false;
+      this.pointerHeld = false;
       this.draggingId = null;
       this.draggingType = null;
       this.draggingPartIndex = null;
@@ -83,6 +87,11 @@ export class BattleScene extends Phaser.Scene {
       if (cell !== null) this.game.events.emit("battle:drop", { sourceType, id, partIndex, targetCell: cell });
       else if (campSlot !== null && sourceType !== "generalPart") this.game.events.emit("battle:camp-drop", { sourceType, id, targetSlot: campSlot });
       else this.renderState();
+    });
+    this.input.on("pointerup", () => {
+      if (!this.pointerHeld || this.isDragging) return;
+      this.pointerHeld = false;
+      this.renderState();
     });
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]) => {
       if (currentlyOver.length !== 0) return;
@@ -151,7 +160,7 @@ export class BattleScene extends Phaser.Scene {
     const previousRoom = this.snapshot?.roomId;
     this.snapshot = snapshot;
     this.slot = slot;
-    this.renderState();
+    if (!this.pointerHeld || this.isDragging) this.renderState();
     this.playCombatEvents(snapshot.combatEvents ?? []);
     if (previous && previousRoom === snapshot.roomId) this.playSynthesisDiff(previous.players[slot], snapshot.players[slot]);
   }
@@ -798,9 +807,11 @@ export class BattleScene extends Phaser.Scene {
   private enableInspect(container: Phaser.GameObjects.Container, kind: string, level: number, selection?: InspectSelection) {
     container.setInteractive({ useHandCursor: true });
     container.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      this.pointerHeld = true;
       container.setData({ tapX: pointer.worldX, tapY: pointer.worldY, tapPointerId: pointer.id, didDrag: false });
     });
     container.on("pointerup", (pointer: Phaser.Input.Pointer) => {
+      this.pointerHeld = false;
       if (container.getData("tapPointerId") !== pointer.id || container.getData("didDrag")) return;
       const distance = Phaser.Math.Distance.Between(
         Number(container.getData("tapX")), Number(container.getData("tapY")), pointer.worldX, pointer.worldY,
