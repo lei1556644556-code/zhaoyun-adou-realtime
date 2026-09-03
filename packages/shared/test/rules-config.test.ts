@@ -4,8 +4,11 @@ import {
   ATTACK_RANGE_RULES,
   BOSS_CHANCES,
   BOSS_MILESTONES,
+  DIFFICULTY_CURVES,
+  DIFFICULTY_WEIGHTS,
   EARLY_ACCOUNT_SHOVEL_WEIGHT,
   EARLY_ACCOUNT_TOKEN_POOL_WEIGHT,
+  GAME_CONFIG,
   GENERALS,
   HERO_PAIRS,
   LEVEL_ATTACK,
@@ -15,6 +18,7 @@ import {
   PASSIVE_PROP_IDS,
   PROP_ACQUISITION_RULES,
   PROP_EFFECTS,
+  PROP_RARITY_COLORS,
   PROP_RARITY_NAMES,
   PROPS,
   RECRUITMENT_RULES,
@@ -28,6 +32,15 @@ import {
   WAVES,
 } from "../src";
 
+function stableFingerprint(value: unknown) {
+  let hash = 0xcbf29ce484222325n;
+  for (const character of JSON.stringify(value)) {
+    hash ^= BigInt(character.charCodeAt(0));
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return hash.toString(16).padStart(16, "0");
+}
+
 describe("1.0.9 versioned rules config", () => {
   it("publishes one versioned entry point and honest evidence metadata", () => {
     expect(RULES_CONFIG_1_0_9.rulesetVersion).toBe("1.0.9");
@@ -39,10 +52,58 @@ describe("1.0.9 versioned rules config", () => {
     expect(Object.values(RULE_PROVENANCE).every((entry) => entry.evidenceRefs.length > 0)).toBe(true);
     expect(Object.values(RULE_PROVENANCE).some((entry) => entry.status === "pending-original-verification")).toBe(true);
     expect(Object.values(RULE_PROVENANCE).some((entry) => entry.status === "project-adaptation")).toBe(true);
+    expect(Object.fromEntries(Object.entries(RULE_PROVENANCE).map(([key, value]) => [key, value.status]))).toEqual({
+      openingAndBoard: "package-recorded",
+      recruitmentPool: "package-recorded",
+      earlyAccountShovelBonus: "pending-original-verification",
+      campAndRecycle: "pending-original-verification",
+      mergePairs: "package-recorded",
+      twoCellGeneralAndSplit: "pending-original-verification",
+      soldierAndGeneralStats: "package-recorded",
+      attackCollision: "pending-original-verification",
+      wavesAndBossChance: "package-recorded",
+      mapLayouts: "package-recorded",
+      mapPathInterpolation: "project-adaptation",
+      propsCatalog: "package-recorded",
+      propRuntimeDetails: "pending-original-verification",
+      propAcquisition: "pending-original-verification",
+      directGrantInsteadOfAds: "project-adaptation",
+      authoritativeTickRate: "project-adaptation",
+    });
+  });
+
+  it("locks every current battle constant, including package-recorded cadence values", () => {
+    expect(GAME_CONFIG).toEqual({
+      protocolVersion: "0.3.0",
+      columns: 8,
+      rows: 10,
+      designWidth: 640,
+      designHeight: 1386,
+      mapTop: 200,
+      cellSize: 80,
+      reserveSize: 5,
+      baseHp: 3,
+      maxWaves: 20,
+      startBuns: 20,
+      recruitBase: 10,
+      recruitStep: 2,
+      normalKillBuns: 1,
+      bossKillBuns: 10,
+      hpLostBuns: 10,
+      prepareMs: 10_000,
+      spawnMs: 1_500,
+      interwaveMs: 5_000,
+      tickHz: 10,
+    });
   });
 
   it("derives the 108 base pool and 13/110 early-account shovel probability", () => {
-    expect(TOKEN_POOL).toHaveLength(23);
+    expect(TOKEN_POOL).toEqual([
+      ["刀", 21], ["弓", 19], ["枪", 18], ["骑", 17], ["铲子", 11],
+      ["赵", 2], ["云", 1], ["张", 2], ["飞", 1], ["马", 2], ["超", 1],
+      ["关", 1], ["羽", 1], ["平", 1], ["兴", 1], ["黄", 2], ["忠", 1],
+      ["苞", 1], ["翼", 1], ["盖", 1], ["祖", 1], ["刘", 1], ["备", 1],
+    ]);
     expect(TOKEN_POOL_BASE_WEIGHT).toBe(108);
     expect(RECRUITMENT_RULES.baseWeightTotal).toBe(108);
     expect(TOKEN_POOL_SHOVEL_WEIGHT).toBe(11);
@@ -84,6 +145,13 @@ describe("1.0.9 versioned rules config", () => {
     expect(new Set(Object.values(HERO_PAIRS))).toEqual(new Set(Object.keys(GENERALS)));
     expect(HERO_PAIRS["赵+云"]).toBe("赵云");
     expect(HERO_PAIRS["云+赵"]).toBe("赵云");
+    expect(Object.keys(HERO_PAIRS)).toHaveLength(24);
+    for (const name of Object.keys(GENERALS)) {
+      const [first, second] = [...name];
+      expect(HERO_PAIRS[`${first}+${second}`]).toBe(name);
+      expect(HERO_PAIRS[`${second}+${first}`]).toBe(name);
+    }
+    expect(stableFingerprint(GENERALS)).toBe("943b4cfa1746a6af");
     expect(MERGE_RULES.generals).toMatchObject({
       adjacency: "horizontal",
       trigger: "automatic-after-board-placement-or-move",
@@ -123,9 +191,11 @@ describe("1.0.9 versioned rules config", () => {
       [24, 150, -1, 3, "passive", 2, 1],
     ]);
     expect(Object.keys(PROP_EFFECTS).map(Number).sort((a, b) => a - b)).toEqual(PROPS.map((prop) => prop.id));
-    expect(ACTIVE_PROP_IDS).toHaveLength(10);
-    expect(PASSIVE_PROP_IDS).toHaveLength(12);
+    expect(ACTIVE_PROP_IDS).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 21]);
+    expect(PASSIVE_PROP_IDS).toEqual([11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24]);
     expect(PROP_RARITY_NAMES).toEqual(["普通", "稀有", "卓越", "史诗"]);
+    expect(PROP_RARITY_COLORS).toEqual(["#95e45a", "#2dddff", "#D955FF", "#E99431"]);
+    expect(stableFingerprint(PROPS)).toBe("06f2bafbc88b7558");
     expect(PROP_EFFECTS[3].outcomes).toEqual([
       { levelMin: 1, levelMax: 2, upChance: 1, downChance: 0 },
       { levelMin: 3, levelMax: 3, upChance: 0.7, downChance: 0.3 },
@@ -137,6 +207,24 @@ describe("1.0.9 versioned rules config", () => {
     expect(PROP_EFFECTS[20]).toMatchObject({ cooldownMs: 300_000, lastRouteCells: 6, impactRadiusCells: 1 });
     expect(PROP_EFFECTS[23]).toMatchObject({ configuredTextAmount: 10, recordedRuntimeAmount: 1 });
     expect(PROP_EFFECTS[24].recordedRuntimeReward).toBeNull();
+
+    for (const outcome of PROP_EFFECTS[3].outcomes) {
+      expect(outcome.upChance + outcome.downChance).toBe(1);
+    }
+    expect(PROP_EFFECTS[5].outcomes.reduce((sum, outcome) => sum + outcome.chance, 0)).toBe(1);
+    expect(PROP_EFFECTS[22].chanceByLevel.every((chance) => chance >= 0 && chance <= 1)).toBe(true);
+    for (const effect of Object.values(PROP_EFFECTS)) {
+      for (const [key, value] of Object.entries(effect)) {
+        if ((key.endsWith("Chance") || key === "chance") && typeof value === "number") {
+          expect(value).toBeGreaterThanOrEqual(0);
+          expect(value).toBeLessThanOrEqual(1);
+        }
+      }
+    }
+    const recordedEffects = Object.fromEntries(
+      Object.entries(PROP_EFFECTS).filter(([, effect]) => effect.verification === "package-recorded"),
+    );
+    expect(stableFingerprint(recordedEffects)).toBe("55bcf3cddbb8b2df");
 
     expect(PROP_ACQUISITION_RULES.loadout).toMatchObject({ activeLimit: 2, passiveLimit: 6, duplicatesAllowed: false });
     expect(PROP_ACQUISITION_RULES.inBattleShovelSupply.webAdaptation).toEqual({
@@ -151,6 +239,8 @@ describe("1.0.9 versioned rules config", () => {
       webAdReplacement: "direct-double-claim",
     });
     expect(PROP_ACQUISITION_RULES.postMatchShop).toMatchObject({ offerCount: 3, perOfferOriginalAdChance: 0.1 });
+    expect(PROP_ACQUISITION_RULES.postMatchShop.perOfferOriginalAdChance).toBeGreaterThanOrEqual(0);
+    expect(PROP_ACQUISITION_RULES.postMatchShop.perOfferOriginalAdChance).toBeLessThanOrEqual(1);
     expect(PROP_ACQUISITION_RULES.roulette).toMatchObject({ candidateCount: 8, candidateWeightField: "ja", winnerWeightField: "ha" });
     expect(PROP_ACQUISITION_RULES.dailyReset.timeZone).toBe("Asia/Shanghai");
   });
@@ -161,10 +251,23 @@ describe("1.0.9 versioned rules config", () => {
       expect(map.cells).toHaveLength(8);
       expect(map.cells.every((column) => column.length === 10)).toBe(true);
     }
-    expect(WAVES).toHaveLength(20);
-    expect(WAVES[0]).toEqual([10, 10]);
-    expect(WAVES[19]).toEqual([61, 17_315]);
+    expect(WAVES).toEqual([
+      [10, 10], [11, 16], [12, 26], [13, 41], [15, 61], [16, 92], [18, 138], [19, 200],
+      [21, 291], [24, 421], [26, 611], [29, 886], [31, 1_285], [35, 1_863], [38, 2_701],
+      [42, 3_917], [46, 5_680], [51, 8_235], [56, 11_941], [61, 17_315],
+    ]);
+    expect(DIFFICULTY_CURVES).toEqual([
+      [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      [1.1, 1.2, 1.3, 1.2, 1.3, 1.7, 2, 1, 1.5, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      [1, 1, 1.5, 1, 1.8, 2, 1, 1, 2, 1, 1, 1.3, 1, 1, 1.4, 1, 1, 1.5, 1, 1],
+    ]);
+    expect(DIFFICULTY_WEIGHTS).toEqual([5, 2, 3]);
+    const difficultyWeightTotal = DIFFICULTY_WEIGHTS.reduce((sum, weight) => sum + weight, 0);
+    expect(difficultyWeightTotal).toBe(10);
+    expect(DIFFICULTY_WEIGHTS.map((weight) => weight / difficultyWeightTotal)).toEqual([0.5, 0.2, 0.3]);
     expect(BOSS_MILESTONES).toEqual([3, 6, 9, 12, 15, 18]);
     expect(BOSS_CHANCES).toEqual([0.1, 0.2, 0.3, 0.5, 0.9, 1]);
+    expect(BOSS_CHANCES.every((chance) => chance >= 0 && chance <= 1)).toBe(true);
+    expect(stableFingerprint(MAP_LAYOUTS)).toBe("eb1599cc2794e28e");
   });
 });

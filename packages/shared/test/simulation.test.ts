@@ -70,7 +70,9 @@ describe("1.0.9 authoritative simulation", () => {
     ];
     match.players[0].reserve = [{ id: "r-yun", kind: "云", level: 1, slot: 0 }];
 
+    const versionBefore = match.stateVersion;
     expect(applyCommand(match, 0, { type: "DROP_RESERVE", reserveId: "r-yun", targetCell: secondCell }).ok).toBe(true);
+    expect(match.stateVersion).toBe(versionBefore + 1);
     expect(match.players[0].units).toEqual([{
       id: "zhao", kind: "赵云", level: 1,
       cell: firstCell, secondaryCell: secondCell, parts: ["赵", "云"],

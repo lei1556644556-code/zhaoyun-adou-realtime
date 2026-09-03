@@ -38,8 +38,8 @@ export const RULE_EVIDENCE_SOURCES = {
 export const RULE_PROVENANCE = {
   openingAndBoard: {
     status: "package-recorded",
-    evidenceRefs: ["SPEC-DOCX#2.1", "SPEC-DOCX#table-6", "RULES-MD#1"],
-    note: "开局生命、馒头、棋盘尺寸与准备时间在候选取证记录中标为包体值。",
+    evidenceRefs: ["SPEC-DOCX#2.1", "SPEC-DOCX#table-6", "SPEC-DOCX#appendix-d-timing", "RULES-MD#1"],
+    note: "开局生命、馒头、棋盘尺寸、准备时间、同波出兵间隔与波间时间在候选取证记录中标为包体值。",
   },
   recruitmentPool: {
     status: "package-recorded",
@@ -74,17 +74,27 @@ export const RULE_PROVENANCE = {
   attackCollision: {
     status: "pending-original-verification",
     evidenceRefs: ["RULES-MD#4"],
-    note: "d.Si 的减 1px 圆矩形判定缺少随库代码摘录或固定输入输出证据。",
+    note: "仓内已有减 1px 圆矩形边界回归测试，但缺少 d.Si 原包代码摘录或原包运行输出对照。",
   },
   wavesAndBossChance: {
     status: "package-recorded",
     evidenceRefs: ["SPEC-DOCX#table-21", "SPEC-DOCX#table-22", "RULES-MD#6"],
     note: "20 波数量/生命、难度曲线与 Boss 里程碑概率有候选包体表记录。",
   },
+  mapLayouts: {
+    status: "package-recorded",
+    evidenceRefs: ["SPEC-DOCX#table-16", "SPEC-DOCX#table-17", "SPEC-DOCX#table-18", "SPEC-DOCX#table-19", "RULES-MD#7"],
+    note: "四张 8×10 地图格子矩阵已按候选包体表记录进入共享配置；不包含 path 插值实现。",
+  },
+  mapPathInterpolation: {
+    status: "project-adaptation",
+    evidenceRefs: ["RULES-MD#7", "packages/shared/test/simulation.test.ts#mirrored-paths"],
+    note: "当前 path 折点和线性插值用于让敌人沿已记录道路行军；原包的精确移动插值未随库。",
+  },
   propsCatalog: {
     status: "package-recorded",
-    evidenceRefs: ["SPEC-DOCX#table-24", "PROPS-MD#2"],
-    note: "25 行原始字段表有候选包体记录。",
+    evidenceRefs: ["SPEC-DOCX#6.1", "SPEC-DOCX#table-24", "PROPS-MD#1", "PROPS-MD#2"],
+    note: "25 行原始字段表以及主动 2、被动 6 的槽位与 ID 分组有候选包体记录。",
   },
   propRuntimeDetails: {
     status: "pending-original-verification",
@@ -279,7 +289,7 @@ export const PROPS: readonly PropConfig[] = [
   { id: 10, key: "attSpeedSpell", name: "攻速符", intro: "目标单位攻速+40%，全局生效", price: 80, cooldownMs: 90_000, rarity: 2, target: "own-unit", ja: 6, ha: 4 },
   { id: 11, key: "exorcismSpell", name: "降妖符", intro: "Boss施法有50%失败率，并反噬Boss自身血量", price: 80, cooldownMs: -1, rarity: 2, target: "passive", ja: 6, ha: 4 },
   { id: 12, key: "farmer", name: "农民", intro: "每30秒刷出农民；农民每20秒+1馒头，升级生产速度翻倍", price: 90, cooldownMs: -1, rarity: 2, target: "passive", ja: 5, ha: 3 },
-  { id: 13, key: "recruit", name: "招贤榜", intro: "每个武将姓名字独立50%追加一份权重（安装包实际算法）", price: 90, cooldownMs: -1, rarity: 2, target: "passive", ja: 8, ha: 8 },
+  { id: 13, key: "recruit", name: "招贤榜", intro: "每个武将姓名字独立50%追加一份权重（当前兼容算法，原包待核）", price: 90, cooldownMs: -1, rarity: 2, target: "passive", ja: 8, ha: 8 },
   { id: 14, key: "allAttSpeedSpell", name: "攻速符(全体)", intro: "双方所有单位攻速+10%，全局生效", price: 60, cooldownMs: -1, rarity: 1, target: "passive", ja: 8, ha: 8 },
   { id: 15, key: "goingHandInHand", name: "齐头并进", intro: "我方攻速+50%，对方攻速+30%，全局生效", price: 90, cooldownMs: -1, rarity: 2, target: "passive", ja: 5, ha: 3 },
   { id: 16, key: "xuMingPill", name: "续命丹", intro: "我方阿斗+5条命，对方阿斗+3条命", price: 50, cooldownMs: -1, rarity: 0, target: "passive", ja: 10, ha: 12 },
