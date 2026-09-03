@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  GAME_CONFIG, MAP_LAYOUTS, PROPS, applyCommand, attackRangeIntersectsCell, cellCode, cellIndex,
-  createMatch, executeCommand, initialOpenCells, pathPoint, stepMatch, type CommandEnvelope,
+  BOSS_CONFIGS, GAME_CONFIG, INTRO_ROUND_HP_MULTIPLIERS, MAP_LAYOUTS, NORMAL_ENEMY_SPEED_PX_PER_SEC,
+  PROPS, TOKEN_POOL, applyCommand, attackRangeIntersectsCell, cellCode, cellIndex, createMatch, executeCommand,
+  initialOpenCells, pathLengthCells, pathPoint, stepMatch, type CommandEnvelope,
 } from "../src";
 
 describe("1.0.9 authoritative simulation", () => {
@@ -380,7 +381,7 @@ describe("1.0.9 authoritative simulation", () => {
     expect(match.combatEvents[0]).toMatchObject({ unitId: "blade", targetId: "target", damage: 3, hitCount: 1 });
   });
 
-  it("gives a level-two spear the configured 0.62-second attack interval without extra attacks", () => {
+  it("gives a level-two spear the original 0.533-second attack interval without cooldown debt", () => {
     const match = createMatch("TEST", 24);
     const player = match.players[0];
     player.phase = "battle";
@@ -389,10 +390,100 @@ describe("1.0.9 authoritative simulation", () => {
     player.remainingToSpawn = 1;
     player.units = [{ id: "spear", kind: "枪", level: 2, cell: cellIndex(2, 7), cooldownMs: 0, attackCount: 0 }];
     player.enemies = [{ id: "target", hp: 100, maxHp: 100, progress: 5 / 17, boss: false, stunnedMs: 0 }];
-    for (let index = 0; index < 6; index += 1) stepMatch(match, 100);
+    for (let index = 0; index < 5; index += 1) stepMatch(match, 100);
     expect(player.units[0]?.attackCount).toBe(1);
     stepMatch(match, 100);
     expect(player.units[0]?.attackCount).toBe(2);
+  });
+
+  it("applies the original first-ten-match HP ramp only through wave ten", () => {
+    expect(INTRO_ROUND_HP_MULTIPLIERS).toEqual([0.6, 0.6, 0.6, 0.6, 0.7, 0.7, 0.7, 0.8, 0.8, 0.8]);
+    const match = createMatch("INTRO", 25, 0, [0, 10]);
+    match.difficultyCurve = 0;
+    for (const player of match.players) {
+      player.phase = "battle";
+      player.prepareMs = 0;
+      player.spawnMs = 0;
+      player.remainingToSpawn = 2;
+    }
+    stepMatch(match, 100);
+    expect(match.players[0].enemies[0]?.maxHp).toBe(6);
+    expect(match.players[1].enemies[0]?.maxHp).toBe(10);
+
+    match.players[0].wave = 11;
+    match.players[0].enemies = [];
+    match.players[0].spawnMs = 0;
+    match.players[0].remainingToSpawn = 2;
+    stepMatch(match, 100);
+    expect(match.players[0].enemies[0]?.maxHp).toBe(611);
+  });
+
+  it("cycles each map's three original bosses with 7/10/14 HP and 10px/s movement", () => {
+    const match = createMatch("BOSS", 26, 0);
+    match.difficultyCurve = 0;
+    match.bossWaves = [3, 6, 9];
+    const player = match.players[0];
+    player.phase = "battle";
+    player.wave = 6;
+    player.spawnMs = 0;
+    player.remainingToSpawn = 1;
+    stepMatch(match, 100);
+    const boss = player.enemies[0]!;
+    expect(boss.bossType).toBe(1);
+    expect(boss.maxHp).toBe(92 * BOSS_CONFIGS[1].hpMultiplier);
+    expect(boss.progress).toBeCloseTo(0.1 * 10 / (pathLengthCells(0) * GAME_CONFIG.cellSize), 12);
+  });
+
+  it("moves normal enemies at the package's map-independent 50px/s", () => {
+    for (let mapIndex = 0; mapIndex < MAP_LAYOUTS.length; mapIndex += 1) {
+      const match = createMatch(`SPEED-${mapIndex}`, 27, mapIndex);
+      const player = match.players[0];
+      player.phase = "battle";
+      player.spawnMs = 999_999;
+      player.remainingToSpawn = 1;
+      player.enemies = [{ id: "walker", hp: 10, maxHp: 10, progress: 0, boss: false, stunnedMs: 0 }];
+      stepMatch(match, 1_000);
+      expect(player.enemies[0]?.progress).toBeCloseTo(
+        NORMAL_ENEMY_SPEED_PX_PER_SEC / (pathLengthCells(mapIndex) * GAME_CONFIG.cellSize), 12,
+      );
+    }
+  });
+
+  it("allows farmers to merge through level five and uses level production intervals", () => {
+    const match = createMatch("FARMER", 28);
+    const player = match.players[0];
+    player.reserve = [
+      { id: "farmer-a", kind: "农", level: 1, slot: 0, incomeMs: 20_000 },
+      { id: "farmer-b", kind: "农", level: 1, slot: 1, incomeMs: 20_000 },
+    ];
+    expect(applyCommand(match, 0, { type: "DROP_RESERVE_TO_SLOT", reserveId: "farmer-a", targetSlot: 1 }).ok).toBe(true);
+    expect(player.reserve).toEqual([expect.objectContaining({ id: "farmer-b", kind: "农", level: 2 })]);
+    player.phase = "battle";
+    player.spawnMs = 999_999;
+    player.remainingToSpawn = 1;
+    player.reserve[0]!.incomeMs = 10_000;
+    const buns = player.buns;
+    stepMatch(match, 10_000);
+    expect(player.buns).toBe(buns + 1);
+  });
+
+  it("limits 御敌千里 to bows and generals, and consumes 包子 after ten uses", () => {
+    const match = createMatch("PROP-ORIGINAL", 29);
+    const player = match.players[0];
+    player.units = [
+      { id: "knife", kind: "刀", level: 1, cell: cellIndex(2, 7), cooldownMs: 0, attackCount: 0 },
+      { id: "bow", kind: "弓", level: 1, cell: cellIndex(3, 7), cooldownMs: 0, attackCount: 0 },
+    ];
+    expect(applyCommand(match, 0, { type: "SET_PROP_LOADOUT", loadout: { active: [5, 6], passive: [] } }).ok).toBe(true);
+    expect(applyCommand(match, 0, { type: "USE_PROP", propId: 6, targetUnitId: "knife" }).ok).toBe(false);
+    expect(applyCommand(match, 0, { type: "USE_PROP", propId: 6, targetUnitId: "bow" }).ok).toBe(true);
+    expect(player.units[1]?.rangeMultiplier).toBe(2);
+    for (let use = 0; use < 10; use += 1) {
+      player.props!.cooldowns[5] = 0;
+      expect(applyCommand(match, 0, { type: "USE_PROP", propId: 5 }).ok).toBe(true);
+    }
+    expect(player.props?.charges?.[5]).toBe(0);
+    expect(player.props?.loadout.active).not.toContain(5);
   });
 
   it("keeps both mirrored armies on their own roads and half of the battlefield", () => {
@@ -422,7 +513,7 @@ describe("1.0.9 authoritative simulation", () => {
     expect(attackRangeIntersectsCell({ x: 0, y: 0 }, { x: 2.489, y: 0 }, 2)).toBe(false);
   });
 
-  it("uses the early-account effective shovel pool of 13/110", () => {
+  it("uses the first-three-daily-matches shovel pool of 13/110", () => {
     let shovels = 0;
     let total = 0;
     for (let seed = 1; seed <= 2_000; seed += 1) {
@@ -434,6 +525,28 @@ describe("1.0.9 authoritative simulation", () => {
     }
     expect(shovels / total).toBeGreaterThan(0.105);
     expect(shovels / total).toBeLessThan(0.13);
+  });
+
+  it("keeps one persistent recruitment pool and consumes drawn general-name copies", () => {
+    const match = createMatch("PERSISTENT-POOL", 0x109);
+    const player = match.players[0];
+    player.buns = 1_000_000;
+    expect(applyCommand(match, 0, {
+      type: "SET_PROP_LOADOUT",
+      loadout: { active: [], passive: [{ id: 13, level: 1 }] },
+    }).ok).toBe(true);
+    const drawnNames: Record<string, number> = {};
+    const nameKinds = new Set(["赵", "云", "张", "飞", "马", "超", "关", "羽", "平", "兴", "黄", "忠", "苞", "翼", "盖", "祖", "刘", "备"]);
+    for (let draw = 0; draw < 80; draw += 1) {
+      expect(applyCommand(match, 0, { type: "RECRUIT" }).ok).toBe(true);
+      for (const item of player.reserve) if (nameKinds.has(item.kind)) {
+        drawnNames[item.kind] = (drawnNames[item.kind] ?? 0) + 1;
+      }
+    }
+    const baseNameWeights = Object.fromEntries(TOKEN_POOL.filter(([kind]) => nameKinds.has(kind)));
+    for (const [kind, count] of Object.entries(drawnNames)) expect(count).toBeLessThanOrEqual(baseNameWeights[kind] ?? 0);
+    expect(player.recruitNameBonusApplied).toBe(true);
+    expect(player.recruitPool?.filter((kind) => kind === "刀")).toHaveLength(21);
   });
 
   it("loads the complete 25-row package prop catalog and enforces 2+6 slots", () => {

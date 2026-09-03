@@ -42,6 +42,8 @@ export interface EnemyState {
   maxHp: number;
   progress: number;
   boss: boolean;
+  /** 原包每张地图三名 Boss 按出场次序循环；旧快照可缺省。 */
+  bossType?: number;
   stunnedMs: number;
 }
 
@@ -58,10 +60,12 @@ export interface PlacedPropState {
 
 export interface PlayerPropState {
   configured: boolean;
-  /** 原包账号开局前三日才在征兵池增加两份铲子权重。 */
+  /** 原包每日前 3 局在征兵池增加两份铲子权重。 */
   earlyAccountShovelBonus?: boolean;
   loadout: PropLoadout;
   cooldowns: Partial<Record<ActivePropId, number>>;
+  /** 有次数限制的主动道具剩余次数；1.0.9 包子的初始次数为 10。 */
+  charges?: Partial<Record<ActivePropId, number>>;
   placed: PlacedPropState[];
   farmerSpawnMs: number;
   superShovelMs: number;
@@ -217,6 +221,12 @@ export interface PlayerBattleState {
   interwaveMs: number;
   spawnMs: number;
   remainingToSpawn: number;
+  /** 原包从 0 开始的账号对局轮次；前 10 局且前 10 波使用新手生命系数。 */
+  introRound?: number;
+  /** 原包整局持续消耗的征兵牌库；基础兵/铲子保留，姓名字抽中后移除。 */
+  recruitPool?: string[];
+  /** 招贤榜已在本局牌库上执行，兼容旧快照可缺省。 */
+  recruitNameBonusApplied?: boolean;
   units: UnitState[];
   reserve: ReserveItem[];
   /** 初始为地图里的 1_0，铲子可加入相邻的 2_0。 */

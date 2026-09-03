@@ -1,7 +1,10 @@
 import {
-  ACTIVE_PROP_IDS, BOSS_CHANCES, BOSS_MILESTONES, DIFFICULTY_CURVES, DIFFICULTY_WEIGHTS,
-  EARLY_ACCOUNT_SHOVEL_BONUS, GAME_CONFIG, GENERALS, HERO_PAIRS, LEVEL_ATTACK, LEVEL_SPEED,
-  MAP_LAYOUTS, PASSIVE_PROP_IDS, PROPS, SOLDIERS, TOKEN_POOL, WAVES, cellCode, cellCoords, initialOpenCells, pathPoint,
+  ACTIVE_PROP_IDS, BOSS_CHANCES, BOSS_CONFIGS, BOSS_ENEMY_SPEED_PX_PER_SEC, BOSS_MILESTONES,
+  DIFFICULTY_CURVES, DIFFICULTY_WEIGHTS, EARLY_ACCOUNT_SHOVEL_BONUS, GAME_CONFIG,
+  GENERAL_LEVEL_ATTACK, GENERAL_LEVEL_SPEED, GENERALS, HERO_PAIRS, INTRO_ROUND_HP_MULTIPLIERS,
+  MAP_LAYOUTS, NORMAL_ENEMY_SPEED_PX_PER_SEC, PASSIVE_PROP_IDS, PROPS, SOLDIER_LEVEL_ATTACK,
+  SOLDIER_LEVEL_SPEED, SOLDIERS, TOKEN_POOL, WAVES, cellCode, cellCoords, initialOpenCells,
+  pathLengthCells, pathPoint,
 } from "./config";
 import { MATCH_SNAPSHOT_VERSION } from "./types";
 import type {
@@ -48,6 +51,7 @@ export function normalizeMatchSnapshot(snapshot: MatchSnapshotInput): MatchSnaps
   normalized.lastClientSeq ??= [0, 0];
   normalized.simulationTimeMs ??= Number.isFinite(normalized.serverTime) ? normalized.serverTime : 0;
   normalized.serverTime = normalized.simulationTimeMs;
+  for (const player of normalized.players) player.introRound ??= 10;
   return normalized;
 }
 
@@ -102,9 +106,27 @@ export function attackRangeIntersectsCell(
   return dx * dx + dy * dy <= radius * radius;
 }
 
+/** 原包枪兵刺击碰撞：15px 宽的 71px 枪尖判定沿出枪方向移动，敌军碰撞盒为完整一格。 */
+function pikeThrustIntersectsCell(
+  source: { x: number; y: number }, target: { x: number; y: number }, enemy: { x: number; y: number },
+) {
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  const length = Math.hypot(dx, dy);
+  if (length <= 0.0001) return true;
+  const extension = 71 / ORIGINAL_CELL_PX;
+  const end = { x: target.x + dx / length * extension, y: target.y + dy / length * extension };
+  const ex = end.x - source.x;
+  const ey = end.y - source.y;
+  const projection = Math.max(0, Math.min(1, ((enemy.x - source.x) * ex + (enemy.y - source.y) * ey) / (ex * ex + ey * ey)));
+  const closest = { x: source.x + ex * projection, y: source.y + ey * projection };
+  const collisionRadius = ENEMY_CELL_HALF + 15 / ORIGINAL_CELL_PX / 2;
+  return Math.hypot(enemy.x - closest.x, enemy.y - closest.y) <= collisionRadius;
+}
+
 function emptyPropState(): PlayerPropState {
   return {
-    configured: false, loadout: { active: [], passive: [] }, cooldowns: {}, placed: [],
+    configured: false, loadout: { active: [], passive: [] }, cooldowns: {}, charges: {}, placed: [],
     farmerSpawnMs: 30_000, superShovelMs: 60_000, meteorMs: 300_000,
   };
 }
@@ -112,6 +134,7 @@ function emptyPropState(): PlayerPropState {
 function ensureProps(player: PlayerBattleState) {
   player.props ??= emptyPropState();
   player.props.cooldowns ??= {};
+  player.props.charges ??= {};
   player.props.placed ??= [];
   player.props.shovelSupplyClaimed ??= false;
   return player.props;
@@ -126,18 +149,21 @@ function hasPassive(player: PlayerBattleState | undefined, id: PassivePropId) {
   return passiveLevel(player, id) > 0;
 }
 
-function createPlayer(slot: PlayerSlot, mapIndex: number): PlayerBattleState {
+function createPlayer(slot: PlayerSlot, mapIndex: number, introRound = 10): PlayerBattleState {
   const firstWave = WAVES[0];
   return {
     slot, hp: GAME_CONFIG.baseHp, maxHp: GAME_CONFIG.baseHp,
     buns: GAME_CONFIG.startBuns, recruitCost: GAME_CONFIG.recruitBase, recruitCount: 0,
     wave: 1, phase: "preparing", prepareMs: GAME_CONFIG.prepareMs,
     interwaveMs: 0, spawnMs: GAME_CONFIG.spawnMs, remainingToSpawn: firstWave[0],
+    introRound: Math.max(0, Math.floor(introRound)),
     units: [], reserve: [], unlockedCells: initialOpenCells(mapIndex), enemies: [], props: emptyPropState(), lastEvent: "等待双方布阵",
   };
 }
 
-export function createMatch(roomId: string, seed: number, mapIndex = 0): MatchSnapshot {
+export function createMatch(
+  roomId: string, seed: number, mapIndex = 0, introRounds: readonly [number, number] = [10, 10],
+): MatchSnapshot {
   const normalizedSeed = Number.isFinite(seed) ? seed >>> 0 : 0;
   const normalizedMap = Number.isFinite(mapIndex) ? Math.max(0, Math.min(MAP_LAYOUTS.length - 1, Math.floor(mapIndex))) : 0;
   const planningRng = createRng(normalizedSeed);
@@ -147,7 +173,7 @@ export function createMatch(roomId: string, seed: number, mapIndex = 0): MatchSn
     version: MATCH_SNAPSHOT_VERSION, snapshotVersion: MATCH_SNAPSHOT_VERSION,
     roomId, tick: 0, stateVersion: 0, simulationTimeMs: 0,
     seed: normalizedSeed, mapIndex: normalizedMap, phase: "preparing", difficultyCurve, bossWaves,
-    players: [createPlayer(0, normalizedMap), createPlayer(1, normalizedMap)],
+    players: [createPlayer(0, normalizedMap, introRounds[0]), createPlayer(1, normalizedMap, introRounds[1])],
     events: [], eventSequence: 0, combatEvents: [], acceptedCommands: {}, lastClientSeq: [0, 0],
     winner: null, serverTime: 0,
   };
@@ -159,6 +185,8 @@ function unitStats(unit: UnitState, player?: PlayerBattleState, opponent?: Playe
   const base = hero ?? soldier;
   if (!base) return null;
   const levelIndex = Math.min(unit.level, base.maxLevel) - 1;
+  const attackCurve = hero ? GENERAL_LEVEL_ATTACK : SOLDIER_LEVEL_ATTACK;
+  const speedCurve = hero ? GENERAL_LEVEL_SPEED : SOLDIER_LEVEL_SPEED;
   const universalSpeed = (hasPassive(player, 14) ? 0.1 : 0)
     + (opponent && hasPassive(opponent, 14) ? 0.1 : 0);
   const togetherSpeed = (hasPassive(player, 15) ? 0.5 : 0) + (hasPassive(opponent, 15) ? 0.3 : 0);
@@ -166,8 +194,8 @@ function unitStats(unit: UnitState, player?: PlayerBattleState, opponent?: Playe
     1 + universalSpeed + togetherSpeed + ((unit.attackSpeedMultiplier ?? 1) - 1)
       + ((unit.temporaryAttackSpeedMultiplier ?? 1) - 1));
   return {
-    attack: base.attack * (LEVEL_ATTACK[levelIndex] ?? 1),
-    intervalMs: base.intervalMs / (LEVEL_SPEED[levelIndex] ?? 1) / speedMultiplier,
+    attack: base.attack * (attackCurve[levelIndex] ?? 1),
+    intervalMs: base.intervalMs / (speedCurve[levelIndex] ?? 1) / speedMultiplier,
     range: base.range * (unit.rangeMultiplier ?? 1),
     maxLevel: base.maxLevel,
   };
@@ -177,6 +205,42 @@ function recycleValue(items: readonly ReserveItem[]) {
   return items.reduce((sum, item) => sum + (item.kind === "铲子" ? 1 : 2 ** Math.max(0, item.level - 1)), 0);
 }
 
+const REUSABLE_RECRUIT_KINDS = new Set(["刀", "弓", "枪", "骑", "铲子", "农"]);
+
+/** 原包 on.startGame/UO/TE：整局牌库只建一次；招贤榜逐份姓名字独立判定是否复制。 */
+function ensureRecruitPool(player: PlayerBattleState, rng: Rng) {
+  if (player.recruitPool?.length) return player.recruitPool;
+  const pool = TOKEN_POOL.flatMap(([kind, weight]) => Array.from({ length: weight }, () => kind as string));
+  if (ensureProps(player).earlyAccountShovelBonus) {
+    for (let index = 0; index < EARLY_ACCOUNT_SHOVEL_BONUS; index += 1) pool.push("铲子");
+  }
+  if (hasPassive(player, 13)) {
+    const initialLength = pool.length;
+    for (let index = 0; index < initialLength; index += 1) {
+      const kind = pool[index]!;
+      if (!REUSABLE_RECRUIT_KINDS.has(kind) && rng.next() < 0.5) pool.push(kind);
+    }
+    player.recruitNameBonusApplied = true;
+  }
+  player.recruitPool = pool;
+  return pool;
+}
+
+/** 原包 on.FO：基础兵/铲子可重复；姓名字抽中后从本局牌库移除。 */
+function drawRecruitKind(player: PlayerBattleState, rng: Rng) {
+  const pool = ensureRecruitPool(player, rng);
+  const index = Math.min(pool.length - 1, Math.floor(rng.next() * pool.length));
+  const kind = pool[index] ?? "刀";
+  if (!REUSABLE_RECRUIT_KINDS.has(kind)) {
+    pool.splice(index, 1);
+    if (player.recruitNameBonusApplied) {
+      const additional = pool.indexOf(kind);
+      if (additional >= 0) pool.splice(additional, 1);
+    }
+  }
+  return kind;
+}
+
 function recruit(snapshot: MatchSnapshot, player: PlayerBattleState, rng: Rng): string | null {
   const recycled = recycleValue(player.reserve);
   const spent = player.recruitCost;
@@ -184,17 +248,9 @@ function recruit(snapshot: MatchSnapshot, player: PlayerBattleState, rng: Rng): 
   player.buns += recycled - spent;
   player.recruitCount += 1;
   player.recruitCost = GAME_CONFIG.recruitBase + player.recruitCount * GAME_CONFIG.recruitStep;
-  const pool = TOKEN_POOL.map(([kind, weight]) => [kind,
-    kind === "铲子" && ensureProps(player).earlyAccountShovelBonus ? weight + EARLY_ACCOUNT_SHOVEL_BONUS : weight,
-  ] as [typeof kind, number]);
-  if (hasPassive(player, 13)) {
-    const excluded = new Set(["刀", "弓", "枪", "骑", "铲子", "农"]);
-    for (const entry of pool) if (!excluded.has(entry[0]) && rng.next() < 0.5) entry[1] *= 2;
-  }
   const promotionChance = [0.05, 0.1, 0.15][Math.max(0, Math.min(2, passiveLevel(player, 22) - 1))] ?? 0;
   player.reserve = Array.from({ length: GAME_CONFIG.reserveSize }, (_, slot) => {
-    const kindIndex = weightedIndex(rng, pool.map((entry) => entry[1]));
-    const kind = pool[kindIndex]?.[0] ?? "刀";
+    const kind = drawRecruitKind(player, rng);
     const level = kind in SOLDIERS && promotionChance > 0 && rng.next() < promotionChance ? 2 : 1;
     return { id: `r-${player.slot}-${player.recruitCount}-${slot}-${Math.floor(rng.next() * 1e7)}`, kind, level, slot };
   });
@@ -252,6 +308,7 @@ function adjacentReserveSlot(player: PlayerBattleState, targetSlot: number, sour
 }
 
 function maxLevelForKind(kind: string) {
+  if (kind === "农") return 5;
   return GENERALS[kind]?.maxLevel ?? SOLDIERS[kind as keyof typeof SOLDIERS]?.maxLevel ?? null;
 }
 
@@ -707,8 +764,13 @@ function setPropLoadout(snapshot: MatchSnapshot, player: PlayerBattleState, load
   if (!normalized) return "主动道具最多2件、被动道具最多6件，且不可重复";
   props.configured = true;
   props.earlyAccountShovelBonus = earlyAccountShovelBonus;
+  player.recruitPool = undefined;
+  player.recruitNameBonusApplied = false;
   props.loadout = normalized;
-  for (const id of normalized.active) props.cooldowns[id] = 0;
+  for (const id of normalized.active) {
+    props.cooldowns[id] = 0;
+    if (id === 5) props.charges![id] = 10;
+  }
   if (hasPassive(player, 16)) {
     player.maxHp += 5; player.hp += 5;
     const opponent = snapshot.players[player.slot === 0 ? 1 : 0];
@@ -747,6 +809,7 @@ function useProp(
   const config = PROPS[command.propId];
   if (!config) return "道具配置不存在";
   if ((props.cooldowns[command.propId] ?? 0) > 0) return "道具冷却中";
+  if (command.propId === 5 && (props.charges?.[5] ?? 10) <= 0) return "包子已经用完";
   const opponent = snapshot.players[player.slot === 0 ? 1 : 0];
   const ownUnit = command.targetUnitId ? player.units.find((unit) => unit.id === command.targetUnitId) : undefined;
 
@@ -767,10 +830,13 @@ function useProp(
   }
   if (command.propId === 5) {
     const gain = rng.next() < 0.55;
-    player.hp = Math.max(0, Math.min(player.maxHp, player.hp + (gain ? 1 : -1)));
+    player.hp = Math.max(0, player.hp + (gain ? 1 : -1));
+    player.maxHp = Math.max(player.maxHp, player.hp);
+    props.charges![5] = Math.max(0, (props.charges?.[5] ?? 10) - 1);
     player.lastEvent = gain ? "包子生效：阿斗+1命" : "包子反噬：阿斗-1命";
   }
   if (command.propId === 6 && ownUnit) {
+    if (ownUnit.kind !== "弓" && !GENERALS[ownUnit.kind]) return "御敌千里只能用于弓兵或武将";
     ownUnit.rangeMultiplier = 2;
     player.lastEvent = `御敌千里：${ownUnit.kind}射程翻倍`;
   }
@@ -805,6 +871,10 @@ function useProp(
     player.lastEvent = `垃圾桶回收「${item.kind}」，+1馒头`;
   }
   props.cooldowns[command.propId] = Math.max(0, config.cooldownMs);
+  if (command.propId === 5 && props.charges?.[5] === 0) {
+    props.loadout.active = props.loadout.active.filter((id) => id !== 5);
+    delete props.cooldowns[5];
+  }
   emitBattleEvent(snapshot, {
     type: "prop-used", slot: player.slot, propId: command.propId,
     ...(command.targetUnitId === undefined ? {} : { targetUnitId: command.targetUnitId }),
@@ -1021,10 +1091,17 @@ function spawnEnemy(snapshot: MatchSnapshot, player: PlayerBattleState) {
   const multiplier = curve[waveIndex] ?? 1;
   const isLastSpawn = player.remainingToSpawn === 1;
   const boss = isLastSpawn && snapshot.bossWaves.includes(player.wave);
-  const hp = Math.round(wave[1] * multiplier * (boss ? 7 : 1));
+  const introRound = Math.max(0, Math.floor(player.introRound ?? 10));
+  const introMultiplier = player.wave <= 10 && introRound < INTRO_ROUND_HP_MULTIPLIERS.length
+    ? INTRO_ROUND_HP_MULTIPLIERS[introRound] ?? 1 : 1;
+  const baseHp = wave[1] * multiplier * introMultiplier;
+  const bossOrdinal = snapshot.bossWaves.filter((bossWave) => bossWave <= player.wave).length - 1;
+  const bossType = boss ? snapshot.mapIndex * 3 + Math.max(0, bossOrdinal) % 3 : undefined;
+  const bossConfig = bossType === undefined ? undefined : BOSS_CONFIGS[bossType];
+  const hp = baseHp * (bossConfig?.hpMultiplier ?? 1);
   player.enemies.push({
     id: `e-${player.slot}-${player.wave}-${player.remainingToSpawn}-${snapshot.tick}`,
-    hp, maxHp: hp, progress: 0, boss, stunnedMs: 0,
+    hp, maxHp: hp, progress: 0, boss, ...(bossType === undefined ? {} : { bossType }), stunnedMs: 0,
   });
   player.remainingToSpawn -= 1;
 }
@@ -1053,14 +1130,57 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
       return attackRangeIntersectsCell(position, point, stats.range);
     });
     if (inRange.length === 0 || elapsedCooldown > 0) continue;
-    const target = unit.kind === "弓" || unit.kind === "黄忠" || unit.kind === "黄祖"
+    const hero = GENERALS[unit.kind];
+    const targetsClosestEnd = hero ? hero.target === "closest-end" : unit.kind === "弓";
+    const target = targetsClosestEnd
       ? [...inRange].sort((a, b) => b.progress - a.progress)[0]!
       : [...inRange].sort((a, b) => {
           const pa = pathPoint(snapshot.mapIndex, a.progress); const pb = pathPoint(snapshot.mapIndex, b.progress);
           return Math.hypot(pa.x - position.x, pa.y - position.y) - Math.hypot(pb.x - position.x, pb.y - position.y);
         })[0]!;
-    damage(target, stats.attack);
-    unit.attackCount += 1;
+
+    // 原包 ta：关羽/张翼在累计普攻后的“下一次攻击”以跳斩替代普攻；
+    // 每次跳斩主目标 100%，目标周围 2.5 格再承受 50% 溅射。
+    const jumpSlashCount = unit.kind === "关羽" && unit.attackCount >= 20 ? 5
+      : unit.kind === "张翼" && unit.attackCount >= 20 ? 1 : 0;
+    if (jumpSlashCount > 0) {
+      unit.attackCount = 0;
+      unit.cooldownMs = Math.max(0, stats.intervalMs + elapsedCooldown);
+      for (let slash = 0; slash < jumpSlashCount; slash += 1) {
+        const slashTarget = [...player.enemies].filter((enemy) => enemy.hp > 0)
+          .sort((a, b) => b.progress - a.progress)[0];
+        if (!slashTarget) break;
+        const impact = pathPoint(snapshot.mapIndex, slashTarget.progress);
+        damage(slashTarget, stats.attack);
+        let hitCount = 1;
+        for (const enemy of player.enemies) {
+          if (enemy.id === slashTarget.id || enemy.hp <= 0) continue;
+          const point = pathPoint(snapshot.mapIndex, enemy.progress);
+          if (!attackRangeIntersectsCell(impact, point, 2.5)) continue;
+          damage(enemy, stats.attack / 2);
+          hitCount += 1;
+        }
+        emitBattleEvent(snapshot, {
+          type: "attack", slot: player.slot, unitId: unit.id, unitKind: unit.kind,
+          sourceCell: unit.cell, ...(unit.secondaryCell === undefined ? {} : { secondaryCell: unit.secondaryCell }),
+          targetId: slashTarget.id, targetProgress: slashTarget.progress, targetBoss: slashTarget.boss,
+          damage: stats.attack, hitCount, special: true,
+        });
+      }
+      continue;
+    }
+
+    // 原包 eC 技能在计数达到阈值后的下一次攻击前释放；随后衔接的普攻不累计下一轮计数。
+    const shoutStunMs = unit.kind === "张飞" && unit.attackCount >= 15 ? 2_000
+      : unit.kind === "关平" && unit.attackCount >= 15 ? 1_000 : 0;
+    const fireArrowRain = unit.kind === "黄忠" && unit.attackCount >= 30;
+    const arrowRain = unit.kind === "黄祖" && unit.attackCount >= 30;
+    const preAttackSkill = shoutStunMs > 0 || fireArrowRain || arrowRain;
+    if (preAttackSkill) unit.attackCount = 0;
+
+    const baseDamage = unit.kind === "骑" ? stats.attack / 2 : stats.attack;
+    damage(target, baseDamage);
+    if (!preAttackSkill) unit.attackCount += 1;
     unit.cooldownMs = Math.max(0, stats.intervalMs + elapsedCooldown);
     const effect = emitBattleEvent(snapshot, {
       type: "attack",
@@ -1072,31 +1192,81 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
       targetId: target.id,
       targetProgress: target.progress,
       targetBoss: target.boss,
-      damage: stats.attack,
+      damage: baseDamage,
       hitCount: 1,
       special: false,
     } as Extract<BattleEventPayload, { type: "attack" }>);
 
-    if (unit.kind === "枪") {
-      const next = inRange.filter((enemy) => enemy.id !== target.id).sort((a, b) => Math.abs(a.progress - target.progress) - Math.abs(b.progress - target.progress))[0];
-      if (next) { damage(next, stats.attack * 0.5); effect.hitCount += 1; }
-    }
-    if (unit.kind === "骑") {
-      for (const enemy of inRange) if (enemy.id !== target.id && Math.abs(enemy.progress - target.progress) < 0.08) {
-        damage(enemy, stats.attack * 0.5); effect.hitCount += 1;
+    const form = hero?.form ?? SOLDIERS[unit.kind as keyof typeof SOLDIERS]?.form;
+    if (unit.kind === "枪" || form?.includes("贯穿")) {
+      const targetPoint = pathPoint(snapshot.mapIndex, target.progress);
+      for (const enemy of inRange) if (enemy.id !== target.id) {
+        const point = pathPoint(snapshot.mapIndex, enemy.progress);
+        if (!pikeThrustIntersectsCell(position, targetPoint, point)) continue;
+        damage(enemy, stats.attack);
+        effect.hitCount += 1;
       }
     }
-    if (unit.kind === "赵云" && unit.attackCount % 30 === 0) { damage(target, stats.attack * 7); effect.damage += stats.attack * 7; effect.special = true; }
-    if (unit.kind === "张飞" && unit.attackCount % 15 === 0) { for (const enemy of inRange) enemy.stunnedMs = Math.max(enemy.stunnedMs, 2000); effect.special = true; effect.hitCount = Math.max(effect.hitCount, inRange.length); }
-    if (unit.kind === "关平" && unit.attackCount % 15 === 0) { for (const enemy of inRange) enemy.stunnedMs = Math.max(enemy.stunnedMs, 1000); effect.special = true; effect.hitCount = Math.max(effect.hitCount, inRange.length); }
-    if (unit.kind === "关羽" && unit.attackCount % 20 === 0) { damage(target, stats.attack * 5); effect.damage += stats.attack * 5; effect.special = true; }
-    if (unit.kind === "黄忠" && unit.attackCount % 30 === 0) { damage(target, stats.attack * 2); effect.damage += stats.attack * 2; effect.special = true; }
-    if (unit.kind === "黄祖" && unit.attackCount % 30 === 0) { for (const enemy of inRange) damage(enemy, stats.attack); effect.special = true; effect.hitCount = Math.max(effect.hitCount, inRange.length); }
-    if (unit.kind === "刘备" && unit.attackCount % 20 === 0) { damage(target, stats.attack * 5); effect.damage += stats.attack * 5; effect.special = true; }
+    if (unit.kind === "骑") {
+      for (const enemy of inRange) {
+        if (enemy.id !== target.id) {
+          damage(enemy, stats.attack / 2);
+          effect.hitCount += 1;
+        }
+        const point = pathPoint(snapshot.mapIndex, enemy.progress);
+        if (attackRangeIntersectsCell(position, point, stats.range / 2)) {
+          damage(enemy, stats.attack / 2);
+          effect.hitCount += 1;
+        }
+      }
+    }
+    if (hero?.form === "范围") {
+      for (const enemy of inRange) if (enemy.id !== target.id) {
+        damage(enemy, stats.attack);
+        effect.hitCount += 1;
+      }
+    }
+    if (shoutStunMs > 0) {
+      for (const enemy of inRange) enemy.stunnedMs = Math.max(enemy.stunnedMs, shoutStunMs);
+      effect.special = true;
+      effect.hitCount = Math.max(effect.hitCount, inRange.length);
+    }
+    if (fireArrowRain) {
+      // 原包每个落点为 2 倍攻击；共享内核以已锁定的当前目标结算一个确定性命中。
+      damage(target, stats.attack * 2);
+      effect.damage += stats.attack * 2;
+      effect.special = true;
+    }
+    if (arrowRain) {
+      // 原包 qa(30)：5 轮、每轮 10 箭；不足 10 个目标时按当前射程列表循环分配。
+      for (let arrow = 1; arrow <= 50; arrow += 1) {
+        const enemy = inRange[arrow % inRange.length];
+        if (enemy) damage(enemy, stats.attack);
+      }
+      effect.hitCount += 50;
+      effect.special = true;
+    }
+    if (unit.kind === "赵云" && unit.attackCount >= 30) {
+      damage(target, stats.attack * 7);
+      effect.damage += stats.attack * 7;
+      effect.special = true;
+      unit.attackCount = 0;
+    }
+    if (unit.kind === "刘备" && unit.attackCount >= 20) {
+      damage(target, stats.attack * 5);
+      target.stunnedMs = Math.max(target.stunnedMs, 2_000);
+      effect.damage += stats.attack * 5;
+      effect.special = true;
+      unit.attackCount = 0;
+    }
     if (unit.kind === "马超") {
       const chance = target.boss ? 0.1 : 0.3;
       const roll = createRng(snapshot.seed ^ snapshot.tick ^ unit.attackCount ^ unit.id.length).next();
       if (roll < chance) { target.stunnedMs = Math.max(target.stunnedMs, target.boss ? 200 : 500); effect.special = true; }
+    }
+    if ((unit.kind === "关兴" || unit.kind === "张苞") && !target.boss) {
+      const roll = createRng(snapshot.seed ^ snapshot.tick ^ unit.attackCount ^ unit.id.length ^ 0x109).next();
+      if (roll < 0.1) { target.stunnedMs = Math.max(target.stunnedMs, 300); effect.special = true; }
     }
   }
   const defeated = player.enemies.filter((enemy) => enemy.hp <= 0);
@@ -1141,13 +1311,15 @@ function tickProps(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: 
       if (unit.temporaryAttackSpeedMs === 0) unit.temporaryAttackSpeedMultiplier = 1;
     }
     if (unit.kind === "农") {
-      unit.incomeMs = (unit.incomeMs ?? 20_000) - deltaMs;
-      if (unit.incomeMs <= 0) { player.buns += 1; unit.incomeMs += 20_000; }
+      const interval = [20_000, 10_000, 5_000, 3_000, 2_000][Math.max(0, Math.min(4, unit.level - 1))] ?? 20_000;
+      unit.incomeMs = (unit.incomeMs ?? interval) - deltaMs;
+      while (unit.incomeMs <= 0) { player.buns += 1; unit.incomeMs += interval; }
     }
   }
   for (const item of player.reserve) if (item.kind === "农") {
-    item.incomeMs = (item.incomeMs ?? 20_000) - deltaMs;
-    if (item.incomeMs <= 0) { player.buns += 1; item.incomeMs += 20_000; }
+    const interval = [20_000, 10_000, 5_000, 3_000, 2_000][Math.max(0, Math.min(4, item.level - 1))] ?? 20_000;
+    item.incomeMs = (item.incomeMs ?? interval) - deltaMs;
+    while (item.incomeMs <= 0) { player.buns += 1; item.incomeMs += interval; }
   }
 
   if (hasPassive(player, 12)) {
@@ -1263,7 +1435,13 @@ function tickPlayer(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs:
   for (const enemy of player.enemies) {
     enemy.stunnedMs = Math.max(0, enemy.stunnedMs - deltaMs);
     const siltMultiplier = hasPassive(player, 18) ? 0.9 : 1;
-    if (enemy.stunnedMs === 0) enemy.progress += deltaMs * (enemy.boss ? 0.000018 : 0.000026) * siltMultiplier;
+    if (enemy.stunnedMs === 0) {
+      const routePx = Math.max(1, pathLengthCells(snapshot.mapIndex) * GAME_CONFIG.cellSize);
+      const bossSpeed = enemy.bossType === undefined
+        ? BOSS_ENEMY_SPEED_PX_PER_SEC : BOSS_CONFIGS[enemy.bossType]?.speedPxPerSec ?? BOSS_ENEMY_SPEED_PX_PER_SEC;
+      const speedPxPerSec = enemy.boss ? bossSpeed : NORMAL_ENEMY_SPEED_PX_PER_SEC;
+      enemy.progress += deltaMs / 1_000 * speedPxPerSec / routePx * siltMultiplier;
+    }
   }
   const escaped = player.enemies.filter((enemy) => enemy.progress >= 1);
   if (escaped.length) {

@@ -76,20 +76,21 @@ describe("two-client authoritative room transport", () => {
     const sockets = [host, guest];
     try {
       await Promise.all(sockets.map((socket) => waitForEvent(socket, "connect")));
-      const hostJoin = await emitAck<{ ok: boolean; roomId: string; slot: number; token: string }>(host, "room:create", { name: "主公" });
+      const hostJoin = await emitAck<{ ok: boolean; roomId: string; slot: number; token: string }>(host, "room:create", { name: "主公", introRound: 0 });
       expect(hostJoin).toMatchObject({ ok: true, slot: 0 });
 
       const hostStart = waitForEvent<{ roomId: string; seed: number }>(host, "match:start");
       const hostSnapshot = waitForEvent<MatchSnapshot>(host, "match:snapshot");
       const guestSnapshot = waitForEvent<MatchSnapshot>(guest, "match:snapshot");
       const guestJoin = await emitAck<{ ok: boolean; roomId: string; slot: number; token: string }>(guest, "room:join", {
-        roomId: hostJoin.roomId, name: "援军",
+        roomId: hostJoin.roomId, name: "援军", introRound: 5,
       });
       expect(guestJoin).toMatchObject({ ok: true, roomId: hostJoin.roomId, slot: 1 });
       const [started, firstHostState, firstGuestState] = await Promise.all([hostStart, hostSnapshot, guestSnapshot]);
       expect(firstHostState.seed).toBe(started.seed);
       expect(firstGuestState.seed).toBe(started.seed);
       expect(firstGuestState.players).toEqual(firstHostState.players);
+      expect(firstGuestState.players.map((player) => player.introRound)).toEqual([0, 5]);
 
       let latestGuestState = firstGuestState;
       guest.on("match:snapshot", (snapshot: MatchSnapshot) => { latestGuestState = snapshot; });

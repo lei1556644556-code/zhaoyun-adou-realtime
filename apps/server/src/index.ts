@@ -5,7 +5,7 @@ import path from "node:path";
 import express from "express";
 import { Server, type Socket } from "socket.io";
 import {
-  GAME_CONFIG, applyCommand, cloneSnapshot, createMatch, stepMatch,
+  GAME_CONFIG, cloneSnapshot, createMatch, executeCommand, stepMatch,
   type CommandEnvelope, type MatchSnapshot, type PlayerSlot,
 } from "@adou/shared";
 
@@ -15,13 +15,13 @@ interface Seat {
   name: string;
   token: string;
   socketId: string | null;
+  introRound: number;
   disconnectedAt?: number;
 }
 interface Room {
   id: string;
   seats: Seat[];
   snapshot: MatchSnapshot | null;
-  commands: Set<string>;
   createdAt: number;
 }
 
@@ -52,7 +52,7 @@ function roomCode() {
 }
 
 function createRoom(): Room {
-  const room: Room = { id: roomCode(), seats: [], snapshot: null, commands: new Set(), createdAt: Date.now() };
+  const room: Room = { id: roomCode(), seats: [], snapshot: null, createdAt: Date.now() };
   rooms.set(room.id, room);
   return room;
 }
@@ -68,19 +68,20 @@ function emitStatus(room: Room) {
 function startIfReady(room: Room) {
   if (room.seats.length !== 2 || room.snapshot) return;
   const seed = randomBytes(4).readUInt32LE(0);
-  room.snapshot = createMatch(room.id, seed);
+  room.snapshot = createMatch(room.id, seed, 0, [room.seats[0]!.introRound, room.seats[1]!.introRound]);
   quickRoomId = quickRoomId === room.id ? null : quickRoomId;
   io.to(room.id).emit("match:start", { roomId: room.id, seed });
   io.to(room.id).emit("match:snapshot", cloneSnapshot(room.snapshot));
   emitStatus(room);
 }
 
-function takeSeat(room: Room, socket: Socket, name: string) {
+function takeSeat(room: Room, socket: Socket, name: string, introRound = 10) {
   if (room.seats.length >= 2) return null;
   const seat: Seat = {
     slot: room.seats.length as PlayerSlot,
     name: name.trim().slice(0, 16) || `玩家${room.seats.length + 1}`,
     token: randomUUID(), socketId: socket.id,
+    introRound: Math.max(0, Math.floor(introRound)),
   };
   room.seats.push(seat);
   socket.join(room.id);
@@ -92,27 +93,27 @@ function takeSeat(room: Room, socket: Socket, name: string) {
 }
 
 io.on("connection", (socket) => {
-  socket.on("room:create", ({ name }: { name?: string } = {}, ack?: Ack) => {
+  socket.on("room:create", ({ name, introRound }: { name?: string; introRound?: number } = {}, ack?: Ack) => {
     const room = createRoom();
-    const seat = takeSeat(room, socket, name ?? "主公");
+    const seat = takeSeat(room, socket, name ?? "主公", introRound);
     ack?.({ ok: true, roomId: room.id, slot: seat?.slot, token: seat?.token });
   });
 
-  socket.on("room:join", ({ roomId, name }: { roomId?: string; name?: string } = {}, ack?: Ack) => {
+  socket.on("room:join", ({ roomId, name, introRound }: { roomId?: string; name?: string; introRound?: number } = {}, ack?: Ack) => {
     const room = rooms.get((roomId ?? "").toUpperCase());
     if (!room) return ack?.({ ok: false, code: "ROOM_NOT_FOUND", message: "房间不存在" });
     if (room.snapshot) return ack?.({ ok: false, code: "ROOM_STARTED", message: "房间已经开战" });
-    const seat = takeSeat(room, socket, name ?? "援军");
+    const seat = takeSeat(room, socket, name ?? "援军", introRound);
     if (!seat) return ack?.({ ok: false, code: "ROOM_FULL", message: "房间已满" });
     ack?.({ ok: true, roomId: room.id, slot: seat.slot, token: seat.token });
   });
 
-  socket.on("room:quick", ({ name }: { name?: string } = {}, ack?: Ack) => {
+  socket.on("room:quick", ({ name, introRound }: { name?: string; introRound?: number } = {}, ack?: Ack) => {
     let room = quickRoomId ? rooms.get(quickRoomId) : undefined;
     if (!room || room.seats.length >= 2 || room.snapshot) {
       room = createRoom(); quickRoomId = room.id;
     }
-    const seat = takeSeat(room, socket, name ?? "侠客");
+    const seat = takeSeat(room, socket, name ?? "侠客", introRound);
     ack?.({ ok: true, roomId: room.id, slot: seat?.slot, token: seat?.token });
   });
 
@@ -131,10 +132,13 @@ io.on("connection", (socket) => {
     const room = rooms.get(socket.data.roomId as string);
     const seat = room?.seats.find((candidate) => candidate.token === socket.data.token);
     if (!room?.snapshot || !seat) return ack?.({ ok: false, code: "ERR_ROOM_STATE", message: "尚未进入战斗" });
-    if (room.commands.has(envelope.commandId)) return ack?.({ ok: true, duplicate: true, stateVersion: room.snapshot.stateVersion });
-    room.commands.add(envelope.commandId);
-    const result = applyCommand(room.snapshot, seat.slot, envelope.command);
-    result.commandId = envelope.commandId;
+    const accepted = room.snapshot.acceptedCommands[envelope.commandId];
+    const result = executeCommand(room.snapshot, seat.slot, {
+      ...envelope,
+      // Tick 版本会在网络往返期间变化；当前协议先以 commandId/clientSeq 保证幂等与顺序。
+      // v2 将 expectedStateVersion 替换为命令域版本，避免全局 Tick 造成伪冲突。
+      expectedStateVersion: accepted?.expectedStateVersion ?? room.snapshot.stateVersion,
+    });
     ack?.(result as unknown as Record<string, unknown>);
     if (result.ok) io.to(room.id).emit("match:snapshot", cloneSnapshot(room.snapshot));
   });

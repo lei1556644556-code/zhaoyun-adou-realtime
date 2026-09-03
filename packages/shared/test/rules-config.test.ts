@@ -3,12 +3,16 @@ import {
   ACTIVE_PROP_IDS,
   ATTACK_RANGE_RULES,
   BOSS_CHANCES,
+  BOSS_CONFIGS,
+  BOSS_ENEMY_SPEED_PX_PER_SEC,
   BOSS_MILESTONES,
   DIFFICULTY_CURVES,
   DIFFICULTY_WEIGHTS,
   EARLY_ACCOUNT_SHOVEL_WEIGHT,
   EARLY_ACCOUNT_TOKEN_POOL_WEIGHT,
   GAME_CONFIG,
+  GENERAL_LEVEL_ATTACK,
+  GENERAL_LEVEL_SPEED,
   GENERALS,
   HERO_PAIRS,
   LEVEL_ATTACK,
@@ -25,6 +29,8 @@ import {
   RULE_EVIDENCE_SOURCES,
   RULE_PROVENANCE,
   RULES_CONFIG_1_0_9,
+  SOLDIER_LEVEL_ATTACK,
+  SOLDIER_LEVEL_SPEED,
   SOLDIERS,
   TOKEN_POOL,
   TOKEN_POOL_BASE_WEIGHT,
@@ -44,7 +50,7 @@ function stableFingerprint(value: unknown) {
 describe("1.0.9 versioned rules config", () => {
   it("publishes one versioned entry point and honest evidence metadata", () => {
     expect(RULES_CONFIG_1_0_9.rulesetVersion).toBe("1.0.9");
-    expect(RULES_CONFIG_1_0_9.schemaVersion).toBe("1.1.0");
+    expect(RULES_CONFIG_1_0_9.schemaVersion).toBe("1.2.0");
     expect(RULES_CONFIG_1_0_9.evidence).toBe(RULE_EVIDENCE_SOURCES);
     expect(RULES_CONFIG_1_0_9.provenance).toBe(RULE_PROVENANCE);
     expect(RULE_EVIDENCE_SOURCES.originalPackage.artifactPath).toBeNull();
@@ -55,12 +61,12 @@ describe("1.0.9 versioned rules config", () => {
     expect(Object.fromEntries(Object.entries(RULE_PROVENANCE).map(([key, value]) => [key, value.status]))).toEqual({
       openingAndBoard: "package-recorded",
       recruitmentPool: "package-recorded",
-      earlyAccountShovelBonus: "pending-original-verification",
+      earlyAccountShovelBonus: "package-recorded",
       campAndRecycle: "pending-original-verification",
       mergePairs: "package-recorded",
       twoCellGeneralAndSplit: "pending-original-verification",
       soldierAndGeneralStats: "package-recorded",
-      attackCollision: "pending-original-verification",
+      attackCollision: "package-recorded",
       wavesAndBossChance: "package-recorded",
       mapLayouts: "package-recorded",
       mapPathInterpolation: "project-adaptation",
@@ -111,8 +117,12 @@ describe("1.0.9 versioned rules config", () => {
     expect(EARLY_ACCOUNT_TOKEN_POOL_WEIGHT).toBe(110);
     expect(EARLY_ACCOUNT_SHOVEL_WEIGHT / EARLY_ACCOUNT_TOKEN_POOL_WEIGHT).toBeCloseTo(13 / 110, 12);
     expect(RECRUITMENT_RULES.drawsPerRecruit).toBe(5);
-    expect(RECRUITMENT_RULES.drawMode).toBe("independent-with-replacement");
-    expect(RULE_PROVENANCE.earlyAccountShovelBonus.status).toBe("pending-original-verification");
+    expect(RECRUITMENT_RULES.drawMode).toBe("persistent-pool; soldiers/shovel-with-replacement; general-names-without-replacement");
+    expect(RECRUITMENT_RULES.earlyAccount).toMatchObject({
+      eligibilityDailyMatches: 3,
+      bonusFormula: "floor(baseShovelWeight/5)",
+    });
+    expect(RULE_PROVENANCE.earlyAccountShovelBonus.status).toBe("package-recorded");
   });
 
   it("freezes attack range, attack speed, and merge tables without prose parsing", () => {
@@ -122,8 +132,12 @@ describe("1.0.9 versioned rules config", () => {
       枪: { attack: 2, intervalMs: 800, range: 2.5, form: "贯穿", target: "最近敌人", maxLevel: 5 },
       骑: { attack: 2, intervalMs: 800, range: 2, form: "范围", target: "最近敌人", maxLevel: 5 },
     });
-    expect(LEVEL_ATTACK).toEqual([1, 1.5, 2.1, 2.73, 3.276]);
-    expect(LEVEL_SPEED).toEqual([1, 1.3, 1.56, 1.794, 1.9734]);
+    expect(SOLDIER_LEVEL_ATTACK).toEqual([1, 1.5, 2.1, 2.73, 3.4125]);
+    expect(SOLDIER_LEVEL_SPEED).toEqual([1, 1.5, 2.1, 2.73, 3.4125]);
+    expect(GENERAL_LEVEL_ATTACK).toEqual([1, 1.5, 2.1, 2.73, 3.276]);
+    expect(GENERAL_LEVEL_SPEED).toEqual([1, 1.3, 1.56, 1.794, 1.9734]);
+    expect(LEVEL_ATTACK).toBe(GENERAL_LEVEL_ATTACK);
+    expect(LEVEL_SPEED).toBe(GENERAL_LEVEL_SPEED);
     expect(ATTACK_RANGE_RULES).toMatchObject({ originalCellPx: 80, radiusReductionPx: 1, boundaryInclusive: true });
     expect(Object.keys(GENERALS)).toHaveLength(12);
     expect(Object.entries(GENERALS).map(([name, value]) => [
@@ -151,7 +165,7 @@ describe("1.0.9 versioned rules config", () => {
       expect(HERO_PAIRS[`${first}+${second}`]).toBe(name);
       expect(HERO_PAIRS[`${second}+${first}`]).toBe(name);
     }
-    expect(stableFingerprint(GENERALS)).toBe("943b4cfa1746a6af");
+    expect(stableFingerprint(GENERALS)).toBe("3906a692d669202b");
     expect(MERGE_RULES.generals).toMatchObject({
       adjacency: "horizontal",
       trigger: "automatic-after-board-placement-or-move",
@@ -193,19 +207,25 @@ describe("1.0.9 versioned rules config", () => {
     expect(Object.keys(PROP_EFFECTS).map(Number).sort((a, b) => a - b)).toEqual(PROPS.map((prop) => prop.id));
     expect(ACTIVE_PROP_IDS).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 21]);
     expect(PASSIVE_PROP_IDS).toEqual([11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24]);
-    expect(PROP_RARITY_NAMES).toEqual(["普通", "稀有", "卓越", "史诗"]);
+    expect(PROP_RARITY_NAMES).toEqual(["稀有", "卓越", "史诗", "传说"]);
     expect(PROP_RARITY_COLORS).toEqual(["#95e45a", "#2dddff", "#D955FF", "#E99431"]);
-    expect(stableFingerprint(PROPS)).toBe("06f2bafbc88b7558");
+    expect(stableFingerprint(PROPS)).toBe("11b0a63193478084");
     expect(PROP_EFFECTS[3].outcomes).toEqual([
       { levelMin: 1, levelMax: 2, upChance: 1, downChance: 0 },
       { levelMin: 3, levelMax: 3, upChance: 0.7, downChance: 0.3 },
       { levelMin: 4, levelMax: null, upChance: 0.6, downChance: 0.4 },
     ]);
-    expect(PROP_EFFECTS[6].eligibleUnitKinds).toBeNull();
+    expect(PROP_EFFECTS[5].charges).toBe(10);
+    expect(PROP_EFFECTS[6].eligibleUnitKinds).toEqual(["弓", "all-generals"]);
     expect(PROP_EFFECTS[9]).toMatchObject({ blastRadiusPx: 60, blastRadiusCells: 0.75, result: "instant-kill" });
-    expect(PROP_EFFECTS[13].verification).toBe("pending-original-verification");
+    expect(PROP_EFFECTS[13]).toMatchObject({
+      verification: "package-recorded",
+      perNameIndependentCopyChance: 0.5,
+      consumeDrawnNameFromPersistentPool: true,
+      removeOneAdditionalMatchingCopyAfterBoost: true,
+    });
     expect(PROP_EFFECTS[20]).toMatchObject({ cooldownMs: 300_000, lastRouteCells: 6, impactRadiusCells: 1 });
-    expect(PROP_EFFECTS[23]).toMatchObject({ configuredTextAmount: 10, recordedRuntimeAmount: 1 });
+    expect(PROP_EFFECTS[23]).toMatchObject({ amount: 10, consumedImmediately: true });
     expect(PROP_EFFECTS[24].recordedRuntimeReward).toBeNull();
 
     for (const outcome of PROP_EFFECTS[3].outcomes) {
@@ -224,7 +244,7 @@ describe("1.0.9 versioned rules config", () => {
     const recordedEffects = Object.fromEntries(
       Object.entries(PROP_EFFECTS).filter(([, effect]) => effect.verification === "package-recorded"),
     );
-    expect(stableFingerprint(recordedEffects)).toBe("55bcf3cddbb8b2df");
+    expect(stableFingerprint(recordedEffects)).toBe("a2208652a5d540f3");
 
     expect(PROP_ACQUISITION_RULES.loadout).toMatchObject({ activeLimit: 2, passiveLimit: 6, duplicatesAllowed: false });
     expect(PROP_ACQUISITION_RULES.inBattleShovelSupply.webAdaptation).toEqual({
@@ -267,6 +287,9 @@ describe("1.0.9 versioned rules config", () => {
     expect(DIFFICULTY_WEIGHTS.map((weight) => weight / difficultyWeightTotal)).toEqual([0.5, 0.2, 0.3]);
     expect(BOSS_MILESTONES).toEqual([3, 6, 9, 12, 15, 18]);
     expect(BOSS_CHANCES).toEqual([0.1, 0.2, 0.3, 0.5, 0.9, 1]);
+    expect(BOSS_ENEMY_SPEED_PX_PER_SEC).toBe(10);
+    expect(BOSS_CONFIGS.map((boss) => boss.hpMultiplier)).toEqual([7, 10, 14, 7, 10, 14, 7, 10, 14, 7, 10, 14]);
+    expect(BOSS_CONFIGS.map((boss) => boss.cooldownMs)).toEqual([8_000, 8_000, 10_000, 10_000, 3_000, 10_000, 8_000, 10_000, 10_000, 15_000, 8_000, 15_000]);
     expect(BOSS_CHANCES.every((chance) => chance >= 0 && chance <= 1)).toBe(true);
     expect(stableFingerprint(MAP_LAYOUTS)).toBe("eb1599cc2794e28e");
   });

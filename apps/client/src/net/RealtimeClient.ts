@@ -1,6 +1,6 @@
 import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js";
 import {
-  GAME_CONFIG, applyCommand, cloneSnapshot, createMatch,
+  GAME_CONFIG, cloneSnapshot, createMatch, executeCommand,
   type CommandEnvelope, type MatchSnapshot, type PlayerSlot,
 } from "@adou/shared";
 import { stepMatchBatch } from "./stepMatchBatch";
@@ -18,18 +18,21 @@ type SavedSession = {
   name: string;
   guestName?: string;
   guestToken?: string;
+  introRound?: number;
+  guestIntroRound?: number;
   snapshot?: MatchSnapshot;
 };
 type WireMessage =
-  | { type: "join"; requestId: string; clientId: string; name: string; resumeToken?: string }
+  | { type: "join"; requestId: string; clientId: string; name: string; introRound?: number; resumeToken?: string }
   | { type: "join-ack"; requestId: string; targetId: string; result: JoinedPayload }
   | { type: "room-status"; players: PlayerSummary[]; started: boolean }
   | { type: "match-start"; roomId: string; seed: number }
   | { type: "snapshot"; snapshot: MatchSnapshot }
+  | { type: "host-heartbeat"; stateVersion: number }
   | { type: "command"; clientId: string; token: string; envelope: CommandEnvelope }
-  | { type: "command-result"; targetId: string; ok: boolean; message?: string; stateVersion: number };
+  | { type: "command-result"; targetId: string; commandId: string; ok: boolean; message?: string; stateVersion: number };
 type QuickMessage =
-  | { type: "quick-find"; clientId: string; name: string }
+  | { type: "quick-find"; clientId: string; name: string; introRound?: number }
   | { type: "quick-match"; targetId: string; roomId: string };
 
 function cleanName(name: string) {
@@ -55,6 +58,7 @@ export class RealtimeClient extends EventTarget {
   private roomChannel: RealtimeChannel | null = null;
   private quickChannel: RealtimeChannel | null = null;
   private tickTimer = 0;
+  private livenessTimer = 0;
   private quickTimer = 0;
   private quickTimeout = 0;
   private lastTickAt = 0;
@@ -64,11 +68,15 @@ export class RealtimeClient extends EventTarget {
   private hostName = "";
   private guestName = "";
   private guestToken = "";
+  private introRound = 10;
+  private guestIntroRound = 10;
   private snapshot: MatchSnapshot | null = null;
   private pendingJoin: { requestId: string; resolve: (result: JoinedPayload) => void; timer: number } | null = null;
   private pendingQuick: { name: string; matching: boolean; resolve: (result: JoinedPayload) => void } | null = null;
   private seq = 0;
   private lastSendFailureAt = 0;
+  private lastHostSignalAt = 0;
+  private readonly pendingCommands = new Map<string, number>();
   private networkConnected: boolean | null = null;
   private closed = false;
 
@@ -175,7 +183,11 @@ export class RealtimeClient extends EventTarget {
 
   private async disconnectRoom() {
     window.clearInterval(this.tickTimer);
+    window.clearInterval(this.livenessTimer);
     this.tickTimer = 0;
+    this.livenessTimer = 0;
+    for (const timer of this.pendingCommands.values()) window.clearTimeout(timer);
+    this.pendingCommands.clear();
     if (this.roomChannel) {
       const channel = this.roomChannel;
       this.roomChannel = null;
@@ -221,8 +233,10 @@ export class RealtimeClient extends EventTarget {
       token: this.token,
       role: this.role,
       name: this.role === "host" ? this.hostName : this.guestName,
+      introRound: this.introRound,
       ...(this.role === "host" && this.guestName ? { guestName: this.guestName, guestToken: this.guestToken } : {}),
-      ...(this.role === "host" && this.snapshot ? { snapshot: this.snapshot } : {}),
+      ...(this.role === "host" && this.guestName ? { guestIntroRound: this.guestIntroRound } : {}),
+      ...(this.snapshot ? { snapshot: this.snapshot } : {}),
     };
     localStorage.setItem(this.storageKey, JSON.stringify(saved));
   }
@@ -278,6 +292,27 @@ export class RealtimeClient extends EventTarget {
     }, tickMs);
   }
 
+  private markHostSignal() {
+    if (this.role !== "guest") return;
+    this.lastHostSignalAt = Date.now();
+    this.publishNetworkState(true);
+  }
+
+  private startLivenessChecks() {
+    window.clearInterval(this.livenessTimer);
+    this.lastHostSignalAt = Date.now();
+    this.livenessTimer = window.setInterval(() => {
+      if (!this.roomChannel) return;
+      if (this.role === "host") {
+        this.runInBackground(this.broadcast(this.roomChannel, {
+          type: "host-heartbeat", stateVersion: this.snapshot?.stateVersion ?? this.stateVersion,
+        }));
+      } else if (this.role === "guest" && Date.now() - this.lastHostSignalAt > 6_000) {
+        this.publishNetworkState(false);
+      }
+    }, 2_000);
+  }
+
   private async connectRoom(roomId: string) {
     await this.disconnectRoom();
     this.roomId = roomId.toUpperCase();
@@ -287,15 +322,18 @@ export class RealtimeClient extends EventTarget {
     channel.on("broadcast", { event: "message" }, ({ payload }) => this.onRoomMessage(payload));
     this.roomChannel = channel;
     await this.subscribe(channel);
+    this.startLivenessChecks();
   }
 
-  private async becomeHost(name: string, roomId = randomRoomCode()): Promise<JoinedPayload> {
+  private async becomeHost(name: string, roomId = randomRoomCode(), introRound = 10): Promise<JoinedPayload> {
     this.role = "host";
     this.slot = 0;
     this.token = crypto.randomUUID();
     this.hostName = cleanName(name);
     this.guestName = "";
     this.guestToken = "";
+    this.introRound = Math.max(0, Math.floor(introRound));
+    this.guestIntroRound = 10;
     this.snapshot = null;
     await this.connectRoom(roomId);
     this.persistSession();
@@ -303,10 +341,11 @@ export class RealtimeClient extends EventTarget {
     return { ok: true, roomId: this.roomId, slot: this.slot, token: this.token } satisfies JoinedPayload;
   }
 
-  private async requestJoin(roomId: string, name: string, resumeToken?: string): Promise<JoinedPayload> {
+  private async requestJoin(roomId: string, name: string, introRound = 10, resumeToken?: string): Promise<JoinedPayload> {
     this.role = "guest";
     this.slot = 1;
     this.guestName = cleanName(name);
+    this.introRound = Math.max(0, Math.floor(introRound));
     await this.connectRoom(roomId);
     const requestId = crypto.randomUUID();
     const resultPromise = new Promise<JoinedPayload>((resolve) => {
@@ -318,7 +357,7 @@ export class RealtimeClient extends EventTarget {
       this.pendingJoin = { requestId, resolve, timer };
     });
     await this.broadcast(this.roomChannel!, {
-      type: "join", requestId, clientId: this.clientId, name: this.guestName,
+      type: "join", requestId, clientId: this.clientId, name: this.guestName, introRound: this.introRound,
       ...(resumeToken ? { resumeToken } : {}),
     });
     const result = await resultPromise;
@@ -334,19 +373,21 @@ export class RealtimeClient extends EventTarget {
     let result: JoinedPayload;
     if (message.resumeToken && message.resumeToken === this.guestToken) {
       this.guestName = cleanName(message.name);
+      this.guestIntroRound = Math.max(0, Math.floor(message.introRound ?? 10));
       result = { ok: true, roomId: this.roomId, slot: 1, token: this.guestToken };
     } else if (this.guestToken || this.snapshot) {
       result = { ok: false, message: "房间已满或已经开战" };
     } else {
       this.guestName = cleanName(message.name);
       this.guestToken = crypto.randomUUID();
+      this.guestIntroRound = Math.max(0, Math.floor(message.introRound ?? 10));
       result = { ok: true, roomId: this.roomId, slot: 1, token: this.guestToken };
     }
     await this.broadcast(this.roomChannel, { type: "join-ack", requestId: message.requestId, targetId: message.clientId, result });
     if (!result.ok) return;
     if (!this.snapshot) {
       const seed = crypto.getRandomValues(new Uint32Array(1))[0] ?? Date.now();
-      this.snapshot = createMatch(this.roomId, seed);
+      this.snapshot = createMatch(this.roomId, seed, 0, [this.introRound, this.guestIntroRound]);
       this.emit("start", { roomId: this.roomId, seed });
       await this.broadcast(this.roomChannel, { type: "match-start", roomId: this.roomId, seed });
       this.startTicking();
@@ -358,10 +399,15 @@ export class RealtimeClient extends EventTarget {
 
   private async handleGuestCommand(message: Extract<WireMessage, { type: "command" }>) {
     if (this.role !== "host" || !this.snapshot || !this.roomChannel || message.token !== this.guestToken) return;
-    const result = applyCommand(this.snapshot, 1, message.envelope.command);
-    result.commandId = message.envelope.commandId;
+    const accepted = this.snapshot.acceptedCommands[message.envelope.commandId];
+    const result = executeCommand(this.snapshot, 1, {
+      ...message.envelope,
+      // 模拟 Tick 会持续提升全局版本；现有 P2P 兼容层只以命令序号做并发顺序，
+      // 等切换独立权威服后再使用命令域版本，而不是把网络延迟误判为冲突。
+      expectedStateVersion: accepted?.expectedStateVersion ?? this.snapshot.stateVersion,
+    });
     await this.broadcast(this.roomChannel, {
-      type: "command-result", targetId: message.clientId, ok: result.ok,
+      type: "command-result", targetId: message.clientId, commandId: message.envelope.commandId, ok: result.ok,
       ...(result.message ? { message: result.message } : {}), stateVersion: result.stateVersion,
     });
     if (result.ok) {
@@ -374,6 +420,7 @@ export class RealtimeClient extends EventTarget {
     if (!isRecord(payload) || typeof payload.type !== "string") return;
     if (payload.type === "join" && (
       typeof payload.requestId !== "string" || typeof payload.clientId !== "string" || typeof payload.name !== "string"
+      || (payload.introRound !== undefined && typeof payload.introRound !== "number")
     )) return;
     if (payload.type === "join-ack" && (
       typeof payload.requestId !== "string" || typeof payload.targetId !== "string" || !isRecord(payload.result)
@@ -381,12 +428,14 @@ export class RealtimeClient extends EventTarget {
     if (payload.type === "room-status" && !Array.isArray(payload.players)) return;
     if (payload.type === "match-start" && (typeof payload.roomId !== "string" || typeof payload.seed !== "number")) return;
     if (payload.type === "snapshot" && (!isRecord(payload.snapshot) || !Array.isArray(payload.snapshot.players))) return;
+    if (payload.type === "host-heartbeat" && typeof payload.stateVersion !== "number") return;
     if (payload.type === "command" && (
       typeof payload.clientId !== "string" || typeof payload.token !== "string" || !isRecord(payload.envelope)
       || !isRecord(payload.envelope.command) || typeof payload.envelope.command.type !== "string"
     )) return;
     if (payload.type === "command-result" && (
-      typeof payload.targetId !== "string" || typeof payload.ok !== "boolean" || typeof payload.stateVersion !== "number"
+      typeof payload.targetId !== "string" || typeof payload.commandId !== "string"
+      || typeof payload.ok !== "boolean" || typeof payload.stateVersion !== "number"
     )) return;
     const message = payload as WireMessage;
     if (message.type === "join") {
@@ -397,18 +446,31 @@ export class RealtimeClient extends EventTarget {
       this.pendingJoin = null;
       resolve(message.result);
     } else if (message.type === "room-status" && this.role === "guest") {
+      this.markHostSignal();
       const host = message.players.find((player) => player.slot === 0);
       if (host) this.hostName = host.name;
       this.emit("room", { roomId: this.roomId, players: message.players, started: message.started });
     } else if (message.type === "match-start" && this.role === "guest") {
+      this.markHostSignal();
       this.emit("start", { roomId: message.roomId, seed: message.seed });
     } else if (message.type === "snapshot" && this.role === "guest") {
+      this.markHostSignal();
       this.snapshot = message.snapshot;
       this.stateVersion = message.snapshot.stateVersion;
+      if (Date.now() - this.lastPersistAt >= 1_000) {
+        this.lastPersistAt = Date.now();
+        this.persistSession();
+      }
       this.emit("snapshot", cloneSnapshot(message.snapshot));
+    } else if (message.type === "host-heartbeat" && this.role === "guest") {
+      this.markHostSignal();
     } else if (message.type === "command" && this.role === "host") {
       this.runInBackground(this.handleGuestCommand(message), "对手操作同步失败，请检查网络");
     } else if (message.type === "command-result" && message.targetId === this.clientId && this.role === "guest") {
+      const timer = this.pendingCommands.get(message.commandId);
+      if (timer !== undefined) window.clearTimeout(timer);
+      this.pendingCommands.delete(message.commandId);
+      this.markHostSignal();
       this.stateVersion = message.stateVersion;
       if (!message.ok) this.emit("notice", { message: message.message ?? "操作被房主拒绝" });
     }
@@ -416,7 +478,10 @@ export class RealtimeClient extends EventTarget {
 
   private onQuickMessage(payload: unknown) {
     if (!isRecord(payload) || !this.pendingQuick || typeof payload.type !== "string") return;
-    if (payload.type === "quick-find" && (typeof payload.clientId !== "string" || typeof payload.name !== "string")) return;
+    if (payload.type === "quick-find" && (
+      typeof payload.clientId !== "string" || typeof payload.name !== "string"
+      || (payload.introRound !== undefined && typeof payload.introRound !== "number")
+    )) return;
     if (payload.type === "quick-match" && (typeof payload.targetId !== "string" || typeof payload.roomId !== "string")) return;
     const message = payload as QuickMessage;
     if (message.type === "quick-find" && message.clientId !== this.clientId && !this.pendingQuick.matching) {
@@ -424,7 +489,7 @@ export class RealtimeClient extends EventTarget {
       this.pendingQuick.matching = true;
       void (async () => {
         try {
-          const result = await this.becomeHost(this.pendingQuick?.name ?? "常山侠客");
+          const result = await this.becomeHost(this.pendingQuick?.name ?? "常山侠客", randomRoomCode(), this.introRound);
           if (this.quickChannel) await this.broadcast(this.quickChannel, { type: "quick-match", targetId: message.clientId, roomId: result.roomId! });
           this.finishQuick(result);
         } catch (error) {
@@ -435,7 +500,7 @@ export class RealtimeClient extends EventTarget {
       this.pendingQuick.matching = true;
       void (async () => {
         try {
-          const result = await this.requestJoin(message.roomId, this.pendingQuick?.name ?? "常山侠客");
+          const result = await this.requestJoin(message.roomId, this.pendingQuick?.name ?? "常山侠客", this.introRound);
           this.finishQuick(result);
         } catch (error) {
           this.finishQuick({ ok: false, message: error instanceof Error ? error.message : "匹配失败" });
@@ -444,17 +509,18 @@ export class RealtimeClient extends EventTarget {
     }
   }
 
-  async create(name: string): Promise<JoinedPayload> {
-    return this.becomeHost(name);
+  async create(name: string, introRound = 10): Promise<JoinedPayload> {
+    return this.becomeHost(name, randomRoomCode(), introRound);
   }
 
-  async join(roomId: string, name: string): Promise<JoinedPayload> {
+  async join(roomId: string, name: string, introRound = 10): Promise<JoinedPayload> {
     const normalized = roomId.trim().toUpperCase();
     if (!/^[A-Z0-9]{6}$/.test(normalized)) return { ok: false, message: "请输入正确的6位房号" } satisfies JoinedPayload;
-    return this.requestJoin(normalized, name);
+    return this.requestJoin(normalized, name, introRound);
   }
 
-  async quick(name: string): Promise<JoinedPayload> {
+  async quick(name: string, introRound = 10): Promise<JoinedPayload> {
+    this.introRound = Math.max(0, Math.floor(introRound));
     await this.disconnectRoom();
     const channel = this.client.channel(QUICK_CHANNEL, { config: { broadcast: { self: false, ack: true } } });
     channel.on("broadcast", { event: "message" }, ({ payload }) => this.onQuickMessage(payload));
@@ -465,7 +531,9 @@ export class RealtimeClient extends EventTarget {
       const announce = () => {
         if (!this.quickChannel || !this.pendingQuick || this.pendingQuick.matching) return;
         this.runInBackground(
-          this.broadcast(this.quickChannel, { type: "quick-find", clientId: this.clientId, name: this.pendingQuick.name }),
+          this.broadcast(this.quickChannel, {
+            type: "quick-find", clientId: this.clientId, name: this.pendingQuick.name, introRound: this.introRound,
+          }),
           "随机匹配广播失败，请稍后重试",
         );
       };
@@ -485,6 +553,8 @@ export class RealtimeClient extends EventTarget {
       this.hostName = cleanName(saved.name);
       this.guestName = saved.guestName ? cleanName(saved.guestName) : "";
       this.guestToken = saved.guestToken ?? "";
+      this.introRound = Math.max(0, Math.floor(saved.introRound ?? 10));
+      this.guestIntroRound = Math.max(0, Math.floor(saved.guestIntroRound ?? 10));
       this.snapshot = saved.snapshot ?? null;
       await this.connectRoom(saved.roomId);
       this.publishRoomStatus();
@@ -494,7 +564,7 @@ export class RealtimeClient extends EventTarget {
       }
       return { ok: true, roomId: this.roomId, slot: 0, token: this.token } satisfies JoinedPayload;
     }
-    return this.requestJoin(saved.roomId, saved.name, saved.token);
+    return this.requestJoin(saved.roomId, saved.name, saved.introRound ?? 10, saved.token);
   }
 
   send(command: CommandEnvelope["command"]) {
@@ -503,7 +573,7 @@ export class RealtimeClient extends EventTarget {
       commandId, clientSeq: ++this.seq, expectedStateVersion: this.stateVersion, command,
     };
     if (this.role === "host" && this.snapshot) {
-      const result = applyCommand(this.snapshot, 0, command);
+      const result = executeCommand(this.snapshot, 0, envelope);
       if (!result.ok) this.emit("notice", { message: result.message ?? "操作被拒绝" });
       else {
         this.persistSession();
@@ -512,6 +582,12 @@ export class RealtimeClient extends EventTarget {
       return;
     }
     if (this.role === "guest" && this.roomChannel && this.token) {
+      const timer = window.setTimeout(() => {
+        if (!this.pendingCommands.delete(commandId)) return;
+        this.publishNetworkState(false);
+        this.emit("notice", { message: "房主权威端未响应，操作未确认；进度凭证已保留，可稍后重连" });
+      }, 5_000);
+      this.pendingCommands.set(commandId, timer);
       this.runInBackground(
         this.broadcast(this.roomChannel, { type: "command", clientId: this.clientId, token: this.token, envelope }),
         "操作发送失败，请检查网络后重试",

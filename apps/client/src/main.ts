@@ -1,7 +1,8 @@
 import "./styles.css";
 import {
-  ACTIVE_PROP_IDS, GAME_CONFIG, GENERALS, HERO_PAIRS, LEVEL_ATTACK, LEVEL_SPEED, MAP_LAYOUTS,
-  PASSIVE_PROP_IDS, PROPS, PROP_RARITY_COLORS, PROP_RARITY_NAMES, SOLDIERS,
+  ACTIVE_PROP_IDS, GAME_CONFIG, GENERAL_LEVEL_ATTACK, GENERAL_LEVEL_SPEED, GENERALS, HERO_PAIRS, MAP_LAYOUTS,
+  PASSIVE_PROP_IDS, PROPS, PROP_RARITY_COLORS, PROP_RARITY_NAMES, SOLDIER_LEVEL_ATTACK,
+  SOLDIER_LEVEL_SPEED, SOLDIERS,
   shovelSupplyCount,
   type ActivePropId, type GameCommand, type MatchSnapshot, type PlayerSlot, type PropLoadout,
 } from "@adou/shared";
@@ -16,8 +17,9 @@ import { PracticeEngine } from "./game/PracticeEngine";
 import { RealtimeClient } from "./net/RealtimeClient";
 import { loadRuntimeConfig } from "./app/runtimeConfig";
 import {
-  SupabaseService, type AccountEconomy, type CloudProgress, type OwnedProp, type PlayerProfile, type ShopOffer,
+  SupabaseService, type AccountEconomy, type CloudProgress, type PlayerProfile, type ShopOffer,
 } from "./auth/SupabaseService";
+import { freshEconomy, normalizeEconomy } from "./auth/economy";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("Missing #app");
@@ -209,42 +211,8 @@ function get<T extends HTMLElement>(id: string) {
   return element as T;
 }
 
-function shanghaiDayKey() {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
-  }).format(new Date());
-}
-
-function receivesEarlyAccountShovels() {
-  const created = Date.parse(currentProfile?.createdAt ?? "");
-  const age = Date.now() - created;
-  return Number.isFinite(created) && age >= 0 && age < 3 * 24 * 60 * 60 * 1000;
-}
-
-function freshEconomy(gold = 0, stamina = 30): AccountEconomy {
-  return {
-    dayKey: shanghaiDayKey(), gold,
-    stamina: Math.max(0, Math.min(30, Math.floor(stamina))),
-    winDay: 0, loseDay: 0, ownedProps: [], completedMatchKeys: [],
-  };
-}
-
-function normalizeEconomy(value: unknown): AccountEconomy {
-  const raw = value && typeof value === "object" ? value as Partial<AccountEconomy> : {};
-  const gold = Math.max(0, Math.floor(Number(raw.gold) || 0));
-  const stamina = Number.isFinite(Number(raw.stamina)) ? Math.floor(Number(raw.stamina)) : 30;
-  if (raw.dayKey !== shanghaiDayKey()) return freshEconomy(gold, stamina);
-  const ownedProps = (Array.isArray(raw.ownedProps) ? raw.ownedProps : [])
-    .filter((entry): entry is OwnedProp => Boolean(entry) && Number(entry.id) >= 2 && Number(entry.id) <= 24 && Number(entry.id) !== 23)
-    .filter((entry, index, entries) => entries.findIndex((other) => Number(other.id) === Number(entry.id)) === index)
-    .map((entry) => ({ id: Number(entry.id), level: Number(entry.id) === 22 ? Math.max(1, Math.min(3, Math.floor(Number(entry.level) || 1))) : 1 }));
-  return {
-    dayKey: shanghaiDayKey(), gold, stamina: Math.max(0, Math.min(30, Number.isFinite(Number(raw.stamina)) ? Math.floor(Number(raw.stamina)) : 30)),
-    winDay: Math.max(0, Math.floor(Number(raw.winDay) || 0)), loseDay: Math.max(0, Math.floor(Number(raw.loseDay) || 0)),
-    ownedProps, completedMatchKeys: (Array.isArray(raw.completedMatchKeys) ? raw.completedMatchKeys : []).filter((key): key is string => typeof key === "string").slice(-50),
-    ...(raw.pendingResult ? { pendingResult: raw.pendingResult } : {}),
-    ...(raw.pendingShop ? { pendingShop: raw.pendingShop } : {}),
-  };
+function receivesEarlyDailyShovels() {
+  return economy.winDay + economy.loseDay < 3;
 }
 
 function ownedLevel(id: number) { return economy.ownedProps.find((entry) => entry.id === id)?.level ?? 0; }
@@ -479,7 +447,9 @@ function showUnitInspector(payload: { kind: string; level: number; unitId?: stri
   const base = hero ?? soldier;
   const normalizedLevel = base ? Math.max(1, Math.min(level, base.maxLevel)) : Math.max(1, level);
   const levelIndex = normalizedLevel - 1;
-  const attack = base ? base.attack * (LEVEL_ATTACK[levelIndex] ?? 1) : null;
+  const attackCurve = hero ? GENERAL_LEVEL_ATTACK : SOLDIER_LEVEL_ATTACK;
+  const speedCurve = hero ? GENERAL_LEVEL_SPEED : SOLDIER_LEVEL_SPEED;
+  const attack = base ? base.attack * (attackCurve[levelIndex] ?? 1) : null;
   const selectedPlayer = payload.ownerSlot === undefined || !snapshot ? undefined : snapshot.players[payload.ownerSlot];
   const selectedUnit = payload.unitId ? selectedPlayer?.units.find((unit) => unit.id === payload.unitId) : undefined;
   const opposingPlayer = payload.ownerSlot === undefined || !snapshot ? undefined : snapshot.players[payload.ownerSlot === 0 ? 1 : 0];
@@ -489,7 +459,7 @@ function showUnitInspector(payload: { kind: string; level: number; unitId?: stri
     + (opposingPlayer?.props?.loadout.passive.some((entry) => entry.id === 15) ? 0.3 : 0);
   const speedMultiplier = 1 + universalSpeed + togetherSpeed + ((selectedUnit?.attackSpeedMultiplier ?? 1) - 1)
     + ((selectedUnit?.temporaryAttackSpeedMultiplier ?? 1) - 1);
-  const interval = base ? base.intervalMs / (LEVEL_SPEED[levelIndex] ?? 1) / Math.max(0.05, speedMultiplier) : null;
+  const interval = base ? base.intervalMs / (speedCurve[levelIndex] ?? 1) / Math.max(0.05, speedMultiplier) : null;
   const artPath = unitArtPath(kind);
   const art = get<HTMLImageElement>("unit-inspector-art");
   art.hidden = !artPath;
@@ -505,11 +475,11 @@ function showUnitInspector(payload: { kind: string; level: number; unitId?: stri
   get("unit-inspector-attack").textContent = attack === null ? "—" : String(Math.round(attack * 100) / 100);
   get("unit-inspector-speed").textContent = interval === null ? "—" : `${(interval / 1000).toFixed(2)}秒/次`;
   get("unit-inspector-range").textContent = base ? `${base.range * (selectedUnit?.rangeMultiplier ?? 1)}格` : "—";
-  get("unit-inspector-form").textContent = hero ? hero.weapon : soldier?.form ?? (kind === "铲子" ? "开垦草格" : "合字成将");
+  get("unit-inspector-form").textContent = hero ? `${hero.weapon} · ${hero.form}` : soldier?.form ?? (kind === "铲子" ? "开垦草格" : "合字成将");
   if (hero) {
     get("unit-inspector-skill").textContent = `武器：${hero.weapon}。技能：${hero.skill}。判定：攻击圆擦到敌军整格碰撞盒即命中。`;
   } else if (soldier) {
-    const extra = kind === "枪" ? "贯穿命中第二名敌人，造成本次攻击50%的额外伤害。" : kind === "骑" ? "命中时对邻近敌人造成50%范围伤害。" : "";
+    const extra = kind === "枪" ? "长枪刺击会贯穿刺击轨迹上的敌人。" : kind === "骑" ? "两段环扫：内圈各承受两次50%伤害，外圈承受一次50%伤害。" : "";
     get("unit-inspector-skill").textContent = `优先攻击：${soldier.target}。${extra}判定：攻击圆擦到敌军整格碰撞盒即命中。`;
   } else if (kind === "铲子") {
     get("unit-inspector-skill").textContent = "拖到己方白格旁的绿色草格，可将该格永久开垦为布阵格。";
@@ -661,7 +631,7 @@ function showToast(message: string) {
 
 function startPractice(saved?: MatchSnapshot) {
   online?.close(); online = null;
-  practice?.stop(); practice = new PracticeEngine(saved); slot = 0;
+  practice?.stop(); practice = new PracticeEngine(saved, undefined, economy.totalMatches); slot = 0;
   activeMode = "practice";
   localStorage.setItem(scopedStorageKey(ACTIVE_MODE_KEY), activeMode);
   localStorage.removeItem(scopedStorageKey(ONLINE_SESSION_KEY));
@@ -672,7 +642,7 @@ function startPractice(saved?: MatchSnapshot) {
   get("opponent-name").textContent = "演武军士";
   enterBattle(saved ? "人机对战 · 已恢复" : "人机对战", false);
   if (!practice.snapshot.players[0].props?.configured) practice.send({
-    type: "SET_PROP_LOADOUT", loadout: propLoadout, earlyAccountShovelBonus: receivesEarlyAccountShovels(),
+    type: "SET_PROP_LOADOUT", loadout: propLoadout, earlyAccountShovelBonus: receivesEarlyDailyShovels(),
   });
   practice.start();
   scheduleCloudSave();
@@ -701,10 +671,11 @@ async function onlineAction(kind: "create" | "join" | "quick") {
   online = new RealtimeClient(scopedStorageKey(ONLINE_SESSION_KEY), runtimeConfig.supabase); bindOnline(online);
   lobbyNote.textContent = "正在连接 Supabase 实时房间……";
   let result;
+  const introRound = economy.totalMatches;
   try {
-    result = kind === "create" ? await online.create(playerName())
-      : kind === "quick" ? await online.quick(playerName())
-      : await online.join(get<HTMLInputElement>("room-code").value.trim().toUpperCase(), playerName());
+    result = kind === "create" ? await online.create(playerName(), introRound)
+      : kind === "quick" ? await online.quick(playerName(), introRound)
+      : await online.join(get<HTMLInputElement>("room-code").value.trim().toUpperCase(), playerName(), introRound);
   } catch (error) {
     const message = error instanceof Error ? error.message : "实时房间连接失败";
     lobbyNote.textContent = message;
@@ -788,9 +759,8 @@ function createShop(matchKey: string) {
 
 function grantProp(id: number) {
   if (id === 23) {
-    // 安装包商店实际执行为 stamina += 1；文案中的“+10”并非运行值。
-    economy.stamina = Math.min(30, economy.stamina + 1);
-    showToast("行军丹已直接使用，体力 +1");
+    economy.stamina = Math.min(30, economy.stamina + 10);
+    showToast("行军丹已直接使用，体力 +10");
     return;
   }
   const existing = economy.ownedProps.find((entry) => entry.id === id);
@@ -865,6 +835,7 @@ function claimResult(multiplier: 1 | 2) {
   if (!result) return;
   economy.gold += result.baseReward * multiplier;
   if (result.won) economy.winDay += 1; else economy.loseDay += 1;
+  economy.totalMatches += 1;
   economy.completedMatchKeys = [...economy.completedMatchKeys.filter((key) => key !== result.matchKey), result.matchKey].slice(-50);
   economy.pendingShop = createShop(result.matchKey);
   delete economy.pendingResult;
@@ -903,7 +874,7 @@ function updateSnapshot(next: MatchSnapshot) {
   const loadoutKey = `${next.roomId}:${slot}`;
   if (activeMode === "online" && !mine.props?.configured && loadoutSentKey !== loadoutKey) {
     loadoutSentKey = loadoutKey;
-    commandSink?.({ type: "SET_PROP_LOADOUT", loadout: propLoadout, earlyAccountShovelBonus: receivesEarlyAccountShovels() });
+    commandSink?.({ type: "SET_PROP_LOADOUT", loadout: propLoadout, earlyAccountShovelBonus: receivesEarlyDailyShovels() });
   }
   savePractice();
   if (next.phase === "finished") {
@@ -1057,9 +1028,9 @@ async function restoreActiveSession(remoteProgress: CloudProgress | null) {
     get("room-banner").hidden = false; get("room-id").textContent = result.roomId;
     get("last-event").textContent = "已恢复原房间进度";
   } catch (error) {
-    localStorage.removeItem(scopedStorageKey(ACTIVE_MODE_KEY));
-    localStorage.removeItem(scopedStorageKey(ONLINE_SESSION_KEY));
-    lobbyNote.textContent = `原房间无法恢复：${error instanceof Error ? error.message : "未知错误"}`;
+    online?.close();
+    online = null;
+    lobbyNote.textContent = `原房间暂时无法恢复，重连凭证和最近快照已保留：${error instanceof Error ? error.message : "未知错误"}`;
   }
 }
 

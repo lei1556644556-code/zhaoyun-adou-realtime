@@ -59,7 +59,7 @@ test("distinguishes click from drag, shows attack range, merges, and restores af
   await page.mouse.click(boardBlade.x, boardBlade.y);
   await expect(page.locator("#unit-inspector-level")).toHaveText("Lv.2 / 5");
   await expect(page.locator("#unit-inspector-attack")).toHaveText("4.5");
-  await expect(page.locator("#unit-inspector-speed")).toHaveText("0.62秒/次");
+  await expect(page.locator("#unit-inspector-speed")).toHaveText("0.53秒/次");
 
   await expect.poll(() => page.evaluate((userId) => {
     const raw = localStorage.getItem(`adou-practice-save-v1:${userId}`);

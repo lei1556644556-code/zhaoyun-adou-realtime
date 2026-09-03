@@ -139,4 +139,24 @@ describe("Supabase realtime browser network lifecycle", () => {
     expect(states).toEqual([true, false, true]);
     client.close();
   });
+
+  it("marks a guest unhealthy when the channel stays open but the host stops signaling", async () => {
+    let livenessCheck: (() => void) | null = null;
+    windowTarget.setInterval = ((handler: TimerHandler) => {
+      if (typeof handler === "function") livenessCheck = handler as () => void;
+      return 77;
+    }) as Window["setInterval"];
+
+    const client = new RealtimeClient("session", { url: "https://example.supabase.co", publishableKey: "test" });
+    const states: boolean[] = [];
+    client.addEventListener("network", (event) => states.push((event as CustomEvent<{ connected: boolean }>).detail.connected));
+    await client.join("ABC123", "guest");
+
+    Object.assign(client as unknown as Record<string, unknown>, { lastHostSignalAt: Date.now() - 7_000 });
+    expect(livenessCheck).not.toBeNull();
+    (livenessCheck as unknown as () => void)();
+
+    expect(states).toEqual([true, false]);
+    client.close();
+  });
 });

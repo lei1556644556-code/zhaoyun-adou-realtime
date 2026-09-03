@@ -11,7 +11,7 @@
 | [`match-snapshot`](./match-snapshot.md) | 02 战斗内核 | 03、05、06、07 | 包含版本号，支持存档和断线恢复 |
 | [`battle-event`](./battle-event.md) | 02 战斗内核 | 03、04、06、07 | 事件有稳定 ID，不允许一次事件重复播放 |
 | [`battle-presentation`](./battle-presentation.md) | 04 美术表现 | 03、06、07、08 | 只消费稳定事件与资源键，不实现规则判定 |
-| `match-transport` | 06 实时联机 | 03、05、07 | 人机与联机实现相同端口 |
+| [`realtime-authority-v2`](./realtime-authority-v2.md) | 06 实时联机 | 02、03、05、07、08 | 独立服务端权威、持久化、心跳与恢复 |
 | `account-progress` | 05 账号经济 | 03、06、08 | 按账号隔离，迁移可回滚 |
 | [`asset-manifest`](./asset-manifest.md) | 04 美术表现 | 03、08 | 使用稳定资源键，不把文件名当规则值 |
 | `runtime-config` | 08 集成发布 | 05、06 | 环境显式注入，浏览器只接收 publishable 配置 |

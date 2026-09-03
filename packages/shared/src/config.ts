@@ -1,6 +1,6 @@
 /** 原作规则版本；与网络协议版本分开演进。 */
 export const RULESET_VERSION = "1.0.9" as const;
-export const RULES_CONFIG_SCHEMA_VERSION = "1.1.0" as const;
+export const RULES_CONFIG_SCHEMA_VERSION = "1.2.0" as const;
 
 export type RuleVerificationStatus =
   | "package-recorded"
@@ -32,6 +32,7 @@ export const RULE_EVIDENCE_SOURCES = {
   },
   baselineDocument: { ref: "RULES-MD", path: "docs/RULES_1.0.9_BASELINE.md" },
   propsDocument: { ref: "PROPS-MD", path: "docs/PROPS_1.0.9_IMPLEMENTATION.md" },
+  restoredMethods: { ref: "ORIGINAL-1.0.9", path: "docs/evidence/ORIGINAL_1.0.9_RULE_METHODS.md" },
   extractor: { ref: "DCC-TOOL", path: "tools/extract-laya-dcc.cjs" },
 } as const;
 
@@ -43,13 +44,13 @@ export const RULE_PROVENANCE = {
   },
   recruitmentPool: {
     status: "package-recorded",
-    evidenceRefs: ["SPEC-DOCX#table-10", "RULES-MD#2"],
-    note: "23 个条目的权重求和为 108。",
+    evidenceRefs: ["SPEC-DOCX#table-10", "RULES-MD#2", "ORIGINAL-1.0.9#on.FO"],
+    note: "23 个条目的权重求和为 108；基础兵/铲子保留，姓名字抽中后从整局牌库移除。",
   },
   earlyAccountShovelBonus: {
-    status: "pending-original-verification",
-    evidenceRefs: ["RULES-MD#2"],
-    note: "现实现记录前三日额外 +2 铲子权重，但仓库没有对应原包代码片段。",
+    status: "package-recorded",
+    evidenceRefs: ["RULES-MD#2", "ORIGINAL-1.0.9#on.UO"],
+    note: "原包 on.UO：每日前 3 局按 floor(牌库铲子数/5) 追加铲子；基础 11 份因此追加 2 份。",
   },
   campAndRecycle: {
     status: "pending-original-verification",
@@ -68,18 +69,18 @@ export const RULE_PROVENANCE = {
   },
   soldierAndGeneralStats: {
     status: "package-recorded",
-    evidenceRefs: ["SPEC-DOCX#table-11", "SPEC-DOCX#table-12", "SPEC-DOCX#table-14"],
-    note: "攻击、间隔、射程、等级倍率与武将上限有候选包体表记录。",
+    evidenceRefs: ["SPEC-DOCX#table-11", "SPEC-DOCX#table-12", "ORIGINAL-1.0.9#Et"],
+    note: "已核对 Et：普通兵 dp/gp 与武将 Yp/Op 是四条独立成长曲线，并记录武将攻击形态和索敌。",
   },
   attackCollision: {
-    status: "pending-original-verification",
-    evidenceRefs: ["RULES-MD#4"],
-    note: "仓内已有减 1px 圆矩形边界回归测试，但缺少 d.Si 原包代码摘录或原包运行输出对照。",
+    status: "package-recorded",
+    evidenceRefs: ["RULES-MD#4", "ORIGINAL-1.0.9#d.Si"],
+    note: "已从 1.0.9 恢复代码核对：攻击圆半径减 1px 后，与敌军完整一格碰撞盒做含边界圆矩形相交。",
   },
   wavesAndBossChance: {
     status: "package-recorded",
-    evidenceRefs: ["SPEC-DOCX#table-21", "SPEC-DOCX#table-22", "RULES-MD#6"],
-    note: "20 波数量/生命、难度曲线与 Boss 里程碑概率有候选包体表记录。",
+    evidenceRefs: ["SPEC-DOCX#table-21", "SPEC-DOCX#table-22", "RULES-MD#6", "ORIGINAL-1.0.9#S/It.Ty/It.Ry"],
+    note: "已核对 20 波、三条难度曲线、新手前十局系数、50/10px 每秒移速、Boss 轮换及 7/10/14 倍血量。",
   },
   mapLayouts: {
     status: "package-recorded",
@@ -99,7 +100,7 @@ export const RULE_PROVENANCE = {
   propRuntimeDetails: {
     status: "pending-original-verification",
     evidenceRefs: ["PROPS-MD#2", "PROPS-MD#5"],
-    note: "精确半径、概率分支、生成条件等详情没有随库原包代码片段。",
+    note: "包子、御敌千里、农民、招贤榜和行军丹已补最小方法摘录；其余精确半径、概率分支、生成条件仍待核。",
   },
   propAcquisition: {
     status: "pending-original-verification",
@@ -149,7 +150,7 @@ export const TOKEN_POOL = [
   ["苞", 1], ["翼", 1], ["盖", 1], ["祖", 1], ["刘", 1], ["备", 1],
 ] as const;
 
-/** 现有实现记录的新号前三日铲子加权；原包触发代码仍待随库证据复核。 */
+/** 原包 on.UO：每日前 3 局按 floor(基础铲子数/5) 追加。 */
 export const EARLY_ACCOUNT_SHOVEL_BONUS = 2;
 export const TOKEN_POOL_BASE_WEIGHT = TOKEN_POOL.reduce((sum, [, weight]) => sum + weight, 0);
 export const TOKEN_POOL_SHOVEL_WEIGHT = TOKEN_POOL.reduce(
@@ -160,11 +161,12 @@ export const EARLY_ACCOUNT_SHOVEL_WEIGHT = TOKEN_POOL_SHOVEL_WEIGHT + EARLY_ACCO
 
 export const RECRUITMENT_RULES = {
   drawsPerRecruit: GAME_CONFIG.reserveSize,
-  drawMode: "independent-with-replacement",
+  drawMode: "persistent-pool; soldiers/shovel-with-replacement; general-names-without-replacement",
   basePool: TOKEN_POOL,
   baseWeightTotal: TOKEN_POOL_BASE_WEIGHT,
   earlyAccount: {
-    eligibilityDays: 3,
+    eligibilityDailyMatches: 3,
+    bonusFormula: "floor(baseShovelWeight/5)",
     shovelBonusWeight: EARLY_ACCOUNT_SHOVEL_BONUS,
     effectiveWeightTotal: EARLY_ACCOUNT_TOKEN_POOL_WEIGHT,
     effectiveShovelWeight: EARLY_ACCOUNT_SHOVEL_WEIGHT,
@@ -229,25 +231,36 @@ export const MERGE_RULES = {
 
 export type HeroRarity = "gold" | "purple";
 
+export type UnitTargetRule = "nearest" | "closest-end";
+
 export const GENERALS: Record<string, {
-  weapon: string; attack: number; intervalMs: number; range: number; maxLevel: number; rarity: HeroRarity; skill: string;
+  weapon: string; attack: number; intervalMs: number; range: number; maxLevel: number; rarity: HeroRarity;
+  form: string; target: UnitTargetRule; skill: string;
 }> = {
-  赵云: { weapon: "枪", attack: 2, intervalMs: 800, range: 2.5, maxLevel: 5, rarity: "gold", skill: "30次普攻后七进七出，往返突进7次" },
-  张飞: { weapon: "枪", attack: 10, intervalMs: 1000, range: 2.5, maxLevel: 5, rarity: "gold", skill: "15次普攻后范围眩晕2秒" },
-  马超: { weapon: "枪", attack: 10, intervalMs: 1000, range: 2.5, maxLevel: 5, rarity: "gold", skill: "普攻30%眩晕0.5秒；Boss 10%/0.2秒" },
-  关羽: { weapon: "刀", attack: 20, intervalMs: 1000, range: 2.5, maxLevel: 5, rarity: "gold", skill: "20次普攻后连续5次跳斩，50%范围溅射" },
-  黄忠: { weapon: "弓", attack: 6, intervalMs: 800, range: 4.5, maxLevel: 5, rarity: "gold", skill: "30次普攻后火箭烈，单箭2倍攻击" },
-  关平: { weapon: "刀", attack: 3, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", skill: "15次普攻后范围眩晕1秒" },
-  关兴: { weapon: "刀", attack: 7, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", skill: "10%概率眩晕普通敌人0.3秒" },
-  张苞: { weapon: "枪", attack: 7, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", skill: "10%概率眩晕普通敌人0.3秒" },
-  张翼: { weapon: "骑/剑", attack: 7, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", skill: "20次普攻后下一次跳斩，50%范围溅射" },
-  黄盖: { weapon: "骑/剑", attack: 8, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", skill: "无额外武将技能" },
-  刘备: { weapon: "骑/剑", attack: 10, intervalMs: 800, range: 2.5, maxLevel: 5, rarity: "gold", skill: "20次普攻后圣剑，5倍攻击并击倒" },
-  黄祖: { weapon: "弓", attack: 6, intervalMs: 800, range: 3.5, maxLevel: 3, rarity: "purple", skill: "30次普攻后箭雨" },
+  赵云: { weapon: "枪", attack: 2, intervalMs: 800, range: 2.5, maxLevel: 5, rarity: "gold", form: "快攻贯穿", target: "closest-end", skill: "30次普攻后七进七出，往返突进7次" },
+  张飞: { weapon: "枪", attack: 10, intervalMs: 1000, range: 2.5, maxLevel: 5, rarity: "gold", form: "范围", target: "nearest", skill: "15次普攻后范围眩晕2秒" },
+  马超: { weapon: "枪", attack: 10, intervalMs: 1000, range: 2.5, maxLevel: 5, rarity: "gold", form: "单体", target: "nearest", skill: "普攻30%眩晕0.5秒；Boss 10%/0.2秒" },
+  关羽: { weapon: "刀", attack: 20, intervalMs: 1000, range: 2.5, maxLevel: 5, rarity: "gold", form: "单体", target: "nearest", skill: "20次普攻后连续5次跳斩，50%范围溅射" },
+  黄忠: { weapon: "弓", attack: 6, intervalMs: 800, range: 4.5, maxLevel: 5, rarity: "gold", form: "贯穿", target: "nearest", skill: "30次普攻后火箭雨；每支火箭2倍攻击" },
+  关平: { weapon: "刀", attack: 3, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", form: "范围", target: "nearest", skill: "15次普攻后范围眩晕1秒" },
+  关兴: { weapon: "刀", attack: 7, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", form: "单体", target: "closest-end", skill: "10%概率眩晕普通敌人0.3秒" },
+  张苞: { weapon: "枪", attack: 7, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", form: "单体", target: "closest-end", skill: "10%概率眩晕普通敌人0.3秒" },
+  张翼: { weapon: "骑/剑", attack: 7, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", form: "单体", target: "closest-end", skill: "20次普攻后下一次跳斩，50%范围溅射" },
+  黄盖: { weapon: "骑/剑", attack: 8, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", form: "单体", target: "nearest", skill: "无额外武将技能" },
+  刘备: { weapon: "骑/剑", attack: 10, intervalMs: 800, range: 2.5, maxLevel: 5, rarity: "gold", form: "单体", target: "nearest", skill: "20次普攻后圣剑，5倍攻击并击倒2秒" },
+  黄祖: { weapon: "弓", attack: 6, intervalMs: 800, range: 3.5, maxLevel: 3, rarity: "purple", form: "单体", target: "closest-end", skill: "30次普攻后箭雨：5轮，每轮10箭" },
 };
 
-export const LEVEL_ATTACK = [1, 1.5, 2.1, 2.73, 3.276] as const;
-export const LEVEL_SPEED = [1, 1.3, 1.56, 1.794, 1.9734] as const;
+/** 原包 Et.dp / Et.gp：普通兵攻击与攻速共用这一组递推结果。 */
+export const SOLDIER_LEVEL_ATTACK = [1, 1.5, 2.1, 2.73, 3.4125] as const;
+export const SOLDIER_LEVEL_SPEED = [1, 1.5, 2.1, 2.73, 3.4125] as const;
+/** 原包 Et.Yp / Et.Op：武将使用独立的攻击与攻速成长。 */
+export const GENERAL_LEVEL_ATTACK = [1, 1.5, 2.1, 2.73, 3.276] as const;
+export const GENERAL_LEVEL_SPEED = [1, 1.3, 1.56, 1.794, 1.9734] as const;
+/** @deprecated 旧消费者兼容别名；等同武将成长，普通兵不得再使用。 */
+export const LEVEL_ATTACK = GENERAL_LEVEL_ATTACK;
+/** @deprecated 旧消费者兼容别名；等同武将成长，普通兵不得再使用。 */
+export const LEVEL_SPEED = GENERAL_LEVEL_SPEED;
 
 export type PropRarity = 0 | 1 | 2 | 3;
 export type ActivePropId = 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 21;
@@ -288,8 +301,8 @@ export const PROPS: readonly PropConfig[] = [
   { id: 9, key: "landmine", name: "地雷", intro: "首名踩中的敌人引爆地雷", price: 50, cooldownMs: 55_000, rarity: 1, target: "road-cell", ja: 10, ha: 12 },
   { id: 10, key: "attSpeedSpell", name: "攻速符", intro: "目标单位攻速+40%，全局生效", price: 80, cooldownMs: 90_000, rarity: 2, target: "own-unit", ja: 6, ha: 4 },
   { id: 11, key: "exorcismSpell", name: "降妖符", intro: "Boss施法有50%失败率，并反噬Boss自身血量", price: 80, cooldownMs: -1, rarity: 2, target: "passive", ja: 6, ha: 4 },
-  { id: 12, key: "farmer", name: "农民", intro: "每30秒刷出农民；农民每20秒+1馒头，升级生产速度翻倍", price: 90, cooldownMs: -1, rarity: 2, target: "passive", ja: 5, ha: 3 },
-  { id: 13, key: "recruit", name: "招贤榜", intro: "每个武将姓名字独立50%追加一份权重（当前兼容算法，原包待核）", price: 90, cooldownMs: -1, rarity: 2, target: "passive", ja: 8, ha: 8 },
+  { id: 12, key: "farmer", name: "农民", intro: "每30秒刷出农民；Lv1–5按20/10/5/3/2秒生产1馒头", price: 90, cooldownMs: -1, rarity: 2, target: "passive", ja: 5, ha: 3 },
+  { id: 13, key: "recruit", name: "招贤榜", intro: "牌库中的每一份武将姓名字各有50%概率追加一份", price: 90, cooldownMs: -1, rarity: 2, target: "passive", ja: 8, ha: 8 },
   { id: 14, key: "allAttSpeedSpell", name: "攻速符(全体)", intro: "双方所有单位攻速+10%，全局生效", price: 60, cooldownMs: -1, rarity: 1, target: "passive", ja: 8, ha: 8 },
   { id: 15, key: "goingHandInHand", name: "齐头并进", intro: "我方攻速+50%，对方攻速+30%，全局生效", price: 90, cooldownMs: -1, rarity: 2, target: "passive", ja: 5, ha: 3 },
   { id: 16, key: "xuMingPill", name: "续命丹", intro: "我方阿斗+5条命，对方阿斗+3条命", price: 50, cooldownMs: -1, rarity: 0, target: "passive", ja: 10, ha: 12 },
@@ -360,13 +373,14 @@ export const PROP_EFFECTS = {
     verification: "package-recorded",
     evidenceRefs: ["SPEC-DOCX#table-24", "PROPS-MD#prop-5"],
     outcomes: [{ delta: 1, chance: 0.55 }, { delta: -1, chance: 0.45 }],
+    charges: 10,
   },
   6: {
     kind: "permanent-range-multiplier",
-    verification: "pending-original-verification",
-    evidenceRefs: ["SPEC-DOCX#table-24", "PROPS-MD#prop-6"],
+    verification: "package-recorded",
+    evidenceRefs: ["SPEC-DOCX#table-24", "PROPS-MD#prop-6", "ORIGINAL-1.0.9#Dh.NP"],
     multiplier: 2,
-    eligibleUnitKinds: null,
+    eligibleUnitKinds: ["弓", "all-generals"],
   },
   7: {
     kind: "temporary-enemy-attack-speed-multiplier",
@@ -407,19 +421,21 @@ export const PROP_EFFECTS = {
   },
   12: {
     kind: "farmer-production",
-    verification: "pending-original-verification",
-    evidenceRefs: ["PROPS-MD#prop-12"],
+    verification: "package-recorded",
+    evidenceRefs: ["PROPS-MD#prop-12", "ORIGINAL-1.0.9#_h.BP"],
     spawnIntervalMs: 30_000,
     destinationPriority: ["open-deployment-cell", "reserve"],
-    incomeIntervalMs: 20_000,
+    incomeIntervalByLevelMs: [20_000, 10_000, 5_000, 3_000, 2_000],
     incomeBuns: 1,
   },
   13: {
     kind: "recruit-name-weight-bonus",
-    verification: "pending-original-verification",
-    evidenceRefs: ["SPEC-DOCX#table-24", "PROPS-MD#prop-13"],
+    verification: "package-recorded",
+    evidenceRefs: ["SPEC-DOCX#table-24", "PROPS-MD#prop-13", "ORIGINAL-1.0.9#on.TE"],
     perNameIndependentCopyChance: 0.5,
     copyWeightMultiplier: 2,
+    consumeDrawnNameFromPersistentPool: true,
+    removeOneAdditionalMatchingCopyAfterBoost: true,
   },
   14: {
     kind: "both-sides-attack-speed-bonus",
@@ -487,10 +503,9 @@ export const PROP_EFFECTS = {
   },
   23: {
     kind: "outside-battle-stamina",
-    verification: "pending-original-verification",
+    verification: "package-recorded",
     evidenceRefs: ["PROPS-MD#prop-23"],
-    configuredTextAmount: 10,
-    recordedRuntimeAmount: 1,
+    amount: 10,
     consumedImmediately: true,
   },
   24: {
@@ -504,7 +519,7 @@ export const PROP_EFFECTS = {
 
 export const ACTIVE_PROP_IDS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 21] as const satisfies readonly ActivePropId[];
 export const PASSIVE_PROP_IDS = [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24] as const satisfies readonly PassivePropId[];
-export const PROP_RARITY_NAMES = ["普通", "稀有", "卓越", "史诗"] as const;
+export const PROP_RARITY_NAMES = ["稀有", "卓越", "史诗", "传说"] as const;
 export const PROP_RARITY_COLORS = ["#95e45a", "#2dddff", "#D955FF", "#E99431"] as const;
 export function propConfig(id: number) { return PROPS.find((prop) => prop.id === id); }
 
@@ -573,6 +588,25 @@ export const DIFFICULTY_CURVES = [
 export const DIFFICULTY_WEIGHTS = [5, 2, 3] as const;
 export const BOSS_MILESTONES = [3, 6, 9, 12, 15, 18] as const;
 export const BOSS_CHANCES = [0.1, 0.2, 0.3, 0.5, 0.9, 1] as const;
+export const NORMAL_ENEMY_SPEED_PX_PER_SEC = 50;
+export const BOSS_ENEMY_SPEED_PX_PER_SEC = 10;
+/** 原包新手前十局、且仅前十波使用；下标为从 0 开始的对局 round。 */
+export const INTRO_ROUND_HP_MULTIPLIERS = [0.6, 0.6, 0.6, 0.6, 0.7, 0.7, 0.7, 0.8, 0.8, 0.8] as const;
+
+export const BOSS_CONFIGS = [
+  { name: "摄魂", hpMultiplier: 7, speedPxPerSec: 10, range: 2, cooldownMs: 8_000, intro: "使我方小兵陷入混乱，无法攻击", color: "#ed462f" },
+  { name: "招魂", hpMultiplier: 10, speedPxPerSec: 10, range: 3, cooldownMs: 8_000, intro: "做法复活死亡的小兵", color: "#32ee3a" },
+  { name: "鼓舞", hpMultiplier: 14, speedPxPerSec: 10, range: 2, cooldownMs: 10_000, intro: "激励身边单位，大幅提升血量和移速", color: "#27c8ff" },
+  { name: "拆迁", hpMultiplier: 7, speedPxPerSec: 10, range: 10, cooldownMs: 10_000, intro: "将空白地块转化为不可用", color: "#f16fe1" },
+  { name: "巫山云雨", hpMultiplier: 10, speedPxPerSec: 10, range: 10, cooldownMs: 3_000, intro: "战场下雨，降低所有单位攻速，升级可驱除", color: "#68b4ff" },
+  { name: "裙下之臣", hpMultiplier: 14, speedPxPerSec: 10, range: 10, cooldownMs: 10_000, intro: "将最低等级的小兵纳入麾下", color: "#d9207a" },
+  { name: "铁骑号令", hpMultiplier: 7, speedPxPerSec: 10, range: 0, cooldownMs: 8_000, intro: "召唤西凉骑兵", color: "#4db678" },
+  { name: "方天画戟", hpMultiplier: 10, speedPxPerSec: 10, range: 2.5, cooldownMs: 10_000, intro: "挥动武器，大幅降低小兵等级并禁止合成", color: "#fb4c54" },
+  { name: "饕餮", hpMultiplier: 14, speedPxPerSec: 10, range: 1.5, cooldownMs: 10_000, intro: "吞噬范围内小兵，获得血量加成并膨胀", color: "#7447a6" },
+  { name: "彻底疯狂", hpMultiplier: 7, speedPxPerSec: 10, range: 2, cooldownMs: 15_000, intro: "冲阵击倒小兵，使其无法动弹，升级解除", color: "#fb2500" },
+  { name: "噬目", hpMultiplier: 10, speedPxPerSec: 10, range: 2, cooldownMs: 8_000, intro: "视野变暗，难以看清局势", color: "#21b2ff" },
+  { name: "一代枭雄", hpMultiplier: 14, speedPxPerSec: 10, range: 10, cooldownMs: 15_000, intro: "封印最高等级小兵，升级解除", color: "#010b97" },
+] as const;
 
 export interface MapLayout {
   name: string;
@@ -639,6 +673,15 @@ export function initialOpenCells(mapIndex: number) {
   }
   return result;
 }
+export function pathLengthCells(mapIndex: number) {
+  const points = MAP_LAYOUTS[mapIndex]?.path ?? MAP_LAYOUTS[0]!.path;
+  let total = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    const a = points[i - 1]!; const b = points[i]!;
+    total += Math.hypot(b[0] - a[0], b[1] - a[1]);
+  }
+  return total;
+}
 export function pathPoint(mapIndex: number, progress: number) {
   const points = MAP_LAYOUTS[mapIndex]?.path ?? MAP_LAYOUTS[0]!.path;
   const lengths: number[] = [];
@@ -676,8 +719,10 @@ export const RULES_CONFIG_1_0_9 = {
   units: {
     soldiers: SOLDIERS,
     generals: GENERALS,
-    levelAttackMultipliers: LEVEL_ATTACK,
-    levelSpeedMultipliers: LEVEL_SPEED,
+    soldierLevelAttackMultipliers: SOLDIER_LEVEL_ATTACK,
+    soldierLevelSpeedMultipliers: SOLDIER_LEVEL_SPEED,
+    generalLevelAttackMultipliers: GENERAL_LEVEL_ATTACK,
+    generalLevelSpeedMultipliers: GENERAL_LEVEL_SPEED,
   },
   props: {
     catalog: PROPS,
@@ -692,6 +737,9 @@ export const RULES_CONFIG_1_0_9 = {
     difficultyWeights: DIFFICULTY_WEIGHTS,
     bossMilestones: BOSS_MILESTONES,
     bossChances: BOSS_CHANCES,
+    normalSpeedPxPerSec: NORMAL_ENEMY_SPEED_PX_PER_SEC,
+    introRoundHpMultipliers: INTRO_ROUND_HP_MULTIPLIERS,
+    bossConfigs: BOSS_CONFIGS,
   },
   maps: MAP_LAYOUTS,
 } as const;

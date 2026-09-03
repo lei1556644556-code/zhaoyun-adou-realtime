@@ -21,6 +21,8 @@ export interface AccountEconomy {
   stamina: number;
   winDay: number;
   loseDay: number;
+  /** 原包 player.round：跨日保留，用于账号前十局的敌军生命修正。 */
+  totalMatches: number;
   ownedProps: OwnedProp[];
   completedMatchKeys: string[];
   pendingResult?: { matchKey: string; won: boolean; baseReward: number };

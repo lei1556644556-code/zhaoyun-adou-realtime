@@ -8,9 +8,9 @@ export class PracticeEngine extends EventTarget {
   private timer = 0;
   private botTimer = 0;
 
-  constructor(saved?: MatchSnapshot, seed = Math.floor(Math.random() * 0xFFFFFFFF)) {
+  constructor(saved?: MatchSnapshot, seed = Math.floor(Math.random() * 0xFFFFFFFF), introRound = 10) {
     super();
-    this.snapshot = saved ? cloneSnapshot(saved) : createMatch("演武场", seed);
+    this.snapshot = saved ? cloneSnapshot(saved) : createMatch("演武场", seed, 0, [introRound, introRound]);
   }
 
   start() {
