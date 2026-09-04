@@ -70,6 +70,28 @@ beforeAll(async () => {
 afterAll(() => serverProcess?.kill());
 
 describe("two-client authoritative room transport", () => {
+  it("puts simultaneous quick-match requests into the same room", async () => {
+    const first = connect();
+    const second = connect();
+    const sockets = [first, second];
+    try {
+      await Promise.all(sockets.map((socket) => waitForEvent(socket, "connect")));
+      const firstStart = waitForEvent<{ roomId: string; seed: number }>(first, "match:start");
+      const secondStart = waitForEvent<{ roomId: string; seed: number }>(second, "match:start");
+      const [firstJoin, secondJoin] = await Promise.all([
+        emitAck<{ ok: boolean; roomId: string; slot: number }>(first, "room:quick", { name: "甲" }),
+        emitAck<{ ok: boolean; roomId: string; slot: number }>(second, "room:quick", { name: "乙" }),
+      ]);
+
+      expect(firstJoin).toMatchObject({ ok: true, slot: 0 });
+      expect(secondJoin).toMatchObject({ ok: true, roomId: firstJoin.roomId, slot: 1 });
+      expect((await firstStart).roomId).toBe(firstJoin.roomId);
+      expect((await secondStart).roomId).toBe(firstJoin.roomId);
+    } finally {
+      sockets.forEach((socket) => socket.disconnect());
+    }
+  });
+
   it("synchronizes commands, deduplicates them, and resumes a disconnected seat", async () => {
     const host = connect();
     const guest = connect();

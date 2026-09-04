@@ -75,6 +75,7 @@ const io = new Server(httpServer, {
 });
 const rooms = new Map<string, Room>();
 let quickRoomId: string | null = null;
+let quickSeatQueue: Promise<void> = Promise.resolve();
 
 app.get("/health", (_request, response) => {
   response.json({
@@ -247,6 +248,23 @@ function takeSeat(room: Room, socket: Socket, requestedName: unknown, guestIntro
   return { seat, token };
 }
 
+async function takeQuickSeat(socket: Socket, requestedName: unknown, guestIntroRound = 10) {
+  const previous = quickSeatQueue;
+  let release!: () => void;
+  quickSeatQueue = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  try {
+    let room = quickRoomId ? rooms.get(quickRoomId) : undefined;
+    if (!room || room.seats.length >= 2 || room.snapshot) {
+      room = await createRoom();
+      quickRoomId = room.id;
+    }
+    return { room, joined: takeSeat(room, socket, requestedName, guestIntroRound) };
+  } finally {
+    release();
+  }
+}
+
 function compatibleHandshake(socket: Socket) {
   if (!requireAuth) return true;
   const auth = socket.handshake.auth as Record<string, unknown>;
@@ -316,11 +334,7 @@ io.on("connection", (socket) => {
 
   socket.on("room:quick", async ({ name, introRound }: { name?: string; introRound?: number } = {}, ack?: Ack) => {
     try {
-      let room = quickRoomId ? rooms.get(quickRoomId) : undefined;
-      if (!room || room.seats.length >= 2 || room.snapshot) {
-        room = await createRoom(); quickRoomId = room.id;
-      }
-      const joined = takeSeat(room, socket, name, introRound);
+      const { room, joined } = await takeQuickSeat(socket, name, introRound);
       if ("error" in joined) return ack?.({ ok: false, code: joined.error, message: "随机匹配失败" });
       await persistRoom(room);
       ack?.({ ok: true, roomId: room.id, slot: joined.seat.slot, token: joined.token });
