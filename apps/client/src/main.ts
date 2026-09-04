@@ -17,6 +17,7 @@ import { PracticeEngine } from "./game/PracticeEngine";
 import { RealtimeClient } from "./net/RealtimeClient";
 import { AuthoritativeRealtimeClient } from "./net/AuthoritativeRealtimeClient";
 import { loadRuntimeConfig } from "./app/runtimeConfig";
+import { createRoomInviteUrl, normalizeRoomCode, removeRoomInviteFromUrl } from "./app/roomInvite";
 import {
   SupabaseService, type AccountEconomy, type CloudProgress, type PlayerProfile, type ShopOffer,
 } from "./auth/SupabaseService";
@@ -80,7 +81,10 @@ app.innerHTML = `
     <section class="battle-shell" id="battle-shell" hidden>
       <header class="battle-toolbar">
         <div><b id="mode-label">人机对战</b><span id="network-label">本地权威演算</span></div>
-        <div class="toolbar-room" id="room-banner" hidden><span>房号</span><strong id="room-id">------</strong><button id="copy-room">复制邀请</button></div>
+        <div class="toolbar-room" id="room-banner" hidden>
+          <span>房号</span><strong id="room-id">------</strong>
+          <div class="toolbar-room-actions"><button type="button" data-copy-room-code>复制房号</button><button type="button" data-copy-room-link>邀请链接</button></div>
+        </div>
         <span class="network-pill" id="network-pill"><i></i><b>已就绪</b></span>
         <button class="piece-mode-toggle" id="piece-mode-toggle" type="button" aria-pressed="false" title="切换棋子显示方式">形象版</button>
         <div class="zoom-controls" aria-label="战场缩放">
@@ -104,6 +108,14 @@ app.innerHTML = `
               <div class="ready-roster" aria-live="polite">
                 <div id="ready-player-0"><span>玩家一</span><strong>等待进入</strong><i>未准备</i></div>
                 <div id="ready-player-1"><span>玩家二</span><strong>等待进入</strong><i>未准备</i></div>
+              </div>
+              <div class="ready-room-share">
+                <div><span>邀请房间</span><strong id="ready-room-id">------</strong></div>
+                <div class="ready-room-share-actions">
+                  <button class="btn btn-quiet" type="button" data-copy-room-code>复制房号</button>
+                  <button class="btn btn-primary" type="button" data-copy-room-link>复制邀请链接</button>
+                </div>
+                <small>好友打开邀请链接后，将直接进入这个房间。</small>
               </div>
               <button class="btn btn-accent" id="match-ready" type="button">我已准备</button>
               <small id="match-ready-hint">可以先准备，好友进入并准备后自动开战。</small>
@@ -181,6 +193,7 @@ const authScreen = get<HTMLElement>("auth-screen");
 const battleShell = get<HTMLElement>("battle-shell");
 const lobbyNote = get<HTMLElement>("lobby-note");
 const interactionTestMode = import.meta.env.DEV && new URLSearchParams(location.search).get("testBattle") === "1";
+let invitedRoom = normalizeRoomCode(new URLSearchParams(location.search).get("room"));
 const game = createGame("game");
 const runtimeConfig = loadRuntimeConfig();
 const cloud = new SupabaseService(runtimeConfig.supabase);
@@ -716,7 +729,25 @@ function bindOnline(client: OnlineClient) {
   });
 }
 
-async function onlineAction(kind: "create" | "join" | "quick") {
+function renderRoomId(roomId: string) {
+  get("room-id").textContent = roomId;
+  get("ready-room-id").textContent = roomId;
+}
+
+async function copyRoomText(text: string, successMessage: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(successMessage);
+  } catch {
+    showToast("复制失败，请长按房间号手动复制");
+  }
+}
+
+function currentRoomCode() {
+  return normalizeRoomCode(get("room-id").textContent);
+}
+
+async function onlineAction(kind: "create" | "join" | "quick"): Promise<boolean> {
   practice?.stop(); practice = null;
   snapshot = null;
   roomPlayers = [];
@@ -736,20 +767,21 @@ async function onlineAction(kind: "create" | "join" | "quick") {
     lobbyNote.textContent = message;
     showToast(message);
     online.close();
-    return;
+    return false;
   }
   if (!result.ok || result.slot === undefined || !result.roomId) {
-    lobbyNote.textContent = result.message ?? "进入房间失败"; showToast(lobbyNote.textContent); return;
+    lobbyNote.textContent = result.message ?? "进入房间失败"; showToast(lobbyNote.textContent); return false;
   }
   slot = result.slot; commandSink = (command) => online?.send(command);
   activeMode = "online";
   localStorage.setItem(scopedStorageKey(ACTIVE_MODE_KEY), activeMode);
   scheduleCloudSave();
   enterBattle(kind === "quick" ? "随机匹配" : "真人房间", true);
-  get("room-banner").hidden = false; get("room-id").textContent = result.roomId;
+  get("room-banner").hidden = false; renderRoomId(result.roomId);
   get("last-event").textContent = "等待另一位玩家进入";
   renderOpponent();
   renderReadyState();
+  return true;
 }
 
 function renderOpponent() {
@@ -940,6 +972,7 @@ function finishShopAndReturn() {
   renderEconomy(); renderPropPicker();
   scheduleCloudSave(true);
   window.scrollTo({ top: 0, behavior: "instant" });
+  if (invitedRoom) void enterInvitedRoom();
 }
 
 function updateSnapshot(next: MatchSnapshot) {
@@ -1047,10 +1080,17 @@ get("practice").addEventListener("click", () => startPractice());
 get("quick").addEventListener("click", () => void onlineAction("quick"));
 get("create-room").addEventListener("click", () => void onlineAction("create"));
 get("join-room").addEventListener("click", () => void onlineAction("join"));
-get("copy-room").addEventListener("click", async () => {
-  const code = get("room-id").textContent ?? "";
-  const url = new URL(location.href); url.searchParams.set("room", code);
-  await navigator.clipboard.writeText(url.toString()); showToast("邀请链接已复制");
+document.querySelectorAll<HTMLButtonElement>("[data-copy-room-code]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const code = currentRoomCode();
+    if (code) void copyRoomText(code, `房间号 ${code} 已复制`);
+  });
+});
+document.querySelectorAll<HTMLButtonElement>("[data-copy-room-link]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const code = currentRoomCode();
+    if (code) void copyRoomText(createRoomInviteUrl(location.href, code), "邀请链接已复制，好友打开后直接进入");
+  });
 });
 get("zoom-out").addEventListener("click", () => changeBattlefieldZoom(-0.15));
 get("zoom-in").addEventListener("click", () => changeBattlefieldZoom(0.15));
@@ -1108,7 +1148,49 @@ get("exit-match").addEventListener("click", async () => {
   window.scrollTo({ top: 0, behavior: "instant" });
 });
 
-async function restoreActiveSession(remoteProgress: CloudProgress | null) {
+type SavedOnlineSession = { roomId?: string; token?: string };
+
+function readSavedOnlineSession() {
+  try {
+    return JSON.parse(localStorage.getItem(scopedStorageKey(ONLINE_SESSION_KEY)) ?? "null") as SavedOnlineSession | null;
+  } catch { return null; }
+}
+
+async function resumeOnlineSession(saved: SavedOnlineSession): Promise<boolean> {
+  try {
+    if (!saved.roomId || !saved.token) throw new Error("没有可恢复的房间凭证");
+    online = createOnlineClient(); bindOnline(online);
+    const result = await online.resume(saved.roomId, saved.token);
+    if (!result.ok || result.slot === undefined || !result.roomId) throw new Error(result.message ?? "房间已失效");
+    slot = result.slot; activeMode = "online"; commandSink = (command) => online?.send(command);
+    enterBattle("真人房间 · 已重连", true);
+    get("room-banner").hidden = false; renderRoomId(result.roomId);
+    get("last-event").textContent = "已恢复原房间进度";
+    renderReadyState();
+    return true;
+  } catch (error) {
+    online?.close();
+    online = null;
+    lobbyNote.textContent = `原房间暂时无法恢复，重连凭证和最近快照已保留：${error instanceof Error ? error.message : "未知错误"}`;
+    return false;
+  }
+}
+
+async function enterInvitedRoom(): Promise<boolean> {
+  if (!invitedRoom) return false;
+  get<HTMLInputElement>("room-code").value = invitedRoom;
+  const saved = readSavedOnlineSession();
+  const entered = saved?.roomId?.toUpperCase() === invitedRoom
+    ? await resumeOnlineSession(saved)
+    : await onlineAction("join");
+  if (entered) {
+    history.replaceState(history.state, "", removeRoomInviteFromUrl(location.href));
+    invitedRoom = null;
+  }
+  return entered;
+}
+
+async function restoreActiveSession(remoteProgress: CloudProgress | null): Promise<boolean> {
   const localSave = readPracticeSave();
   const remoteSave = remoteProgress?.practiceSnapshot
     ? { savedAt: remoteProgress.savedAt, snapshot: remoteProgress.practiceSnapshot }
@@ -1116,26 +1198,11 @@ async function restoreActiveSession(remoteProgress: CloudProgress | null) {
   const newestPractice = remoteSave && (!localSave || remoteSave.savedAt >= localSave.savedAt) ? remoteSave : localSave;
   const mode = remoteProgress?.activeMode ?? localStorage.getItem(scopedStorageKey(ACTIVE_MODE_KEY));
   if (mode === "practice") {
-    if (newestPractice) { startPractice(newestPractice.snapshot); return; }
+    if (newestPractice) { startPractice(newestPractice.snapshot); return true; }
     localStorage.removeItem(scopedStorageKey(ACTIVE_MODE_KEY));
   }
-  if (mode !== "online") return;
-  try {
-    const saved = JSON.parse(localStorage.getItem(scopedStorageKey(ONLINE_SESSION_KEY)) ?? "null") as { roomId?: string; token?: string } | null;
-    if (!saved?.roomId || !saved.token) throw new Error("没有可恢复的房间凭证");
-    online = createOnlineClient(); bindOnline(online);
-    const result = await online.resume(saved.roomId, saved.token);
-    if (!result.ok || result.slot === undefined || !result.roomId) throw new Error(result.message ?? "房间已失效");
-    slot = result.slot; activeMode = "online"; commandSink = (command) => online?.send(command);
-    enterBattle("真人房间 · 已重连", true);
-    get("room-banner").hidden = false; get("room-id").textContent = result.roomId;
-    get("last-event").textContent = "已恢复原房间进度";
-    renderReadyState();
-  } catch (error) {
-    online?.close();
-    online = null;
-    lobbyNote.textContent = `原房间暂时无法恢复，重连凭证和最近快照已保留：${error instanceof Error ? error.message : "未知错误"}`;
-  }
+  if (mode !== "online") return false;
+  return resumeOnlineSession(readSavedOnlineSession() ?? {});
 }
 
 function setAuthMode(mode: "login" | "register") {
@@ -1170,6 +1237,10 @@ async function enterAccount(profile: PlayerProfile) {
   lobby.hidden = false;
   if (remoteDayKey !== economy.dayKey) scheduleCloudSave(true);
   if (economy.pendingResult || economy.pendingShop) { showPostgame(); return; }
+  if (invitedRoom) {
+    await enterInvitedRoom();
+    return;
+  }
   await restoreActiveSession(profile.progress);
 }
 
@@ -1217,8 +1288,10 @@ window.addEventListener("resize", applyBattlefieldScale);
 window.visualViewport?.addEventListener("resize", applyBattlefieldScale);
 new ResizeObserver(applyBattlefieldScale).observe(document.querySelector<HTMLElement>(".battle-toolbar")!);
 
-const invitedRoom = new URLSearchParams(location.search).get("room");
-if (invitedRoom) get<HTMLInputElement>("room-code").value = invitedRoom.toUpperCase();
+if (invitedRoom) {
+  get<HTMLInputElement>("room-code").value = invitedRoom;
+  get("auth-message").textContent = `已识别房间 ${invitedRoom}，登录后将自动加入。`;
+}
 
 async function initializeAuth() {
   try {
