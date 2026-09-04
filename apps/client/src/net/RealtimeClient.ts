@@ -9,7 +9,7 @@ const ROOM_PREFIX = "adou-room-v1-";
 const QUICK_CHANNEL = "adou-matchmaking-v1";
 
 type JoinedPayload = { ok: boolean; roomId?: string; slot?: PlayerSlot; token?: string; message?: string };
-type PlayerSummary = { slot: PlayerSlot; name: string; connected: boolean };
+type PlayerSummary = { slot: PlayerSlot; name: string; connected: boolean; ready: boolean };
 type Role = "host" | "guest";
 type SavedSession = {
   roomId: string;
@@ -20,12 +20,15 @@ type SavedSession = {
   guestToken?: string;
   introRound?: number;
   guestIntroRound?: number;
+  hostReady?: boolean;
+  guestReady?: boolean;
   snapshot?: MatchSnapshot;
 };
 type WireMessage =
   | { type: "join"; requestId: string; clientId: string; name: string; introRound?: number; resumeToken?: string }
   | { type: "join-ack"; requestId: string; targetId: string; result: JoinedPayload }
   | { type: "room-status"; players: PlayerSummary[]; started: boolean }
+  | { type: "player-ready"; clientId: string; token: string }
   | { type: "match-start"; roomId: string; seed: number }
   | { type: "snapshot"; snapshot: MatchSnapshot }
   | { type: "host-heartbeat"; stateVersion: number }
@@ -70,6 +73,8 @@ export class RealtimeClient extends EventTarget {
   private guestToken = "";
   private introRound = 10;
   private guestIntroRound = 10;
+  private hostReady = false;
+  private guestReady = false;
   private snapshot: MatchSnapshot | null = null;
   private pendingJoin: { requestId: string; resolve: (result: JoinedPayload) => void; timer: number } | null = null;
   private pendingQuick: { name: string; matching: boolean; resolve: (result: JoinedPayload) => void } | null = null;
@@ -236,14 +241,16 @@ export class RealtimeClient extends EventTarget {
       introRound: this.introRound,
       ...(this.role === "host" && this.guestName ? { guestName: this.guestName, guestToken: this.guestToken } : {}),
       ...(this.role === "host" && this.guestName ? { guestIntroRound: this.guestIntroRound } : {}),
+      hostReady: this.hostReady,
+      guestReady: this.guestReady,
       ...(this.snapshot ? { snapshot: this.snapshot } : {}),
     };
     localStorage.setItem(this.storageKey, JSON.stringify(saved));
   }
 
   private players(): PlayerSummary[] {
-    const players: PlayerSummary[] = [{ slot: 0, name: this.hostName || "房主", connected: true }];
-    if (this.guestName) players.push({ slot: 1, name: this.guestName, connected: true });
+    const players: PlayerSummary[] = [{ slot: 0, name: this.hostName || "房主", connected: true, ready: this.hostReady }];
+    if (this.guestName) players.push({ slot: 1, name: this.guestName, connected: true, ready: this.guestReady });
     return players;
   }
 
@@ -332,6 +339,8 @@ export class RealtimeClient extends EventTarget {
     this.hostName = cleanName(name);
     this.guestName = "";
     this.guestToken = "";
+    this.hostReady = false;
+    this.guestReady = false;
     this.introRound = Math.max(0, Math.floor(introRound));
     this.guestIntroRound = 10;
     this.snapshot = null;
@@ -381,17 +390,22 @@ export class RealtimeClient extends EventTarget {
       this.guestName = cleanName(message.name);
       this.guestToken = crypto.randomUUID();
       this.guestIntroRound = Math.max(0, Math.floor(message.introRound ?? 10));
+      this.guestReady = false;
       result = { ok: true, roomId: this.roomId, slot: 1, token: this.guestToken };
     }
     await this.broadcast(this.roomChannel, { type: "join-ack", requestId: message.requestId, targetId: message.clientId, result });
     if (!result.ok) return;
-    if (!this.snapshot) {
-      const seed = crypto.getRandomValues(new Uint32Array(1))[0] ?? Date.now();
-      this.snapshot = createMatch(this.roomId, seed, 0, [this.introRound, this.guestIntroRound]);
-      this.emit("start", { roomId: this.roomId, seed });
-      await this.broadcast(this.roomChannel, { type: "match-start", roomId: this.roomId, seed });
-      this.startTicking();
-    }
+    this.persistSession();
+    this.publishRoomStatus();
+  }
+
+  private async startIfReady() {
+    if (this.role !== "host" || !this.roomChannel || this.snapshot || !this.guestName || !this.hostReady || !this.guestReady) return;
+    const seed = crypto.getRandomValues(new Uint32Array(1))[0] ?? Date.now();
+    this.snapshot = createMatch(this.roomId, seed, 0, [this.introRound, this.guestIntroRound]);
+    this.emit("start", { roomId: this.roomId, seed });
+    await this.broadcast(this.roomChannel, { type: "match-start", roomId: this.roomId, seed });
+    this.startTicking();
     this.persistSession();
     this.publishRoomStatus();
     this.publishSnapshot();
@@ -426,6 +440,7 @@ export class RealtimeClient extends EventTarget {
       typeof payload.requestId !== "string" || typeof payload.targetId !== "string" || !isRecord(payload.result)
     )) return;
     if (payload.type === "room-status" && !Array.isArray(payload.players)) return;
+    if (payload.type === "player-ready" && (typeof payload.clientId !== "string" || typeof payload.token !== "string")) return;
     if (payload.type === "match-start" && (typeof payload.roomId !== "string" || typeof payload.seed !== "number")) return;
     if (payload.type === "snapshot" && (!isRecord(payload.snapshot) || !Array.isArray(payload.snapshot.players))) return;
     if (payload.type === "host-heartbeat" && typeof payload.stateVersion !== "number") return;
@@ -449,7 +464,14 @@ export class RealtimeClient extends EventTarget {
       this.markHostSignal();
       const host = message.players.find((player) => player.slot === 0);
       if (host) this.hostName = host.name;
+      this.hostReady = Boolean(host?.ready);
+      this.guestReady = Boolean(message.players.find((player) => player.slot === 1)?.ready);
       this.emit("room", { roomId: this.roomId, players: message.players, started: message.started });
+    } else if (message.type === "player-ready" && this.role === "host" && message.token === this.guestToken) {
+      this.guestReady = true;
+      this.persistSession();
+      this.publishRoomStatus();
+      this.runInBackground(this.startIfReady(), "准备状态同步失败，请重试");
     } else if (message.type === "match-start" && this.role === "guest") {
       this.markHostSignal();
       this.emit("start", { roomId: message.roomId, seed: message.seed });
@@ -555,6 +577,8 @@ export class RealtimeClient extends EventTarget {
       this.guestToken = saved.guestToken ?? "";
       this.introRound = Math.max(0, Math.floor(saved.introRound ?? 10));
       this.guestIntroRound = Math.max(0, Math.floor(saved.guestIntroRound ?? 10));
+      this.hostReady = Boolean(saved.hostReady);
+      this.guestReady = Boolean(saved.guestReady);
       this.snapshot = saved.snapshot ?? null;
       await this.connectRoom(saved.roomId);
       this.publishRoomStatus();
@@ -565,6 +589,23 @@ export class RealtimeClient extends EventTarget {
       return { ok: true, roomId: this.roomId, slot: 0, token: this.token } satisfies JoinedPayload;
     }
     return this.requestJoin(saved.roomId, saved.name, saved.introRound ?? 10, saved.token);
+  }
+
+  async ready(): Promise<JoinedPayload> {
+    if (!this.roomChannel || !this.role) return { ok: false, message: "尚未进入房间" };
+    if (this.snapshot) return { ok: true, roomId: this.roomId, slot: this.slot, token: this.token };
+    if (this.role === "host") {
+      this.hostReady = true;
+      this.persistSession();
+      this.publishRoomStatus();
+      await this.startIfReady();
+    } else {
+      this.guestReady = true;
+      this.persistSession();
+      this.publishRoomStatus();
+      await this.broadcast(this.roomChannel, { type: "player-ready", clientId: this.clientId, token: this.token });
+    }
+    return { ok: true, roomId: this.roomId, slot: this.slot, token: this.token };
   }
 
   send(command: CommandEnvelope["command"]) {

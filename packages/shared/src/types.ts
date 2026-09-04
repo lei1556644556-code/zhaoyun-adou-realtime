@@ -15,6 +15,8 @@ export interface UnitState {
   parts?: [string, string];
   cooldownMs: number;
   attackCount: number;
+  /** 武将累计战斗经验；普通兵和旧快照可缺省。 */
+  experience?: number;
   /** 主动道具永久增益；缺省值均为 1，兼容旧存档。 */
   rangeMultiplier?: number;
   attackSpeedMultiplier?: number;
@@ -36,6 +38,8 @@ export interface ReserveItem {
   id: string;
   kind: string;
   level: number;
+  /** 营地内武将保留的累计战斗经验。 */
+  experience?: number;
   slot: number;
   /** 营地内两字武将占用的相邻第二格。 */
   secondarySlot?: number;
@@ -185,6 +189,16 @@ export type BattleEventPayload =
     slot: PlayerSlot;
     generalId: string;
     parts: Array<{ id: string; kind: string; cell: number }>;
+  }
+  | {
+    type: "unit-upgraded";
+    slot: PlayerSlot;
+    unitId: string;
+    unitKind: string;
+    fromLevel: number;
+    toLevel: number;
+    experience: number;
+    source: "combat-experience";
   }
   | {
     type: "cell-unlocked";

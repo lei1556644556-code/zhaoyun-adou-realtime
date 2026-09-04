@@ -1,6 +1,6 @@
 import "./styles.css";
 import {
-  ACTIVE_PROP_IDS, GAME_CONFIG, GENERAL_LEVEL_ATTACK, GENERAL_LEVEL_SPEED, GENERALS, HERO_PAIRS, MAP_LAYOUTS,
+  ACTIVE_PROP_IDS, GAME_CONFIG, GENERAL_EXPERIENCE, GENERAL_LEVEL_ATTACK, GENERAL_LEVEL_SPEED, GENERALS, HERO_PAIRS, MAP_LAYOUTS,
   PASSIVE_PROP_IDS, PROPS, PROP_RARITY_COLORS, PROP_RARITY_NAMES, SOLDIER_LEVEL_ATTACK,
   SOLDIER_LEVEL_SPEED, SOLDIERS,
   bulldozerSupplyAvailable, shovelSupplyCount,
@@ -96,6 +96,19 @@ app.innerHTML = `
             <div><b>主动道具</b><small id="prop-target-hint">按住道具，拖到高亮目标。</small></div>
             <div id="active-prop-bar" class="active-prop-bar"></div>
           </div>
+          <section class="match-ready-panel" id="match-ready-panel" aria-labelledby="match-ready-title" hidden>
+            <div class="match-ready-card">
+              <p class="eyebrow">真人对战 · 开战确认</p>
+              <h2 id="match-ready-title">双方准备后开战</h2>
+              <p>先确认网络和阵容。任何一方未进入或未准备，权威服务器都不会开始倒计时。</p>
+              <div class="ready-roster" aria-live="polite">
+                <div id="ready-player-0"><span>玩家一</span><strong>等待进入</strong><i>未准备</i></div>
+                <div id="ready-player-1"><span>玩家二</span><strong>等待进入</strong><i>未准备</i></div>
+              </div>
+              <button class="btn btn-accent" id="match-ready" type="button">我已准备</button>
+              <small id="match-ready-hint">可以先准备，好友进入并准备后自动开战。</small>
+            </div>
+          </section>
           <div id="game" class="game-frame"></div>
         </section>
         <aside class="tactics-panel">
@@ -175,10 +188,12 @@ let snapshot: MatchSnapshot | null = null;
 let slot: PlayerSlot = 0;
 let practice: PracticeEngine | null = null;
 type OnlineClient = RealtimeClient | AuthoritativeRealtimeClient;
+type RoomPlayer = { slot: PlayerSlot; name: string; connected: boolean; ready: boolean };
 let online: OnlineClient | null = null;
 let commandSink: ((command: GameCommand) => void) | null = null;
 let toastTimer = 0;
-let roomPlayers: Array<{ slot: PlayerSlot; name: string }> = [];
+let roomPlayers: RoomPlayer[] = [];
+let roomStarted = false;
 let activeMode: "practice" | "online" | null = null;
 let lastPracticeSaveAt = 0;
 let battlefieldZoom = readStoredZoom();
@@ -463,6 +478,8 @@ function showUnitInspector(payload: { kind: string; level: number; unitId?: stri
   const attack = base ? base.attack * (attackCurve[levelIndex] ?? 1) : null;
   const selectedPlayer = payload.ownerSlot === undefined || !snapshot ? undefined : snapshot.players[payload.ownerSlot];
   const selectedUnit = payload.unitId ? selectedPlayer?.units.find((unit) => unit.id === payload.unitId) : undefined;
+  const selectedReserve = payload.reserveId ? selectedPlayer?.reserve.find((item) => item.id === payload.reserveId) : undefined;
+  const selectedPiece = selectedUnit ?? selectedReserve;
   const opposingPlayer = payload.ownerSlot === undefined || !snapshot ? undefined : snapshot.players[payload.ownerSlot === 0 ? 1 : 0];
   const universalSpeed = (selectedPlayer?.props?.loadout.passive.some((entry) => entry.id === 14) ? 0.1 : 0)
     + (opposingPlayer?.props?.loadout.passive.some((entry) => entry.id === 14) ? 0.1 : 0);
@@ -488,7 +505,11 @@ function showUnitInspector(payload: { kind: string; level: number; unitId?: stri
   get("unit-inspector-range").textContent = base ? `${base.range * (selectedUnit?.rangeMultiplier ?? 1)}格` : "—";
   get("unit-inspector-form").textContent = hero ? `${hero.weapon} · ${hero.form}` : soldier?.form ?? (kind === "铲子" ? "开垦草格" : "合字成将");
   if (hero) {
-    get("unit-inspector-skill").textContent = `武器：${hero.weapon}。技能：${hero.skill}。判定：攻击圆擦到敌军整格碰撞盒即命中。`;
+    const thresholds = GENERAL_EXPERIENCE.thresholds[hero.rarity];
+    const experience = selectedPiece?.experience ?? thresholds[normalizedLevel - 1] ?? 0;
+    const next = thresholds[normalizedLevel];
+    const growth = next === undefined ? "经验已满" : `击杀经验 ${experience}/${next}，满后自动升级`;
+    get("unit-inspector-skill").textContent = `自动索敌攻击 · ${growth}。武器：${hero.weapon}。技能：${hero.skill}。`;
   } else if (soldier) {
     const extra = kind === "枪" ? "长枪刺击会贯穿刺击轨迹上的敌人。" : kind === "骑" ? "两段环扫：内圈各承受两次50%伤害，外圈承受一次50%伤害。" : "";
     get("unit-inspector-skill").textContent = `优先攻击：${soldier.target}。${extra}判定：攻击圆擦到敌军整格碰撞盒即命中。`;
@@ -644,6 +665,8 @@ function showToast(message: string) {
 
 function startPractice(saved?: MatchSnapshot) {
   online?.close(); online = null;
+  roomStarted = false;
+  get<HTMLElement>("match-ready-panel").hidden = true;
   practice?.stop(); practice = new PracticeEngine(saved, undefined, economy.totalMatches); slot = 0;
   activeMode = "practice";
   localStorage.setItem(scopedStorageKey(ACTIVE_MODE_KEY), activeMode);
@@ -681,14 +704,23 @@ function bindOnline(client: OnlineClient) {
     if (!connected) showToast("网络中断，正在自动重连");
   });
   client.addEventListener("room", (event) => {
-    const status = (event as CustomEvent<{ players: Array<{ slot: PlayerSlot; name: string }> }>).detail;
+    const status = (event as CustomEvent<{ players: RoomPlayer[]; started: boolean }>).detail;
     roomPlayers = status.players;
+    roomStarted = status.started;
     renderOpponent();
+    renderReadyState();
+  });
+  client.addEventListener("start", () => {
+    roomStarted = true;
+    renderReadyState();
   });
 }
 
 async function onlineAction(kind: "create" | "join" | "quick") {
   practice?.stop(); practice = null;
+  snapshot = null;
+  roomPlayers = [];
+  roomStarted = false;
   loadoutSentKey = "";
   online?.close();
   online = createOnlineClient(); bindOnline(online);
@@ -717,12 +749,40 @@ async function onlineAction(kind: "create" | "join" | "quick") {
   get("room-banner").hidden = false; get("room-id").textContent = result.roomId;
   get("last-event").textContent = "等待另一位玩家进入";
   renderOpponent();
+  renderReadyState();
 }
 
 function renderOpponent() {
   const opponent = roomPlayers.find((player) => player.slot !== slot);
   get("opponent-name").textContent = opponent?.name ?? "等待对手";
-  get("opponent-status").textContent = opponent ? "已进入房间" : "分享房号后等待加入";
+  get("opponent-status").textContent = opponent
+    ? opponent.ready ? "已准备，等待你确认" : "已进入房间 · 尚未准备"
+    : "分享房号后等待加入";
+}
+
+function renderReadyState() {
+  const panel = get<HTMLElement>("match-ready-panel");
+  const button = get<HTMLButtonElement>("match-ready");
+  const hint = get("match-ready-hint");
+  panel.hidden = activeMode !== "online" || Boolean(snapshot);
+  for (const playerSlot of [0, 1] as const) {
+    const player = roomPlayers.find((candidate) => candidate.slot === playerSlot);
+    const row = get(`ready-player-${playerSlot}`);
+    row.classList.toggle("is-ready", Boolean(player?.ready));
+    row.classList.toggle("is-offline", Boolean(player && !player.connected));
+    row.querySelector("span")!.textContent = playerSlot === slot ? "你" : "对手";
+    row.querySelector("strong")!.textContent = player?.name ?? "等待进入";
+    row.querySelector("i")!.textContent = !player ? "未进入" : !player.connected ? "已离线" : player.ready ? "已准备" : "未准备";
+  }
+  const mine = roomPlayers.find((player) => player.slot === slot);
+  button.disabled = roomStarted || !mine?.connected || Boolean(mine.ready);
+  button.textContent = roomStarted ? "正在载入战场…" : mine?.ready ? "已准备，等待对手" : "我已准备";
+  const opponent = roomPlayers.find((player) => player.slot !== slot);
+  hint.textContent = roomStarted
+    ? "双方已经准备，正在接收权威战场快照。"
+    : !opponent ? "可以先准备，好友进入并准备后自动开战。"
+      : mine?.ready ? "你的准备已确认，等待对手点击准备。"
+        : opponent.ready ? "对手已经准备，确认后立即开战。" : "双方都确认后才会开始10秒布阵倒计时。";
 }
 
 function availableShopPropIds() {
@@ -870,7 +930,7 @@ function claimResult(multiplier: 1 | 2) {
 function finishShopAndReturn() {
   delete economy.pendingShop;
   practice?.stop(); online?.close();
-  practice = null; online = null; commandSink = null; snapshot = null; activeMode = null; loadoutSentKey = ""; shownFinishedKey = ""; roomPlayers = [];
+  practice = null; online = null; commandSink = null; snapshot = null; activeMode = null; loadoutSentKey = ""; shownFinishedKey = ""; roomPlayers = []; roomStarted = false;
   localStorage.removeItem(scopedStorageKey(ACTIVE_MODE_KEY));
   localStorage.removeItem(scopedStorageKey(PRACTICE_SAVE_KEY));
   localStorage.removeItem(scopedStorageKey(ONLINE_SESSION_KEY));
@@ -884,6 +944,8 @@ function finishShopAndReturn() {
 
 function updateSnapshot(next: MatchSnapshot) {
   snapshot = next;
+  roomStarted = activeMode === "online";
+  get<HTMLElement>("match-ready-panel").hidden = true;
   const mine = next.players[slot]; const opponent = next.players[slot === 0 ? 1 : 0];
   get("my-buns").textContent = String(mine.buns);
   get("last-event").textContent = mine.lastEvent;
@@ -1003,6 +1065,22 @@ get("piece-mode-toggle").addEventListener("click", () => {
   applyPieceDisplayMode();
 });
 get("unit-inspector-close").addEventListener("click", () => hideUnitInspector());
+get<HTMLButtonElement>("match-ready").addEventListener("click", async () => {
+  if (!online || activeMode !== "online" || snapshot) return;
+  const button = get<HTMLButtonElement>("match-ready");
+  button.disabled = true;
+  button.textContent = "正在确认…";
+  try {
+    const result = await online.ready();
+    if (!result.ok) throw new Error(result.message ?? "准备失败");
+    const mine = roomPlayers.find((player) => player.slot === slot);
+    if (mine) mine.ready = true;
+    renderReadyState();
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : "准备状态提交失败");
+    renderReadyState();
+  }
+});
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   if (activePropPointer) {
@@ -1013,7 +1091,7 @@ document.addEventListener("keydown", (event) => {
 });
 get("exit-match").addEventListener("click", async () => {
   practice?.stop(); online?.close();
-  practice = null; online = null; commandSink = null; snapshot = null; activeMode = null;
+  practice = null; online = null; commandSink = null; snapshot = null; activeMode = null; roomStarted = false;
   loadoutSentKey = "";
   roomPlayers = [];
   localStorage.removeItem(scopedStorageKey(ACTIVE_MODE_KEY));
@@ -1052,6 +1130,7 @@ async function restoreActiveSession(remoteProgress: CloudProgress | null) {
     enterBattle("真人房间 · 已重连", true);
     get("room-banner").hidden = false; get("room-id").textContent = result.roomId;
     get("last-event").textContent = "已恢复原房间进度";
+    renderReadyState();
   } catch (error) {
     online?.close();
     online = null;

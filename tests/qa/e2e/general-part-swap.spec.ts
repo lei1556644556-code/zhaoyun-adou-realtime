@@ -40,3 +40,82 @@ test("pulls one character from a fused general and swaps it directly with a sold
     expect.objectContaining({ kind: "张", level: 2, cell: soldierCell }),
   ]));
 });
+
+test("swaps the dragged characters when Zhang Fei is dropped onto Zhao Yun", async ({ page }) => {
+  const snapshot = createMatch("QA-GENERAL-TO-GENERAL-SWAP", 0x109);
+  snapshot.phase = "waiting";
+  snapshot.players.forEach((player) => {
+    player.phase = "waiting"; player.prepareMs = 0; player.remainingToSpawn = 0; player.enemies = [];
+    if (player.props) player.props.configured = true;
+  });
+  const zhaoCell = cellIndex(2, 7);
+  const yunCell = cellIndex(3, 7);
+  const zhangCell = cellIndex(5, 7);
+  const feiCell = cellIndex(6, 7);
+  snapshot.players[0].units = [
+    {
+      id: "general-zhaoyun", kind: "赵云", level: 2,
+      cell: zhaoCell, secondaryCell: yunCell, parts: ["赵", "云"], cooldownMs: 0, attackCount: 0,
+    },
+    {
+      id: "general-zhangfei", kind: "张飞", level: 2,
+      cell: zhangCell, secondaryCell: feiCell, parts: ["张", "飞"], cooldownMs: 0, attackCount: 0,
+    },
+  ];
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockAuthenticatedAccount(page, snapshot);
+  await openRestoredBattle(page);
+
+  const zhang = await designPoint(page, 440, 800);
+  const zhao = await designPoint(page, 200, 800);
+  await page.mouse.move(zhang.x, zhang.y);
+  await page.mouse.down();
+  await page.mouse.move(zhang.x + 24, zhang.y, { steps: 3 });
+  await page.mouse.move(zhao.x, zhao.y, { steps: 12 });
+  await page.mouse.up();
+
+  await expect.poll(() => page.evaluate((userId) => {
+    const raw = localStorage.getItem(`adou-practice-save-v1:${userId}`);
+    return raw ? JSON.parse(raw)?.snapshot?.players?.[0]?.units : [];
+  }, QA_USER_ID)).toEqual(expect.arrayContaining([
+    expect.objectContaining({ kind: "张", level: 2, cell: zhaoCell }),
+    expect.objectContaining({ kind: "云", level: 2, cell: yunCell }),
+    expect.objectContaining({ kind: "赵", level: 2, cell: zhangCell }),
+    expect.objectContaining({ kind: "飞", level: 2, cell: feiCell }),
+  ]));
+});
+
+test("keeps adjacent characters apart after dragging one part out of a general", async ({ page }) => {
+  const snapshot = createMatch("QA-ADJACENT-SPLIT", 0x109);
+  snapshot.phase = "waiting";
+  snapshot.players.forEach((player) => {
+    player.phase = "waiting"; player.prepareMs = 0; player.remainingToSpawn = 0; player.enemies = [];
+    if (player.props) player.props.configured = true;
+  });
+  const zhaoCell = cellIndex(2, 7);
+  const yunCell = cellIndex(3, 7);
+  const targetCell = cellIndex(4, 7);
+  snapshot.players[0].units = [{
+    id: "general-zhaoyun", kind: "赵云", level: 2,
+    cell: zhaoCell, secondaryCell: yunCell, parts: ["赵", "云"], cooldownMs: 0, attackCount: 0,
+  }];
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockAuthenticatedAccount(page, snapshot);
+  await openRestoredBattle(page);
+
+  const zhao = await designPoint(page, 200, 800);
+  const target = await designPoint(page, 360, 800);
+  await page.mouse.move(zhao.x, zhao.y);
+  await page.mouse.down();
+  await page.mouse.move(zhao.x + 24, zhao.y, { steps: 3 });
+  await page.mouse.move(target.x, target.y, { steps: 10 });
+  await page.mouse.up();
+
+  await expect.poll(() => page.evaluate((userId) => {
+    const raw = localStorage.getItem(`adou-practice-save-v1:${userId}`);
+    return raw ? JSON.parse(raw)?.snapshot?.players?.[0]?.units : [];
+  }, QA_USER_ID)).toEqual(expect.arrayContaining([
+    expect.objectContaining({ kind: "云", level: 2, cell: yunCell }),
+    expect.objectContaining({ kind: "赵", level: 2, cell: targetCell }),
+  ]));
+});

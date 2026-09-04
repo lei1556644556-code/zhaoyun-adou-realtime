@@ -864,6 +864,9 @@ export class BattleScene extends Phaser.Scene {
     const style = this.attackStyle(event.unitKind);
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const angle = Phaser.Math.Angle.Between(source.x, source.y, target.x, target.y);
+    this.playAttackWake(source, target, event, style, reducedMotion);
+    const ultimate = this.heroUltimateName(event.unitKind, event.special);
+    if (ultimate) this.playHeroUltimate(event.unitKind, ultimate, source, target, style, reducedMotion);
     const sourceFlash = this.add.circle(source.x, source.y, event.special ? 22 : 14, style.color, 0.28).setStrokeStyle(4, style.accent, 0.92);
     this.effectsLayer.add(sourceFlash);
     this.tweens.add({ targets: sourceFlash, scale: 1.8, alpha: 0, duration: reducedMotion ? 80 : 220, onComplete: () => sourceFlash.destroy() });
@@ -926,6 +929,99 @@ export class BattleScene extends Phaser.Scene {
     });
   }
 
+  private playAttackWake(
+    source: { x: number; y: number },
+    target: { x: number; y: number },
+    event: CombatEffectEvent,
+    style: ReturnType<BattleScene["attackStyle"]>,
+    reducedMotion: boolean,
+  ) {
+    const wake = this.add.graphics();
+    wake.lineStyle(event.special ? 8 : 3, style.accent, event.special ? 0.72 : 0.38);
+    wake.beginPath().moveTo(source.x, source.y).lineTo(target.x, target.y).strokePath();
+    wake.setBlendMode(Phaser.BlendModes.ADD);
+    this.effectsLayer.add(wake);
+    this.tweens.add({
+      targets: wake, alpha: 0, duration: reducedMotion ? 70 : event.special ? 300 : 150,
+      onComplete: () => wake.destroy(),
+    });
+    const hitFlash = this.add.circle(target.x, target.y, event.special ? 32 : 19, 0xffffff, event.special ? 0.48 : 0.25)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    this.effectsLayer.add(hitFlash);
+    this.tweens.add({
+      targets: hitFlash, scale: event.special ? 2.2 : 1.55, alpha: 0,
+      duration: reducedMotion ? 80 : event.special ? 300 : 180, onComplete: () => hitFlash.destroy(),
+    });
+  }
+
+  private heroUltimateName(kind: string, special: boolean) {
+    if (!special) return null;
+    return ({
+      "赵云": "七进七出", "张飞": "燕人怒吼", "关羽": "青龙跳斩", "黄忠": "火箭雨",
+      "关平": "破阵怒吼", "张翼": "疾风跳斩", "刘备": "仁德圣剑", "黄祖": "连环箭雨",
+    } as Record<string, string>)[kind] ?? null;
+  }
+
+  private playHeroUltimate(
+    kind: string,
+    skillName: string,
+    source: { x: number; y: number },
+    target: { x: number; y: number },
+    style: ReturnType<BattleScene["attackStyle"]>,
+    reducedMotion: boolean,
+  ) {
+    const bannerY = source.y < MAP_TOP + GAME_CONFIG.rows * CELL / 2 ? MAP_TOP + 265 : MAP_TOP + 535;
+    const banner = this.add.container(WIDTH / 2, bannerY).setDepth(98).setAlpha(0).setScale(0.9);
+    const plate = this.add.rectangle(0, 0, 440, 76, 0x2b3431, 0.94).setStrokeStyle(3, style.accent, 1);
+    const edge = this.add.rectangle(0, 0, 418, 56, style.color, 0.2).setStrokeStyle(1, 0xffffff, 0.32);
+    const title = this.add.text(0, -10, `${kind} · ${skillName}`, {
+      fontFamily: '"STKaiti", "KaiTi", serif', fontSize: "31px", color: "#fff3bd", fontStyle: "bold",
+      stroke: "#38231c", strokeThickness: 5,
+    }).setOrigin(0.5);
+    const subtitle = this.add.text(0, 21, "绝技发动", {
+      fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "11px", color: "#e6c879", fontStyle: "bold",
+      letterSpacing: 5,
+    }).setOrigin(0.5);
+    banner.add([plate, edge, title, subtitle]);
+    this.effectsLayer.add(banner);
+    this.tweens.add({
+      targets: banner, alpha: 1, scale: 1, duration: reducedMotion ? 70 : 180, ease: "Back.easeOut",
+      onComplete: () => this.tweens.add({
+        targets: banner, alpha: 0, y: bannerY - 12, delay: reducedMotion ? 80 : 420,
+        duration: reducedMotion ? 80 : 240, onComplete: () => banner.destroy(),
+      }),
+    });
+
+    const seal = this.add.circle(source.x, source.y, 34, style.color, 0.2).setStrokeStyle(7, style.accent, 0.95)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    this.effectsLayer.add(seal);
+    this.tweens.add({
+      targets: seal, scale: 2.6, rotation: Math.PI, alpha: 0,
+      duration: reducedMotion ? 100 : 520, ease: "Cubic.easeOut", onComplete: () => seal.destroy(),
+    });
+
+    const burstCount = reducedMotion ? 4 : skillName.includes("箭雨") || skillName === "火箭雨" ? 12 : 8;
+    const angle = Phaser.Math.Angle.Between(source.x, source.y, target.x, target.y);
+    for (let index = 0; index < burstCount; index += 1) {
+      const spread = (index - (burstCount - 1) / 2) * (skillName.includes("怒吼") ? 0.24 : 0.1);
+      const length = skillName.includes("怒吼") ? 65 + index * 4 : 44 + (index % 3) * 12;
+      const stroke = this.add.rectangle(source.x, source.y, length, index % 2 ? 5 : 8, index % 2 ? style.accent : style.color, 0.85)
+        .setOrigin(0, 0.5).setRotation(angle + spread).setBlendMode(Phaser.BlendModes.ADD);
+      this.effectsLayer.add(stroke);
+      this.tweens.add({
+        targets: stroke,
+        x: target.x + Math.cos(angle + spread) * (index % 3) * 12,
+        y: target.y + Math.sin(angle + spread) * (index % 3) * 12,
+        alpha: 0, delay: reducedMotion ? 0 : index * 24, duration: reducedMotion ? 90 : 250 + index * 12,
+        ease: "Cubic.easeIn", onComplete: () => stroke.destroy(),
+      });
+    }
+    if (!reducedMotion) {
+      this.cameras.main.flash(130, 255, 226, 145, false);
+      this.cameras.main.shake(150, 0.0032);
+    }
+  }
+
   private playImpactEffect(
     x: number,
     y: number,
@@ -983,7 +1079,7 @@ export class BattleScene extends Phaser.Scene {
     }
 
     const roundedDamage = Math.max(1, Math.round(event.damage * 10) / 10);
-    const damageLabel = `${event.special ? "暴击 " : "−"}${roundedDamage}${event.hitCount > 1 ? ` ×${event.hitCount}` : ""}`;
+    const damageLabel = `${event.special ? "绝技 " : "−"}${roundedDamage}${event.hitCount > 1 ? ` ×${event.hitCount}` : ""}`;
     const damageText = this.add.text(x, y - 19, damageLabel, {
       fontFamily: '"Microsoft YaHei", sans-serif', fontSize: event.special ? "27px" : "20px",
       color: event.special ? "#fff0a8" : "#ffffff", fontStyle: "bold", stroke: "#6d2822", strokeThickness: 5,

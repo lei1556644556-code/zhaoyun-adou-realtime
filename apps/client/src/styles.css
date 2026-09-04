@@ -143,6 +143,31 @@ button { touch-action: manipulation; }
 
 .battle-layout { display: grid; grid-template-columns: minmax(0, var(--game-width)) minmax(270px, 340px); justify-content: center; gap: 16px; align-items: start; }
 .playfield-card { position: relative; width: min(var(--game-width), 100%); min-width: 0; overflow: hidden; border: 1px solid rgba(225,202,151,.55); background: #edf0df; box-shadow: 0 20px 55px rgba(0,0,0,.3); transition: width .16s ease; }
+.match-ready-panel {
+  position: absolute;
+  z-index: 15;
+  inset: 66px 0 0;
+  display: grid;
+  place-items: center;
+  padding: clamp(18px, 6vw, 52px);
+  background:
+    radial-gradient(circle at 50% 38%, rgba(213,180,107,.18), transparent 32%),
+    linear-gradient(rgba(28,49,42,.9), rgba(25,43,37,.97));
+  color: #fff4d2;
+}
+.match-ready-card { width: min(470px, 100%); border: 1px solid rgba(238,207,139,.5); border-radius: 16px; padding: clamp(22px, 5vw, 38px); background: rgba(245,238,220,.96); color: var(--ink); box-shadow: 0 24px 70px rgba(0,0,0,.42); text-align: center; }
+.match-ready-card h2 { margin: 0; color: #315348; font: 900 clamp(30px, 6vw, 43px)/1.1 "STKaiti", "KaiTi", serif; }
+.match-ready-card > p:not(.eyebrow) { margin: 14px 0 20px; color: #6b726b; font-size: 13px; line-height: 1.65; }
+.ready-roster { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 17px; }
+.ready-roster > div { min-width: 0; border: 1px solid rgba(75,96,81,.22); border-radius: 10px; padding: 12px 9px; background: rgba(255,255,255,.58); }
+.ready-roster span, .ready-roster i { display: block; color: #85857b; font-size: 10px; font-style: normal; }
+.ready-roster strong { display: block; overflow: hidden; margin: 5px 0; color: #4c5c54; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.ready-roster > div.is-ready { border-color: rgba(75,148,102,.5); background: rgba(111,168,127,.13); box-shadow: inset 0 0 0 2px rgba(77,149,104,.12); }
+.ready-roster > div.is-ready i { color: #377656; font-weight: 900; }
+.ready-roster > div.is-offline { opacity: .58; }
+.match-ready-card .btn { width: 100%; }
+.match-ready-card .btn:disabled { cursor: default; filter: none; opacity: .72; }
+.match-ready-card > small { display: block; min-height: 32px; margin-top: 12px; color: #7a776c; font-size: 11px; line-height: 1.5; }
 .game-frame { width: 100%; aspect-ratio: 640 / 1386; touch-action: none; user-select: none; }
 .game-frame canvas { display: block; visibility: hidden; width: 100% !important; height: 100% !important; touch-action: none; }
 .game-frame canvas.is-battle-ready { visibility: visible; }
@@ -299,6 +324,9 @@ body.is-dragging-prop, body.is-dragging-prop * { cursor: grabbing !important; }
   .exit-match { padding-inline: 6px; font-size: 11px; white-space: nowrap; }
   .battle-layout { display: block; }
   .playfield-card { width: min(var(--game-width), 100%); margin-inline: auto; border: 0; box-shadow: none; }
+  .match-ready-panel { padding: 18px; }
+  .match-ready-card { border-radius: 13px; padding: 22px 17px; }
+  .match-ready-card h2 { font-size: 32px; }
   .tactics-panel { width: 100%; border: 0; border-radius: 0; box-shadow: none; }
   .unit-inspector { right: 0; bottom: 0; left: 0; width: 100%; max-height: min(58dvh, 470px); overflow-y: auto; border-width: 1px 0 0; border-radius: 18px 18px 0 0; padding: 16px 18px calc(17px + env(safe-area-inset-bottom)); }
   .unit-inspector-portrait { flex-basis: 72px; width: 72px; height: 72px; }

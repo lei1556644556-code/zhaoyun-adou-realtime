@@ -72,6 +72,11 @@ export const RULE_PROVENANCE = {
     evidenceRefs: ["SPEC-DOCX#table-11", "SPEC-DOCX#table-12", "ORIGINAL-1.0.9#Et"],
     note: "已核对 Et：普通兵 dp/gp 与武将 Yp/Op 是四条独立成长曲线，并记录武将攻击形态和索敌。",
   },
+  generalExperience: {
+    status: "pending-original-verification",
+    evidenceRefs: ["SPEC-DOCX#3.3", "SPEC-DOCX#table-14", "ORIGINAL-1.0.9#ri.X_/Ta.X_"],
+    note: "候选取证稿记录累计经验阈值和直接击杀 +1；0.5/0.2 参与分配分支缺少完整触发调用链，暂不执行。",
+  },
   attackCollision: {
     status: "package-recorded",
     evidenceRefs: ["RULES-MD#4", "ORIGINAL-1.0.9#d.Si"],
@@ -135,7 +140,7 @@ export const RULE_PROVENANCE = {
 } as const satisfies Record<string, RuleProvenanceEntry>;
 
 export const GAME_CONFIG = {
-  protocolVersion: "0.3.0",
+  protocolVersion: "0.4.0",
   columns: 8,
   rows: 10,
   designWidth: 640,
@@ -272,6 +277,18 @@ export const SOLDIER_LEVEL_SPEED = [1, 1.5, 2.1, 2.73, 3.4125] as const;
 /** 原包 Et.Yp / Et.Op：武将使用独立的攻击与攻速成长。 */
 export const GENERAL_LEVEL_ATTACK = [1, 1.5, 2.1, 2.73, 3.276] as const;
 export const GENERAL_LEVEL_SPEED = [1, 1.3, 1.56, 1.794, 1.9734] as const;
+/** 候选取证稿表 14：武将累计经验阈值；当前仅执行已明确归属的直接击杀 +1。 */
+export const GENERAL_EXPERIENCE = {
+  directKill: 1,
+  sharedParticipation: 0.5,
+  specialParticipation: 0.2,
+  thresholds: {
+    gold: [0, 10, 35, 75, 130],
+    purple: [0, 8, 23],
+  },
+  implementedAttribution: "direct-killing-blow-only",
+  verification: "pending-original-verification",
+} as const;
 /** @deprecated 旧消费者兼容别名；等同武将成长，普通兵不得再使用。 */
 export const LEVEL_ATTACK = GENERAL_LEVEL_ATTACK;
 /** @deprecated 旧消费者兼容别名；等同武将成长，普通兵不得再使用。 */
@@ -763,6 +780,7 @@ export const RULES_CONFIG_1_0_9 = {
     soldierLevelSpeedMultipliers: SOLDIER_LEVEL_SPEED,
     generalLevelAttackMultipliers: GENERAL_LEVEL_ATTACK,
     generalLevelSpeedMultipliers: GENERAL_LEVEL_SPEED,
+    generalExperience: GENERAL_EXPERIENCE,
   },
   props: {
     catalog: PROPS,

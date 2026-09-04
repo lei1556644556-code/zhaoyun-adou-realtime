@@ -1,7 +1,7 @@
 import {
   ACTIVE_PROP_IDS, BOSS_CHANCES, BOSS_CONFIGS, BOSS_ENEMY_SPEED_PX_PER_SEC, BOSS_MILESTONES,
   DIFFICULTY_CURVES, DIFFICULTY_WEIGHTS, EARLY_ACCOUNT_SHOVEL_BONUS, GAME_CONFIG,
-  GENERAL_LEVEL_ATTACK, GENERAL_LEVEL_SPEED, GENERALS, HERO_PAIRS, INTRO_ROUND_HP_MULTIPLIERS,
+  GENERAL_EXPERIENCE, GENERAL_LEVEL_ATTACK, GENERAL_LEVEL_SPEED, GENERALS, HERO_PAIRS, INTRO_ROUND_HP_MULTIPLIERS,
   MAP_LAYOUTS, NORMAL_ENEMY_SPEED_PX_PER_SEC, PASSIVE_PROP_IDS, PROPS, SOLDIER_LEVEL_ATTACK,
   RULESET_VERSION, RULES_CONFIG_SCHEMA_VERSION, SOLDIER_LEVEL_SPEED, SOLDIERS, TOKEN_POOL, WAVES,
   cellCode, cellCoords, initialOpenCells,
@@ -75,6 +75,14 @@ export function normalizeMatchSnapshot(snapshot: MatchSnapshotInput): MatchSnaps
     player.rainBossIds ??= [];
     player.visionDarkMs ??= 0;
     ensureProps(player);
+    for (const unit of player.units) if (GENERALS[unit.kind]) {
+      const floor = generalExperienceFloor(unit.kind, unit.level);
+      if (floor > 0) unit.experience ??= floor;
+    }
+    for (const item of player.reserve) if (GENERALS[item.kind]) {
+      const floor = generalExperienceFloor(item.kind, item.level);
+      if (floor > 0) item.experience ??= floor;
+    }
     for (const enemy of player.enemies) ensureEnemyMovement(normalized.mapIndex, enemy);
   }
   if (incoming.rulesetVersion !== undefined && incoming.rulesetVersion !== RULESET_VERSION) {
@@ -352,6 +360,52 @@ function maxLevelForKind(kind: string) {
   return GENERALS[kind]?.maxLevel ?? SOLDIERS[kind as keyof typeof SOLDIERS]?.maxLevel ?? null;
 }
 
+function generalExperienceThresholds(kind: string) {
+  const general = GENERALS[kind];
+  return general ? GENERAL_EXPERIENCE.thresholds[general.rarity] : null;
+}
+
+function generalExperienceFloor(kind: string, level: number) {
+  const thresholds = generalExperienceThresholds(kind);
+  return thresholds?.[Math.max(0, Math.min(thresholds.length - 1, level - 1))] ?? 0;
+}
+
+function grantGeneralKillExperience(
+  snapshot: MatchSnapshot,
+  player: PlayerBattleState,
+  unit: UnitState,
+  defeatedCount: number,
+) {
+  const general = GENERALS[unit.kind];
+  if (!general || defeatedCount <= 0 || unit.level >= general.maxLevel) return;
+  const thresholds = GENERAL_EXPERIENCE.thresholds[general.rarity];
+  unit.experience = Math.max(unit.experience ?? 0, generalExperienceFloor(unit.kind, unit.level))
+    + defeatedCount * GENERAL_EXPERIENCE.directKill;
+  const fromLevel = unit.level;
+  while (unit.level < general.maxLevel && unit.experience >= (thresholds[unit.level] ?? Number.POSITIVE_INFINITY)) {
+    unit.level += 1;
+  }
+  if (unit.level === fromLevel) return;
+  unit.cooldownMs = 0;
+  unit.attackCount = 0;
+  clearUpgradeDispellable(player, unit);
+  player.lastEvent = `${unit.kind}击杀成长，升至 Lv.${unit.level}`;
+  emitBattleEvent(snapshot, {
+    type: "unit-upgraded", slot: player.slot, unitId: unit.id, unitKind: unit.kind,
+    fromLevel, toLevel: unit.level, experience: unit.experience, source: "combat-experience",
+  });
+}
+
+function grantGeneralExperienceForNewDefeats(
+  snapshot: MatchSnapshot,
+  player: PlayerBattleState,
+  unit: UnitState,
+  aliveBefore: ReadonlySet<string>,
+) {
+  const defeatedCount = player.enemies.filter((enemy) => aliveBefore.has(enemy.id) && enemy.hp <= 0).length;
+  grantGeneralKillExperience(snapshot, player, unit, defeatedCount);
+}
+
 function isMergeAttempt(source: { kind: string; level: number }, target: { kind: string; level: number }) {
   return Boolean(HERO_PAIRS[`${source.kind}+${target.kind}`])
     || (source.kind === target.kind && source.level === target.level && maxLevelForKind(target.kind) !== null);
@@ -383,6 +437,7 @@ function adjacentCellExcluding(player: PlayerBattleState, targetCell: number, ex
 function reserveToUnit(item: ReserveItem, cell: number, secondaryCell?: number): UnitState {
   return {
     id: item.id.replace(/^r-/, "u-"), kind: item.kind, level: item.level, cell,
+    ...(item.experience === undefined ? {} : { experience: item.experience }),
     ...(item.incomeMs === undefined ? {} : { incomeMs: item.incomeMs }),
     ...(secondaryCell === undefined ? {} : {
       secondaryCell,
@@ -395,6 +450,7 @@ function reserveToUnit(item: ReserveItem, cell: number, secondaryCell?: number):
 function unitToReserve(unit: UnitState, slot: number, secondarySlot?: number): ReserveItem {
   return {
     id: unit.id.replace(/^u-/, "r-"), kind: unit.kind, level: unit.level, slot,
+    ...(unit.experience === undefined ? {} : { experience: unit.experience }),
     ...(unit.incomeMs === undefined ? {} : { incomeMs: unit.incomeMs }),
     ...(secondarySlot === undefined ? {} : {
       secondarySlot,
@@ -404,7 +460,12 @@ function unitToReserve(unit: UnitState, slot: number, secondarySlot?: number): R
 }
 
 /** 战场姓名字横向相邻即合将；返回生成武将的单位 ID。 */
-function autoCombineHorizontalGeneral(snapshot: MatchSnapshot, player: PlayerBattleState, unitId: string) {
+function autoCombineHorizontalGeneral(
+  snapshot: MatchSnapshot,
+  player: PlayerBattleState,
+  unitId: string,
+  ignoredNeighborIds: ReadonlySet<string> = new Set(),
+) {
   const source = player.units.find((unit) => unit.id === unitId);
   if (!source || source.secondaryCell !== undefined) return null;
   const sourcePoint = cellCoords(source.cell);
@@ -415,13 +476,16 @@ function autoCombineHorizontalGeneral(snapshot: MatchSnapshot, player: PlayerBat
 
   for (const neighborCell of neighborCells) {
     const neighbor = unitAtCell(player, neighborCell);
-    if (!neighbor || neighbor.id === source.id || neighbor.secondaryCell !== undefined) continue;
+    if (!neighbor || neighbor.id === source.id || ignoredNeighborIds.has(neighbor.id) || neighbor.secondaryCell !== undefined) continue;
     const hero = HERO_PAIRS[`${source.kind}+${neighbor.kind}`];
     if (!hero) continue;
 
     const [survivor, consumed] = source.cell < neighbor.cell ? [source, neighbor] : [neighbor, source];
     survivor.kind = hero;
     survivor.level = Math.max(source.level, neighbor.level);
+    const experience = Math.max(source.experience ?? 0, neighbor.experience ?? 0, generalExperienceFloor(hero, survivor.level));
+    if (experience > 0) survivor.experience = experience;
+    else delete survivor.experience;
     survivor.cell = Math.min(source.cell, neighbor.cell);
     survivor.secondaryCell = Math.max(source.cell, neighbor.cell);
     survivor.parts = [hero[0] ?? source.kind, hero[1] ?? neighbor.kind];
@@ -470,7 +534,7 @@ function emptyAdjacentBuildCell(player: PlayerBattleState, targetCell: number) {
   return null;
 }
 
-function combine(player: PlayerBattleState, source: { kind: string; level: number }, target: UnitState, sourceUnit?: UnitState): string | null {
+function combine(player: PlayerBattleState, source: { kind: string; level: number; experience?: number }, target: UnitState, sourceUnit?: UnitState): string | null {
   const hero = HERO_PAIRS[`${source.kind}+${target.kind}`];
   if (hero) {
     const companionCell = adjacentCellForGeneral(player, target, sourceUnit);
@@ -479,6 +543,9 @@ function combine(player: PlayerBattleState, source: { kind: string; level: numbe
     const parts = [...hero];
     target.kind = hero;
     target.level = Math.max(source.level, target.level);
+    const experience = Math.max(source.experience ?? 0, target.experience ?? 0, generalExperienceFloor(hero, target.level));
+    if (experience > 0) target.experience = experience;
+    else delete target.experience;
     target.cell = cells[0]!;
     target.secondaryCell = cells[1]!;
     target.parts = [parts[0] ?? source.kind, parts[1] ?? target.kind];
@@ -491,11 +558,12 @@ function combine(player: PlayerBattleState, source: { kind: string; level: numbe
   if (!maxLevel) return "文字单位不能同字升级";
   if (target.level >= maxLevel) return "单位已满级";
   target.level += 1; target.cooldownMs = 0; target.attackCount = 0;
+  if (GENERALS[target.kind]) target.experience = generalExperienceFloor(target.kind, target.level);
   clearUpgradeDispellable(player, target);
   return null;
 }
 
-function combineReserve(player: PlayerBattleState, source: { kind: string; level: number }, target: ReserveItem, sourceItem?: ReserveItem): string | null {
+function combineReserve(player: PlayerBattleState, source: { kind: string; level: number; experience?: number }, target: ReserveItem, sourceItem?: ReserveItem): string | null {
   const hero = HERO_PAIRS[`${source.kind}+${target.kind}`];
   if (hero) {
     const companionSlot = adjacentReserveSlot(player, target.slot, sourceItem);
@@ -503,6 +571,9 @@ function combineReserve(player: PlayerBattleState, source: { kind: string; level
     const slots = [target.slot, companionSlot].sort((a, b) => a - b);
     target.kind = hero;
     target.level = Math.max(source.level, target.level);
+    const experience = Math.max(source.experience ?? 0, target.experience ?? 0, generalExperienceFloor(hero, target.level));
+    if (experience > 0) target.experience = experience;
+    else delete target.experience;
     target.slot = slots[0]!;
     target.secondarySlot = slots[1]!;
     target.parts = [hero[0] ?? source.kind, hero[1] ?? target.kind];
@@ -513,6 +584,7 @@ function combineReserve(player: PlayerBattleState, source: { kind: string; level
   if (!maxLevel) return "文字单位不能同字升级";
   if (target.level >= maxLevel) return "单位已满级";
   target.level += 1;
+  if (GENERALS[target.kind]) target.experience = generalExperienceFloor(target.kind, target.level);
   return null;
 }
 
@@ -864,15 +936,55 @@ function splitGeneral(snapshot: MatchSnapshot, player: PlayerBattleState, unitId
   const cells: [number, number] = [general.cell, general.secondaryCell];
   if (cells.includes(targetCell)) return null;
   const target = unitAtCell(player, targetCell);
-  if (target?.secondaryCell !== undefined) return "拆出的姓名字只能与单格单位交换";
   if (target && ((target.bossLockedMs ?? 0) !== 0 || (target.bossChaosMs ?? 0) > 0 || target.bossKnockedDown)) {
     return "目标单位正受 Boss 控制，暂时无法交互";
   }
   const parts = general.parts ?? [general.kind[0] ?? "", general.kind[1] ?? ""];
+
+  if (target?.secondaryCell !== undefined && GENERALS[target.kind]) {
+    if (target.level !== general.level) return "两名武将必须同级才能交换姓名字";
+    const targetCells: [number, number] = [target.cell, target.secondaryCell];
+    const targetPartIndex: 0 | 1 = targetCell === target.cell ? 0 : 1;
+    const targetParts = [...(target.parts ?? [target.kind[0] ?? "", target.kind[1] ?? ""])] as [string, string];
+    const sourceParts = [...parts] as [string, string];
+    const sourceKind = sourceParts[partIndex];
+    const targetKind = targetParts[targetPartIndex];
+    sourceParts[partIndex] = targetKind;
+    targetParts[targetPartIndex] = sourceKind;
+    const idBase = `part-swap-${snapshot.stateVersion + 1}`;
+    const sourcePieces = sourceParts.map((kind, index) => ({
+      id: `${general.id}-${idBase}-${index}`, kind, level: general.level,
+      ...(general.experience === undefined ? {} : { experience: general.experience }),
+      cell: cells[index]!, cooldownMs: 0, attackCount: 0,
+    })) as [UnitState, UnitState];
+    const targetPieces = targetParts.map((kind, index) => ({
+      id: `${target.id}-${idBase}-${index}`, kind, level: target.level,
+      ...(target.experience === undefined ? {} : { experience: target.experience }),
+      cell: targetCells[index]!, cooldownMs: 0, attackCount: 0,
+    })) as [UnitState, UnitState];
+    player.units = player.units.filter((unit) => unit.id !== general.id && unit.id !== target.id);
+    player.units.push(...sourcePieces, ...targetPieces);
+    player.lastEvent = `武将换字「${sourceKind}」↔「${targetKind}」`;
+    emitBattleEvent(snapshot, {
+      type: "general-split", slot: player.slot, generalId: general.id,
+      parts: sourcePieces.map((part) => ({ id: part.id, kind: part.kind, cell: part.cell })),
+    });
+    emitBattleEvent(snapshot, {
+      type: "general-split", slot: player.slot, generalId: target.id,
+      parts: targetPieces.map((part) => ({ id: part.id, kind: part.kind, cell: part.cell })),
+    });
+    emitBattleEvent(snapshot, {
+      type: "units-swapped", slot: player.slot,
+      placements: [...sourcePieces, ...targetPieces].map((part) => ({ id: part.id, cells: [part.cell] })),
+    });
+    for (const piece of [...sourcePieces, ...targetPieces]) autoCombineHorizontalGeneral(snapshot, player, piece.id);
+    return null;
+  }
   const otherIndex: 0 | 1 = partIndex === 0 ? 1 : 0;
   const idBase = `${general.id}-split-${snapshot.stateVersion + 1}`;
   const makePart = (index: 0 | 1, cell: number): UnitState => ({
     id: `${idBase}-${index}`, kind: parts[index], level: general.level, cell,
+    ...(general.experience === undefined ? {} : { experience: general.experience }),
     cooldownMs: 0, attackCount: 0,
   });
   const stationaryPart = makePart(otherIndex, cells[otherIndex]);
@@ -894,11 +1006,13 @@ function splitGeneral(snapshot: MatchSnapshot, player: PlayerBattleState, unitId
       placements: [{ id: movedPart.id, cells: [movedPart.cell] }, { id: target.id, cells: [target.cell] }],
     });
   }
-  // A direct part-to-unit drop is an explicit swap. Do not immediately undo the
-  // player's placement by auto-combining the two newly split characters again.
+  // A direct part-to-unit drop is an explicit swap. An empty-cell split may
+  // still combine either character with a pre-existing neighbour, but the two
+  // siblings produced by this command must not immediately fuse back together.
+  // Otherwise dragging a part by one cell appears to do nothing to the player.
   if (!target) {
-    autoCombineHorizontalGeneral(snapshot, player, movedPart.id);
-    autoCombineHorizontalGeneral(snapshot, player, stationaryPart.id);
+    autoCombineHorizontalGeneral(snapshot, player, movedPart.id, new Set([stationaryPart.id]));
+    autoCombineHorizontalGeneral(snapshot, player, stationaryPart.id, new Set([movedPart.id]));
   }
   return null;
 }
@@ -992,6 +1106,10 @@ function useProp(
     }
     ownUnit.cooldownMs = 0;
     ownUnit.attackCount = 0;
+    if (GENERALS[ownUnit.kind]) ownUnit.experience = Math.max(
+      ownUnit.experience ?? 0,
+      generalExperienceFloor(ownUnit.kind, ownUnit.level),
+    );
     clearUpgradeDispellable(player, ownUnit);
     player.lastEvent = `${config.name}：${ownUnit.kind}升降至Lv.${ownUnit.level}`;
   }
@@ -1313,6 +1431,7 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
           const pa = enemyPathPoint(snapshot.mapIndex, a); const pb = enemyPathPoint(snapshot.mapIndex, b);
           return Math.hypot(pa.x - position.x, pa.y - position.y) - Math.hypot(pb.x - position.x, pb.y - position.y);
         })[0]!;
+    const aliveBeforeAttack = new Set(player.enemies.filter((enemy) => enemy.hp > 0).map((enemy) => enemy.id));
 
     // 原包 ta：关羽/张翼在累计普攻后的“下一次攻击”以跳斩替代普攻；
     // 每次跳斩主目标 100%，目标周围 2.5 格再承受 50% 溅射。
@@ -1342,6 +1461,7 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
           damage: stats.attack, hitCount, special: true,
         });
       }
+      grantGeneralExperienceForNewDefeats(snapshot, player, unit, aliveBeforeAttack);
       continue;
     }
 
@@ -1442,6 +1562,7 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
       const roll = createRng(snapshot.seed ^ snapshot.tick ^ unit.attackCount ^ unit.id.length ^ 0x109).next();
       if (roll < 0.1) { target.stunnedMs = Math.max(target.stunnedMs, 300); effect.special = true; }
     }
+    grantGeneralExperienceForNewDefeats(snapshot, player, unit, aliveBeforeAttack);
   }
   const defeated = player.enemies.filter((enemy) => enemy.hp <= 0);
   if (defeated.length) {
@@ -1512,6 +1633,7 @@ function upgradeGeneralWithMatchingPart(player: PlayerBattleState, source: { kin
   const maxLevel = maxLevelForKind(target.kind);
   if (!maxLevel || target.level >= maxLevel) return { matched: true as const, error: "武将已满级" };
   target.level += 1; target.cooldownMs = 0; target.attackCount = 0;
+  target.experience = generalExperienceFloor(target.kind, target.level);
   clearUpgradeDispellable(player, target);
   return { matched: true as const, error: null };
 }
@@ -1547,6 +1669,7 @@ function upgradeReserveGeneralWithMatchingPart(source: { kind: string; level: nu
   const maxLevel = maxLevelForKind(target.kind);
   if (!maxLevel || target.level >= maxLevel) return { matched: true as const, error: "武将已满级" };
   target.level += 1;
+  target.experience = generalExperienceFloor(target.kind, target.level);
   return { matched: true as const, error: null };
 }
 
@@ -1860,7 +1983,10 @@ function tickArrowRain(snapshot: MatchSnapshot, player: PlayerBattleState, delta
     const targets = player.enemies.filter((enemy) => enemy.hp > 0
       && Math.hypot(enemyPathPoint(snapshot.mapIndex, enemy).x + 0.5 - impact.x,
         enemyPathPoint(snapshot.mapIndex, enemy).y + 0.5 - impact.y) <= 150 / ORIGINAL_CELL_PX);
+    const aliveBeforeImpact = new Set(targets.map((target) => target.id));
     for (const target of targets) damage(target, impact.damage);
+    const general = player.units.find((unit) => unit.id === impact.unitId);
+    if (general) grantGeneralExperienceForNewDefeats(snapshot, player, general, aliveBeforeImpact);
     emitBattleEvent(snapshot, {
       type: "arrow-rain-impact", slot: player.slot, unitId: impact.unitId,
       x: impact.x, y: impact.y, damage: impact.damage, targetIds: targets.map((target) => target.id),

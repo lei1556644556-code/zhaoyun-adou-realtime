@@ -16,6 +16,7 @@ interface Seat {
   slot: PlayerSlot;
   userId: string;
   name: string;
+  ready: boolean;
   tokenHash: string;
   socketId: string | null;
   introRound: number;
@@ -134,8 +135,8 @@ function serializeRoom(room: Room): StoredRoomRow {
   const now = new Date();
   return {
     room_id: room.id,
-    seats: room.seats.map(({ slot, userId, name, tokenHash: hash, introRound }) => ({
-      slot, userId, name, tokenHash: hash, introRound,
+    seats: room.seats.map(({ slot, userId, name, ready, tokenHash: hash, introRound }) => ({
+      slot, userId, name, ready, tokenHash: hash, introRound,
     })),
     // Supabase is a recovery checkpoint, not an append-only event log. The
     // command retry ledger and duplicate combat view are transient and would
@@ -196,7 +197,7 @@ async function loadRoom(roomId: string) {
   if (!data) return undefined;
   const room: Room = {
     id: data.room_id,
-    seats: data.seats.map((seat) => ({ ...seat, socketId: null })),
+    seats: data.seats.map((seat) => ({ ...seat, ready: Boolean(seat.ready), socketId: null })),
     snapshot: data.snapshot ? cloneSnapshot(data.snapshot) : null,
     createdAt: Date.parse(data.created_at), updatedAt: Date.parse(data.updated_at),
     lastCheckpointAt: Date.now(), persistInFlight: null, persistRequested: false,
@@ -208,13 +209,14 @@ async function loadRoom(roomId: string) {
 function emitStatus(room: Room) {
   io.to(room.id).emit("room:status", {
     roomId: room.id,
-    players: room.seats.map(({ slot, name, socketId }) => ({ slot, name, connected: Boolean(socketId) })),
+    players: room.seats.map(({ slot, name, ready, socketId }) => ({ slot, name, ready, connected: Boolean(socketId) })),
     started: Boolean(room.snapshot),
   });
 }
 
 function startIfReady(room: Room) {
-  if (room.seats.length !== 2 || room.snapshot) return;
+  if (room.seats.length !== 2 || room.snapshot
+    || room.seats.some((seat) => !seat.socketId || !seat.ready)) return;
   const seed = randomBytes(4).readUInt32LE(0);
   room.snapshot = createMatch(room.id, seed, 0, [room.seats[0]!.introRound, room.seats[1]!.introRound]);
   room.updatedAt = Date.now();
@@ -235,6 +237,7 @@ function takeSeat(room: Room, socket: Socket, requestedName: unknown, guestIntro
     slot,
     userId,
     name: authenticated ? cleanName(socket.data.displayName, `玩家${slot + 1}`) : cleanName(requestedName, `玩家${slot + 1}`),
+    ready: false,
     tokenHash: tokenHash(token), socketId: socket.id,
     introRound: authenticated ? Math.max(0, Math.floor(Number(socket.data.introRound) || 0)) : Math.max(0, Math.floor(guestIntroRound)),
   };
@@ -243,7 +246,6 @@ function takeSeat(room: Room, socket: Socket, requestedName: unknown, guestIntro
   socket.join(room.id);
   socket.data.roomId = room.id;
   socket.data.slot = seat.slot;
-  startIfReady(room);
   emitStatus(room);
   return { seat, token };
 }
@@ -359,6 +361,23 @@ io.on("connection", (socket) => {
     } catch (error) { ack?.({ ok: false, code: "SERVER_ERROR", message: error instanceof Error ? error.message : "恢复房间失败" }); }
   });
 
+  socket.on("room:ready", async (_payload: Record<string, never> = {}, ack?: Ack) => {
+    try {
+      const room = rooms.get(String(socket.data.roomId));
+      const seat = room?.seats.find((candidate) => candidate.slot === socket.data.slot && candidate.userId === socket.data.userId);
+      if (!room || !seat) return ack?.({ ok: false, code: "ROOM_NOT_JOINED", message: "尚未进入房间" });
+      if (room.snapshot) return ack?.({ ok: true, ready: true, started: true });
+      seat.ready = true;
+      room.updatedAt = Date.now();
+      emitStatus(room);
+      startIfReady(room);
+      await persistRoom(room);
+      ack?.({ ok: true, ready: true, started: Boolean(room.snapshot) });
+    } catch (error) {
+      ack?.({ ok: false, code: "SERVER_ERROR", message: error instanceof Error ? error.message : "准备状态提交失败" });
+    }
+  });
+
   socket.on("match:command", async (envelope: CommandEnvelope, ack?: Ack) => {
     try {
       const room = rooms.get(String(socket.data.roomId));
@@ -388,7 +407,9 @@ io.on("connection", (socket) => {
     const room = rooms.get(String(socket.data.roomId));
     const seat = room?.seats.find((candidate) => candidate.slot === socket.data.slot && candidate.userId === socket.data.userId);
     if (!room || !seat || seat.socketId !== socket.id) return;
-    seat.socketId = null; seat.disconnectedAt = Date.now(); room.updatedAt = Date.now();
+    seat.socketId = null;
+    if (!room.snapshot) seat.ready = false;
+    seat.disconnectedAt = Date.now(); room.updatedAt = Date.now();
     emitStatus(room);
     void persistRoom(room).catch(() => undefined);
   });

@@ -12,6 +12,7 @@ import {
   EARLY_ACCOUNT_SHOVEL_WEIGHT,
   EARLY_ACCOUNT_TOKEN_POOL_WEIGHT,
   GAME_CONFIG,
+  GENERAL_EXPERIENCE,
   GENERAL_LEVEL_ATTACK,
   GENERAL_LEVEL_SPEED,
   GENERALS,
@@ -71,6 +72,7 @@ describe("1.0.9 versioned rules config", () => {
       mergePairs: "package-recorded",
       twoCellGeneralAndSplit: "pending-original-verification",
       soldierAndGeneralStats: "package-recorded",
+      generalExperience: "pending-original-verification",
       attackCollision: "package-recorded",
       wavesAndBossChance: "package-recorded",
       mapLayouts: "package-recorded",
@@ -88,7 +90,7 @@ describe("1.0.9 versioned rules config", () => {
 
   it("locks every current battle constant, including package-recorded cadence values", () => {
     expect(GAME_CONFIG).toEqual({
-      protocolVersion: "0.3.0",
+      protocolVersion: "0.4.0",
       columns: 8,
       rows: 10,
       designWidth: 640,
@@ -144,6 +146,15 @@ describe("1.0.9 versioned rules config", () => {
     expect(SOLDIER_LEVEL_SPEED).toEqual([1, 1.5, 2.1, 2.73, 3.4125]);
     expect(GENERAL_LEVEL_ATTACK).toEqual([1, 1.5, 2.1, 2.73, 3.276]);
     expect(GENERAL_LEVEL_SPEED).toEqual([1, 1.3, 1.56, 1.794, 1.9734]);
+    expect(GENERAL_EXPERIENCE).toMatchObject({
+      directKill: 1,
+      sharedParticipation: 0.5,
+      specialParticipation: 0.2,
+      thresholds: { gold: [0, 10, 35, 75, 130], purple: [0, 8, 23] },
+      implementedAttribution: "direct-killing-blow-only",
+      verification: "pending-original-verification",
+    });
+    expect(RULES_CONFIG_1_0_9.units.generalExperience).toBe(GENERAL_EXPERIENCE);
     expect(LEVEL_ATTACK).toBe(GENERAL_LEVEL_ATTACK);
     expect(LEVEL_SPEED).toBe(GENERAL_LEVEL_SPEED);
     expect(ATTACK_RANGE_RULES).toMatchObject({ originalCellPx: 80, radiusReductionPx: 1, boundaryInclusive: true });

@@ -35,6 +35,7 @@ interface BattleEventBase {
 | `units-swapped` | 互换后各对象的最终格号或槽位 |
 | `units-merged` | 来源/目标 ID、结果兵种、等级、位置与棋盘/营地区域 |
 | `general-split` | 原武将 ID 与拆分后两个文字的 ID、文字、格号 |
+| `unit-upgraded` | 击杀经验触发升级的单位、前后等级、累计经验与来源 |
 | `cell-unlocked` | 开垦格号与被消耗的铲子 ID |
 | `reserve-moved` | 营地项 ID 与最终槽位 |
 | `prop-used` / `prop-triggered` | 道具 ID、使用目标或触发后受影响对象 ID |

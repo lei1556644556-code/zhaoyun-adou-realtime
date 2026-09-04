@@ -152,6 +152,10 @@ export class AuthoritativeRealtimeClient extends EventTarget {
     return this.remember(await this.request("room:resume", { roomId, token }), name);
   }
 
+  async ready() {
+    return this.request("room:ready", {});
+  }
+
   send(command: GameCommand) {
     void (async () => {
       try {

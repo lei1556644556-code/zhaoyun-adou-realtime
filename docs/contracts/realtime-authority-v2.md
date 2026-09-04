@@ -8,10 +8,10 @@ v2 的唯一正式方案是：`apps/server` 成为双方共同连接的唯一权
 
 ## 版本与所有权
 
-- 合同版本：`2.0.0`
+- 合同版本：`2.1.0`（新增双方显式准备门槛）
 - 提供方：06 实时联机
 - 消费方：02 权威战斗内核、03 战场 UI、05 账号存档、07 验收、08 发布
-- 规则版本：握手必须同时校验 `rulesetVersion=1.0.9`、规则配置结构版本和快照版本。
+- 协议/规则版本：握手必须同时校验 `protocolVersion=0.4.0`、`rulesetVersion=1.0.9`、规则配置结构版本和快照版本。
 
 ## 客户端端口
 
@@ -21,6 +21,7 @@ interface MatchTransport extends EventTarget {
   join(input: { roomId: string; name: string; accessToken: string }): Promise<JoinResult>;
   quick(input: { name: string; accessToken: string }): Promise<JoinResult>;
   resume(input: { roomId: string; resumeToken: string; accessToken: string }): Promise<JoinResult>;
+  ready(): Promise<{ ok: boolean; ready?: boolean; started?: boolean }>;
   send(command: GameCommand): Promise<CommandResult>;
   close(): void;
 }
@@ -34,6 +35,7 @@ interface MatchTransport extends EventTarget {
 
 - 房间 ID、创建/过期时间、规则/协议/快照版本；
 - 两个席位的用户 ID、显示名、不可逆哈希后的恢复令牌、在线时间；
+- 两个席位各自的 `ready` 状态；未创建快照前断线会清除该席位准备状态；
 - 最新完整 `MatchSnapshot`、递增快照序号；
 - 已接受命令的 `commandId/clientSeq/result` 幂等账本；
 - 权威进程租约和最后检查点时间。
@@ -49,6 +51,8 @@ UI 必须分别展示三个状态，不能再把 WebSocket 订阅成功等同于
 3. `opponentConnected`：服务端最后一次确认对手席位在线。
 
 心跳每 2 秒一次，6 秒进入“重连中”，12 秒判定离线。断线保留席位 120 秒；期间权威模拟继续，重连成功后发送最新快照和未播放事件。恢复失败不得自动删除本地恢复令牌或最近快照，只有玩家明确“退出本局”才清理。
+
+等待房间不会因为第二个席位加入而自动开战。`room:status.players[]` 必须携带 `connected` 与 `ready`；仅当两个席位都在线且都已提交 `room:ready` 时，服务端才能创建首个 `MatchSnapshot`、广播 `match:start` 并进入原版 10 秒布阵准备期。
 
 ## 命令一致性
 

@@ -233,6 +233,61 @@ describe("1.0.9 authoritative simulation", () => {
     ]);
   });
 
+  it("keeps adjacent sibling characters split after dragging one part to an empty cell", () => {
+    const match = createMatch("split-adjacent-regression", 109);
+    const player = match.players[0];
+    const left = cellIndex(2, 7);
+    const right = cellIndex(3, 7);
+    const adjacentTarget = cellIndex(4, 7);
+    player.units = [{
+      id: "general-zhaoyun", kind: "赵云", level: 2,
+      cell: left, secondaryCell: right, parts: ["赵", "云"], cooldownMs: 0, attackCount: 0,
+    }];
+
+    expect(applyCommand(match, 0, {
+      type: "SPLIT_GENERAL", unitId: "general-zhaoyun", partIndex: 0, targetCell: adjacentTarget,
+    }).ok).toBe(true);
+
+    expect(player.units).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "云", level: 2, cell: right }),
+      expect.objectContaining({ kind: "赵", level: 2, cell: adjacentTarget }),
+    ]));
+    expect(player.units).toHaveLength(2);
+    expect(match.events.map((event) => event.type)).toEqual(["general-split"]);
+  });
+
+  it("swaps same-level character parts between two fused generals", () => {
+    const match = createMatch("general-part-swap", 109);
+    const player = match.players[0];
+    const zhao = cellIndex(2, 7);
+    const yun = cellIndex(3, 7);
+    const zhang = cellIndex(5, 7);
+    const fei = cellIndex(6, 7);
+    player.units = [
+      {
+        id: "general-zhaoyun", kind: "赵云", level: 2,
+        cell: zhao, secondaryCell: yun, parts: ["赵", "云"], cooldownMs: 0, attackCount: 0,
+      },
+      {
+        id: "general-zhangfei", kind: "张飞", level: 2,
+        cell: zhang, secondaryCell: fei, parts: ["张", "飞"], cooldownMs: 0, attackCount: 0,
+      },
+    ];
+
+    expect(applyCommand(match, 0, {
+      type: "SPLIT_GENERAL", unitId: "general-zhangfei", partIndex: 0, targetCell: zhao,
+    }).ok).toBe(true);
+
+    expect(player.units).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "张", level: 2, cell: zhao }),
+      expect.objectContaining({ kind: "云", level: 2, cell: yun }),
+      expect.objectContaining({ kind: "赵", level: 2, cell: zhang }),
+      expect.objectContaining({ kind: "飞", level: 2, cell: fei }),
+    ]));
+    expect(player.units).toHaveLength(4);
+    expect(match.events.map((event) => event.type)).toEqual(["general-split", "general-split", "units-swapped"]);
+  });
+
   it("keeps a fused general on two cells and can pull either character back out", () => {
     const match = createMatch("TEST", 14);
     const firstCell = cellIndex(2, 7);
@@ -698,6 +753,31 @@ describe("1.0.9 authoritative simulation", () => {
     stepMatch(match, 100);
     expect(match.combatEvents).toHaveLength(1);
     expect(match.combatEvents[0]).toMatchObject({ unitId: "blade", targetId: "target", damage: 3, hitCount: 1 });
+  });
+
+  it("automatically levels a general when an attributed kill reaches its cumulative experience threshold", () => {
+    const match = createMatch("GENERAL-XP", 109);
+    const player = match.players[0];
+    player.phase = "battle";
+    player.prepareMs = 0;
+    player.spawnMs = 999_999;
+    player.remainingToSpawn = 1;
+    player.units = [{
+      id: "zhaoyun", kind: "赵云", level: 1, experience: 9,
+      cell: cellIndex(2, 7), secondaryCell: cellIndex(3, 7), parts: ["赵", "云"],
+      cooldownMs: 0, attackCount: 0,
+    }];
+    player.enemies = [{ id: "xp-target", hp: 1, maxHp: 1, progress: 5 / 17, boss: false, stunnedMs: 0 }];
+
+    stepMatch(match, 100);
+
+    expect(player.units[0]).toMatchObject({ kind: "赵云", level: 2, experience: 10, cooldownMs: 0, attackCount: 0 });
+    expect(match.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "unit-upgraded", unitId: "zhaoyun", fromLevel: 1, toLevel: 2,
+        experience: 10, source: "combat-experience",
+      }),
+    ]));
   });
 
   it("gives a level-two spear the original 0.533-second attack interval without cooldown debt", () => {
