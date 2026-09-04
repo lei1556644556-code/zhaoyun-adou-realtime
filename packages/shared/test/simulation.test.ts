@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  BATTLE_BUFFS, BOSS_CONFIGS, GAME_CONFIG, INTRO_ROUND_HP_MULTIPLIERS, MAP_LAYOUTS, NORMAL_ENEMY_SPEED_PX_PER_SEC,
-  PROPS, TOKEN_POOL, applyCommand, attackRangeIntersectsCell, cellCode, cellIndex, createMatch, executeCommand,
-  initialOpenCells, pathLengthCells, pathPoint, stepMatch, type CommandEnvelope, type MatchSnapshot,
+  BATTLE_BUFFS, BOSS_CONFIGS, GAME_CONFIG, GENERAL_SKILLS, INTRO_ROUND_HP_MULTIPLIERS, MAP_LAYOUTS, NORMAL_ENEMY_SPEED_PX_PER_SEC,
+  PROPS, TOKEN_POOL, applyCommand, attackRangeIntersectsCell, cellCode, cellIndex, createMatch, createRng, executeCommand,
+  initialOpenCells, normalizeMatchSnapshot, pathLengthCells, pathPoint, stepMatch, type CommandEnvelope, type MatchSnapshot,
 } from "../src";
 
 function bossFixture(bossType: number, withSoldier = false): MatchSnapshot {
@@ -38,7 +38,31 @@ function expandedTestPath(mapIndex: number) {
   return result;
 }
 
+function generalSkillFixture(kind: string, attackCount: number, hp = 10_000) {
+  const match = createMatch(`GENERAL-${kind}`, 8_109);
+  const player = match.players[0];
+  player.phase = "battle"; player.prepareMs = 0; player.spawnMs = 999_999; player.remainingToSpawn = 1;
+  player.units = [{
+    id: `general-${kind}`, kind, level: 1, cell: cellIndex(2, 7), secondaryCell: cellIndex(3, 7),
+    cooldownMs: 0, attackCount,
+  }];
+  player.enemies = [{
+    id: "target", hp, maxHp: hp, progress: 0.4, boss: false, stunnedMs: 0,
+    pathX: 4, pathY: 6, pathIndex: 7,
+  }];
+  return match;
+}
+
 describe("1.0.9 authoritative simulation", () => {
+  it("migrates 1.4.0 in-progress saves to the additive 1.5.0 skill runtime without clearing play", () => {
+    const previous = createMatch("PREVIOUS-SCHEMA", 109) as unknown as Record<string, unknown>;
+    previous.rulesConfigSchemaVersion = "1.4.0";
+    const migrated = normalizeMatchSnapshot(previous as unknown as MatchSnapshot);
+    expect(migrated.rulesConfigSchemaVersion).toBe("1.5.0");
+    expect(migrated.players[0].pendingGeneralImpacts).toEqual([]);
+    expect(migrated.players[0].zhaoPhantoms).toEqual([]);
+  });
+
   it("uses the package-backed board and opening values", () => {
     const match = createMatch("TEST", 1234);
     expect(GAME_CONFIG.columns).toBe(8);
@@ -753,6 +777,87 @@ describe("1.0.9 authoritative simulation", () => {
     stepMatch(match, 100);
     expect(match.combatEvents).toHaveLength(1);
     expect(match.combatEvents[0]).toMatchObject({ unitId: "blade", targetId: "target", damage: 3, hitCount: 1 });
+  });
+
+  it("restores 赵云 five-thrust normal attacks and starts a 300px/s seven-round-trip phantom", () => {
+    const match = generalSkillFixture("赵云", 29, 1_000);
+    stepMatch(match, 100);
+    const player = match.players[0];
+    expect(player.enemies[0]!.hp).toBe(990);
+    expect(match.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "general-skill", unitKind: "赵云", skillName: "七进七出" }),
+      expect.objectContaining({ type: "attack", unitKind: "赵云", damage: 10, hitCount: 5 }),
+    ]));
+    expect(player.zhaoPhantoms).toEqual([
+      expect.objectContaining({ unitId: "general-赵云", direction: -1, roundTrips: 0, launchMs: 500, damage: 2 }),
+    ]);
+    expect(GENERAL_SKILLS.赵云).toMatchObject({ phantomSpeedPxPerSec: 300, roundTrips: 7, pulseMs: 100 });
+  });
+
+  it("restores 张飞 大喝 and the per-hit 10% movement slow for two seconds", () => {
+    const match = generalSkillFixture("张飞", 15);
+    stepMatch(match, 100);
+    expect(match.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "general-skill", unitKind: "张飞", skillName: "大喝" }),
+    ]));
+    expect(match.players[0].enemies[0]).toMatchObject({
+      stunnedMs: 1_900, generalSlowMultiplier: 0.9, generalSlowMs: 2_000,
+    });
+  });
+
+  it("restores 马超 proc damage from normal-enemy max HP in addition to stun", () => {
+    const match = generalSkillFixture("马超", 0, 1_000);
+    // 攻击结算发生在 tick=1、attackCount=1，固定挑一个落入 30% 分支的种子。
+    match.seed = Array.from({ length: 10_000 }, (_, seed) => seed)
+      .find((seed) => createRng(seed ^ 1 ^ 1 ^ "general-马超".length).next() < GENERAL_SKILLS.马超.normalChance)!;
+    stepMatch(match, 100);
+    expect(match.players[0].enemies[0]!.hp).toBe(890);
+    expect(match.players[0].enemies[0]!.stunnedMs).toBe(400);
+    expect(match.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "attack", unitKind: "马超", damage: 110, skillName: "晕眩" }),
+    ]));
+  });
+
+  it("restores 关羽 same-target ramp and queues five sequential 跳斩 impacts", () => {
+    const match = generalSkillFixture("关羽", 0);
+    const player = match.players[0];
+    stepMatch(match, 100);
+    expect(player.enemies[0]!.hp).toBe(9_980);
+    player.units[0]!.cooldownMs = 0;
+    stepMatch(match, 100);
+    expect(player.enemies[0]!.hp).toBe(9_959);
+    expect(player.units[0]).toMatchObject({ repeatedTargetId: "target", repeatedTargetAttackBonus: 0.05 });
+    player.units[0]!.cooldownMs = 0; player.units[0]!.attackCount = 20;
+    stepMatch(match, 100);
+    expect(player.pendingGeneralImpacts).toHaveLength(5);
+    expect(player.pendingGeneralImpacts!.map((impact) => impact.remainingMs)).toEqual(
+      [1, 2, 3, 4, 5].map((index) => index * 500 / 1.2),
+    );
+    expect(match.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "general-skill", unitKind: "关羽", skillName: "跳斩" }),
+    ]));
+  });
+
+  it("keeps 刘备 圣剑 and 黄祖 five-round arrow rain as delayed projectiles", () => {
+    const liuBei = generalSkillFixture("刘备", 19);
+    stepMatch(liuBei, 100);
+    expect(liuBei.players[0].enemies[0]!.hp).toBe(9_990);
+    expect(liuBei.players[0].pendingGeneralImpacts).toEqual([
+      expect.objectContaining({ kind: "holy-sword", skillName: "圣剑", damage: 50, stunMs: 2_000 }),
+    ]);
+    const swordDelay = liuBei.players[0].pendingGeneralImpacts![0]!.remainingMs;
+    stepMatch(liuBei, swordDelay);
+    expect(liuBei.players[0].enemies[0]!.hp).toBe(9_940);
+    expect(liuBei.players[0].enemies[0]!.stunnedMs).toBeGreaterThanOrEqual(1_900);
+
+    const huangZu = generalSkillFixture("黄祖", 30);
+    stepMatch(huangZu, 100);
+    expect(huangZu.players[0].enemies[0]!.hp).toBe(9_994);
+    expect(huangZu.players[0].pendingGeneralImpacts).toHaveLength(50);
+    const delays = huangZu.players[0].pendingGeneralImpacts!.map((impact) => impact.remainingMs);
+    expect(Math.min(...delays)).toBeGreaterThanOrEqual(1_000);
+    expect(Math.max(...delays)).toBeLessThanOrEqual(3_199);
+    expect(new Set(huangZu.players[0].pendingGeneralImpacts!.map((impact) => impact.kind))).toEqual(new Set(["huangzu-arrow"]));
   });
 
   it("automatically levels a general when an attributed kill reaches its cumulative experience threshold", () => {

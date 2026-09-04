@@ -18,6 +18,7 @@ import {
   GENERAL_LEVEL_ATTACK,
   GENERAL_LEVEL_SPEED,
   GENERALS,
+  GENERAL_SKILLS,
   HERO_PAIRS,
   LEVEL_ATTACK,
   LEVEL_SPEED,
@@ -65,7 +66,7 @@ describe("1.0.9 versioned rules config", () => {
   });
   it("publishes one versioned entry point and honest evidence metadata", () => {
     expect(RULES_CONFIG_1_0_9.rulesetVersion).toBe("1.0.9");
-    expect(RULES_CONFIG_1_0_9.schemaVersion).toBe("1.4.0");
+    expect(RULES_CONFIG_1_0_9.schemaVersion).toBe("1.5.0");
     expect(RULES_CONFIG_1_0_9.evidence).toBe(RULE_EVIDENCE_SOURCES);
     expect(RULES_CONFIG_1_0_9.provenance).toBe(RULE_PROVENANCE);
     expect(RULE_EVIDENCE_SOURCES.originalPackage.artifactPath).toBeNull();
@@ -82,6 +83,7 @@ describe("1.0.9 versioned rules config", () => {
       twoCellGeneralAndSplit: "pending-original-verification",
       soldierAndGeneralStats: "package-recorded",
       generalExperience: "pending-original-verification",
+      generalSkills: "package-recorded",
       attackCollision: "package-recorded",
       wavesAndBossChance: "package-recorded",
       mapLayouts: "package-recorded",
@@ -194,7 +196,16 @@ describe("1.0.9 versioned rules config", () => {
       expect(HERO_PAIRS[`${first}+${second}`]).toBe(name);
       expect(HERO_PAIRS[`${second}+${first}`]).toBe(name);
     }
-    expect(stableFingerprint(GENERALS)).toBe("3906a692d669202b");
+    expect(stableFingerprint(GENERALS)).toBe("8200916c19747bdc");
+    expect(RULES_CONFIG_1_0_9.units.generalSkills).toBe(GENERAL_SKILLS);
+    expect(GENERAL_SKILLS).toMatchObject({
+      赵云: { name: "七进七出", attacks: 30, normalThrusts: 5, phantomSpeedPxPerSec: 300, roundTrips: 7, pulseMs: 100 },
+      张飞: { name: "大喝", attacks: 15, stunMs: 2_000, slowMultiplier: 0.9, slowMs: 2_000 },
+      马超: { name: "晕眩", normalChance: 0.3, normalMaxHpDamage: 0.1, bossChance: 0.1, bossMaxHpDamage: 0.02 },
+      关羽: { name: "跳斩", attacks: 20, strikes: 5, repeatAttackStep: 0.05, repeatAttackMaximum: 5 },
+      刘备: { name: "圣剑", attacks: 20, damageMultiplier: 5, knockdownMs: 2_000 },
+      黄祖: { name: "箭雨", attacks: 30, rounds: 5, arrowsPerRound: 10, projectileDelayMs: 1_000 },
+    });
     expect(MERGE_RULES.generals).toMatchObject({
       adjacency: "horizontal",
       trigger: "automatic-after-board-placement-or-move",

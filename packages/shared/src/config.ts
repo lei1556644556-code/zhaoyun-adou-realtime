@@ -1,6 +1,6 @@
 /** 原作规则版本；与网络协议版本分开演进。 */
 export const RULESET_VERSION = "1.0.9" as const;
-export const RULES_CONFIG_SCHEMA_VERSION = "1.4.0" as const;
+export const RULES_CONFIG_SCHEMA_VERSION = "1.5.0" as const;
 
 export type RuleVerificationStatus =
   | "package-recorded"
@@ -76,6 +76,11 @@ export const RULE_PROVENANCE = {
     status: "pending-original-verification",
     evidenceRefs: ["SPEC-DOCX#3.3", "SPEC-DOCX#table-14", "ORIGINAL-1.0.9#ri.X_/Ta.X_"],
     note: "候选取证稿记录累计经验阈值和直接击杀 +1；0.5/0.2 参与分配分支缺少完整触发调用链，暂不执行。",
+  },
+  generalSkills: {
+    status: "package-recorded",
+    evidenceRefs: ["ORIGINAL-1.0.9#Je/ta/Ca/Oa/Ha/Na/qa/hn", "packages/shared/test/simulation.test.ts#general-skills"],
+    note: "12 名武将的技能名、触发计数、概率、伤害、控制、连续攻击和投射物时序已从恢复源码核对并进入共享权威模拟。",
   },
   attackCollision: {
     status: "package-recorded",
@@ -262,19 +267,35 @@ export const GENERALS: Record<string, {
   weapon: string; attack: number; intervalMs: number; range: number; maxLevel: number; rarity: HeroRarity;
   form: string; target: UnitTargetRule; skill: string;
 }> = {
-  赵云: { weapon: "枪", attack: 2, intervalMs: 800, range: 2.5, maxLevel: 5, rarity: "gold", form: "快攻贯穿", target: "closest-end", skill: "30次普攻后七进七出，往返突进7次" },
-  张飞: { weapon: "枪", attack: 10, intervalMs: 1000, range: 2.5, maxLevel: 5, rarity: "gold", form: "范围", target: "nearest", skill: "15次普攻后范围眩晕2秒" },
-  马超: { weapon: "枪", attack: 10, intervalMs: 1000, range: 2.5, maxLevel: 5, rarity: "gold", form: "单体", target: "nearest", skill: "普攻30%眩晕0.5秒；Boss 10%/0.2秒" },
-  关羽: { weapon: "刀", attack: 20, intervalMs: 1000, range: 2.5, maxLevel: 5, rarity: "gold", form: "单体", target: "nearest", skill: "20次普攻后连续5次跳斩，50%范围溅射" },
-  黄忠: { weapon: "弓", attack: 6, intervalMs: 800, range: 4.5, maxLevel: 5, rarity: "gold", form: "贯穿", target: "nearest", skill: "30次普攻后火箭雨；每支火箭2倍攻击" },
-  关平: { weapon: "刀", attack: 3, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", form: "范围", target: "nearest", skill: "15次普攻后范围眩晕1秒" },
+  赵云: { weapon: "枪", attack: 2, intervalMs: 800, range: 2.5, maxLevel: 5, rarity: "gold", form: "快攻贯穿", target: "closest-end", skill: "七进七出：30次普攻后释放幻影，沿敌军路线往返7次" },
+  张飞: { weapon: "枪", attack: 10, intervalMs: 1000, range: 2.5, maxLevel: 5, rarity: "gold", form: "范围", target: "nearest", skill: "大喝：15次普攻后范围眩晕2秒；每次命中使敌军减速10%，持续2秒" },
+  马超: { weapon: "枪", attack: 10, intervalMs: 1000, range: 2.5, maxLevel: 5, rarity: "gold", form: "单体", target: "nearest", skill: "晕眩：普通敌军30%眩晕0.5秒并追加10%最大生命伤害；Boss为10%/0.2秒/2%" },
+  关羽: { weapon: "刀", attack: 20, intervalMs: 1000, range: 2.5, maxLevel: 5, rarity: "gold", form: "单体", target: "nearest", skill: "跳斩：20次普攻后连续5次跳斩，50%范围溅射；连续攻击同一目标每次攻击+5%，最高+500%" },
+  黄忠: { weapon: "弓", attack: 6, intervalMs: 800, range: 4.5, maxLevel: 5, rarity: "gold", form: "贯穿", target: "nearest", skill: "火箭烈：30次普攻后沿整条路线降下火箭，每支造成2倍攻击" },
+  关平: { weapon: "刀", attack: 3, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", form: "范围", target: "nearest", skill: "大喝：15次普攻后范围眩晕1秒" },
   关兴: { weapon: "刀", attack: 7, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", form: "单体", target: "closest-end", skill: "10%概率眩晕普通敌人0.3秒" },
   张苞: { weapon: "枪", attack: 7, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", form: "单体", target: "closest-end", skill: "10%概率眩晕普通敌人0.3秒" },
-  张翼: { weapon: "骑/剑", attack: 7, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", form: "单体", target: "closest-end", skill: "20次普攻后下一次跳斩，50%范围溅射" },
+  张翼: { weapon: "骑/剑", attack: 7, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", form: "单体", target: "closest-end", skill: "跳斩：20次普攻后下一次攻击改为跳斩，50%范围溅射" },
   黄盖: { weapon: "骑/剑", attack: 8, intervalMs: 1000, range: 2.5, maxLevel: 3, rarity: "purple", form: "单体", target: "nearest", skill: "无额外武将技能" },
-  刘备: { weapon: "骑/剑", attack: 10, intervalMs: 800, range: 2.5, maxLevel: 5, rarity: "gold", form: "单体", target: "nearest", skill: "20次普攻后圣剑，5倍攻击并击倒2秒" },
-  黄祖: { weapon: "弓", attack: 6, intervalMs: 800, range: 3.5, maxLevel: 3, rarity: "purple", form: "单体", target: "closest-end", skill: "30次普攻后箭雨：5轮，每轮10箭" },
+  刘备: { weapon: "骑/剑", attack: 10, intervalMs: 800, range: 2.5, maxLevel: 5, rarity: "gold", form: "单体", target: "nearest", skill: "圣剑：20次普攻后发射独立圣剑，造成5倍攻击并击倒2秒" },
+  黄祖: { weapon: "弓", attack: 6, intervalMs: 800, range: 3.5, maxLevel: 3, rarity: "purple", form: "单体", target: "closest-end", skill: "箭雨：30次普攻后连射5轮，每轮10箭" },
 };
+
+/** 原包 1.0.9 武将技能构造参数；所有权威结算只读取这里，UI 文案不参与规则。 */
+export const GENERAL_SKILLS = {
+  赵云: { name: "七进七出", attacks: 30, normalThrusts: 5, phantomSpeedPxPerSec: 300, roundTrips: 7, pulseMs: 100 },
+  张飞: { name: "大喝", attacks: 15, stunMs: 2_000, slowMultiplier: 0.9, slowMs: 2_000 },
+  马超: { name: "晕眩", normalChance: 0.3, normalStunMs: 500, normalMaxHpDamage: 0.1, bossChance: 0.1, bossStunMs: 200, bossMaxHpDamage: 0.02 },
+  关羽: { name: "跳斩", attacks: 20, strikes: 5, splashRadiusCells: 2.5, splashDamageMultiplier: 0.5, repeatAttackStep: 0.05, repeatAttackMaximum: 5 },
+  黄忠: { name: "火箭烈", attacks: 30, damageMultiplier: 2, collisionRadiusPx: 150, arrowDelayMinMs: 500, arrowDelayRangeMs: 250 },
+  关平: { name: "大喝", attacks: 15, stunMs: 1_000 },
+  关兴: { name: "晕眩", chance: 0.1, stunMs: 300 },
+  张苞: { name: "晕眩", chance: 0.1, stunMs: 300 },
+  张翼: { name: "跳斩", attacks: 20, strikes: 1, splashRadiusCells: 2.5, splashDamageMultiplier: 0.5 },
+  黄盖: { name: "无" },
+  刘备: { name: "圣剑", attacks: 20, damageMultiplier: 5, knockdownMs: 2_000 },
+  黄祖: { name: "箭雨", attacks: 30, rounds: 5, arrowsPerRound: 10, projectileDelayMs: 1_000, projectileDelayRangeMs: 200 },
+} as const;
 
 /** 原包 Et.dp / Et.gp：普通兵攻击与攻速共用这一组递推结果。 */
 export const SOLDIER_LEVEL_ATTACK = [1, 1.5, 2.1, 2.73, 3.4125] as const;
@@ -806,6 +827,7 @@ export const RULES_CONFIG_1_0_9 = {
   units: {
     soldiers: SOLDIERS,
     generals: GENERALS,
+    generalSkills: GENERAL_SKILLS,
     soldierLevelAttackMultipliers: SOLDIER_LEVEL_ATTACK,
     soldierLevelSpeedMultipliers: SOLDIER_LEVEL_SPEED,
     generalLevelAttackMultipliers: GENERAL_LEVEL_ATTACK,

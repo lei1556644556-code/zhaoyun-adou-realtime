@@ -17,6 +17,11 @@ export interface UnitState {
   attackCount: number;
   /** 武将累计战斗经验；普通兵和旧快照可缺省。 */
   experience?: number;
+  /** 关羽连续攻击同一目标的原包被动状态。 */
+  repeatedTargetId?: string;
+  repeatedTargetAttackBonus?: number;
+  /** 原包技能期间 V_=false；权威 Tick 到期前不允许穿插普通攻击。 */
+  generalSkillLockMs?: number;
   /** 主动道具永久增益；缺省值均为 1，兼容旧存档。 */
   rangeMultiplier?: number;
   attackSpeedMultiplier?: number;
@@ -72,6 +77,9 @@ export interface EnemyState {
   battleGiantApplied?: boolean;
   battleRallyMs?: number;
   battleRallyBonusHp?: number;
+  /** 张飞普攻命中的 -10% 移速，独立于产品新增 BUFF。 */
+  generalSlowMs?: number;
+  generalSlowMultiplier?: number;
   bossCooldownMs?: number;
   bossSkillElapsedMs?: number;
   bossSkillTargetIds?: string[];
@@ -96,6 +104,41 @@ export interface ArrowRainImpactState {
   y: number;
   damage: number;
   remainingMs: number;
+}
+
+export type GeneralSkillName = "七进七出" | "大喝" | "晕眩" | "跳斩" | "火箭烈" | "圣剑" | "箭雨";
+
+/** 锁定目标、等待命中的原包武将技能投射物或连续斩击。 */
+export interface PendingGeneralImpactState {
+  id: string;
+  unitId: string;
+  unitKind: string;
+  sourceCell: number;
+  secondaryCell?: number;
+  skillName: GeneralSkillName;
+  kind: "jump-slash" | "holy-sword" | "huangzu-arrow";
+  targetId: string;
+  damage: number;
+  remainingMs: number;
+  splashRadiusCells?: number;
+  splashDamageMultiplier?: number;
+  stunMs?: number;
+}
+
+/** 赵云幻影沿敌方完整路线往返的确定性运行时状态。 */
+export interface ZhaoPhantomState {
+  id: string;
+  unitId: string;
+  unitKind: "赵云";
+  x: number;
+  y: number;
+  pathIndex: number;
+  direction: -1 | 1;
+  roundTrips: number;
+  pulseMs: number;
+  launchMs: number;
+  damage: number;
+  hitEnemyIds: string[];
 }
 
 export interface BulldozerState {
@@ -275,6 +318,16 @@ export type BattleEventPayload =
     targetIds: string[];
   }
   | {
+    type: "general-skill";
+    slot: PlayerSlot;
+    unitId: string;
+    unitKind: string;
+    skillName: GeneralSkillName;
+    sourceCell: number;
+    secondaryCell?: number;
+    targetId?: string;
+  }
+  | {
     type: "bulldozer";
     slot: PlayerSlot;
     phase: "launched" | "push" | "expired";
@@ -293,6 +346,11 @@ export type BattleEventPayload =
     damage: number;
     hitCount: number;
     special: boolean;
+    /** 技能连续命中的名称；启动横幅由 general-skill 事件单独触发。 */
+    skillName?: GeneralSkillName;
+    /** 幻影等移动施法源可覆盖棋盘格中心，坐标单位为格。 */
+    sourceX?: number;
+    sourceY?: number;
   }
   | {
     type: "enemy-defeated";
@@ -348,6 +406,8 @@ export interface PlayerBattleState {
   /** 仅在当前对局快照中存在，不进入账号道具数据库。 */
   battleBuffs?: BattleBuffItem[];
   pendingArrowImpacts?: ArrowRainImpactState[];
+  pendingGeneralImpacts?: PendingGeneralImpactState[];
+  zhaoPhantoms?: ZhaoPhantomState[];
   /** 仍在生效的甄宓降雨 Boss；每个来源对尚未升级驱散的单位施加 -20% 攻速。 */
   rainBossIds?: string[];
   visionDarkMs?: number;

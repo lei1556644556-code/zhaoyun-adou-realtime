@@ -908,6 +908,7 @@ export class BattleScene extends Phaser.Scene {
       this.playedEffectIds.add(event.id);
       if (event.type === "attack") this.playAttackEffect(event);
       else if (event.type === "arrow-rain-impact") this.playArrowRainImpact(event);
+      else if (event.type === "general-skill") this.playGeneralSkillEvent(event);
       else if (event.type === "boss-skill" && event.phase !== "resolved") this.playBossSkill(event);
       else if (event.type === "battle-buff-dropped" || event.type === "battle-buff-used") this.playBattleBuffEvent(event);
       else if (event.type === "bulldozer" && event.phase === "push") this.cameras.main.shake(90, 0.0018);
@@ -945,7 +946,12 @@ export class BattleScene extends Phaser.Scene {
   private playAttackEffect(event: CombatEffectEvent) {
     if (!this.snapshot) return;
     const mirror = event.slot !== this.slot;
-    const source = this.effectCellPoint(event.sourceCell, event.secondaryCell, mirror);
+    const source = event.sourceX === undefined || event.sourceY === undefined
+      ? this.effectCellPoint(event.sourceCell, event.secondaryCell, mirror)
+      : {
+          x: ((mirror ? GAME_CONFIG.columns - 1 - event.sourceX : event.sourceX) + 0.5) * CELL,
+          y: MAP_TOP + ((mirror ? GAME_CONFIG.rows - 1 - event.sourceY : event.sourceY) + 0.5) * CELL,
+        };
     const targetPath = pathPoint(this.snapshot.mapIndex, event.targetProgress);
     const target = {
       x: ((mirror ? GAME_CONFIG.columns - 1 - targetPath.x : targetPath.x) + 0.5) * CELL,
@@ -955,8 +961,6 @@ export class BattleScene extends Phaser.Scene {
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const angle = Phaser.Math.Angle.Between(source.x, source.y, target.x, target.y);
     this.playAttackWake(source, target, event, style, reducedMotion);
-    const ultimate = this.heroUltimateName(event.unitKind, event.special);
-    if (ultimate) this.playHeroUltimate(event.unitKind, ultimate, source, target, style, reducedMotion);
     const sourceFlash = this.add.circle(source.x, source.y, event.special ? 22 : 14, style.color, 0.28).setStrokeStyle(4, style.accent, 0.92);
     this.effectsLayer.add(sourceFlash);
     this.tweens.add({ targets: sourceFlash, scale: 1.8, alpha: 0, duration: reducedMotion ? 80 : 220, onComplete: () => sourceFlash.destroy() });
@@ -1000,7 +1004,8 @@ export class BattleScene extends Phaser.Scene {
       }
     }
     if (!reducedMotion && style.variant === "spear") {
-      for (let index = 0; index < 3; index += 1) {
+      const thrustTrails = event.unitKind === "赵云" && event.hitCount >= 5 ? 5 : 3;
+      for (let index = 0; index < thrustTrails; index += 1) {
         const after = this.add.ellipse(source.x, source.y, 34 - index * 6, 8 - index, style.color, 0.24).setRotation(angle);
         this.effectsLayer.add(after);
         this.tweens.add({
@@ -1073,12 +1078,20 @@ export class BattleScene extends Phaser.Scene {
     });
   }
 
-  private heroUltimateName(kind: string, special: boolean) {
-    if (!special) return null;
-    return ({
-      "赵云": "七进七出", "张飞": "燕人怒吼", "关羽": "青龙跳斩", "黄忠": "火箭雨",
-      "关平": "破阵怒吼", "张翼": "疾风跳斩", "刘备": "仁德圣剑", "黄祖": "连环箭雨",
-    } as Record<string, string>)[kind] ?? null;
+  private playGeneralSkillEvent(event: Extract<BattleEvent, { type: "general-skill" }>) {
+    if (!this.snapshot) return;
+    const mirror = event.slot !== this.slot;
+    const source = this.effectCellPoint(event.sourceCell, event.secondaryCell, mirror);
+    const enemy = this.snapshot.players[event.slot].enemies.find((candidate) => candidate.id === event.targetId);
+    const path = enemy ? pathPoint(this.snapshot.mapIndex, enemy.progress) : null;
+    const target = path ? {
+      x: ((mirror ? GAME_CONFIG.columns - 1 - path.x : path.x) + 0.5) * CELL,
+      y: MAP_TOP + ((mirror ? GAME_CONFIG.rows - 1 - path.y : path.y) + 0.5) * CELL,
+    } : { x: WIDTH / 2, y: MAP_TOP + 400 };
+    this.playHeroUltimate(
+      event.unitKind, event.skillName, source, target, this.attackStyle(event.unitKind),
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    );
   }
 
   private playHeroUltimate(
@@ -1119,11 +1132,12 @@ export class BattleScene extends Phaser.Scene {
       duration: reducedMotion ? 100 : 520, ease: "Cubic.easeOut", onComplete: () => seal.destroy(),
     });
 
-    const burstCount = reducedMotion ? 4 : skillName.includes("箭雨") || skillName === "火箭雨" ? 12 : 8;
+    const burstCount = reducedMotion ? 4 : skillName.includes("箭雨") || skillName === "火箭烈" ? 12 : 8;
     const angle = Phaser.Math.Angle.Between(source.x, source.y, target.x, target.y);
     for (let index = 0; index < burstCount; index += 1) {
-      const spread = (index - (burstCount - 1) / 2) * (skillName.includes("怒吼") ? 0.24 : 0.1);
-      const length = skillName.includes("怒吼") ? 65 + index * 4 : 44 + (index % 3) * 12;
+      const radial = skillName === "大喝";
+      const spread = (index - (burstCount - 1) / 2) * (radial ? 0.24 : 0.1);
+      const length = radial ? 65 + index * 4 : 44 + (index % 3) * 12;
       const stroke = this.add.rectangle(source.x, source.y, length, index % 2 ? 5 : 8, index % 2 ? style.accent : style.color, 0.85)
         .setOrigin(0, 0.5).setRotation(angle + spread).setBlendMode(Phaser.BlendModes.ADD);
       this.effectsLayer.add(stroke);
@@ -1522,6 +1536,7 @@ export class BattleScene extends Phaser.Scene {
         (enemy.battleHasteMs ?? 0) > 0 ? `疾${Math.ceil((enemy.battleHasteMs ?? 0) / 1000)}s` : "",
         enemy.battleGiantApplied ? "巨" : "",
         (enemy.battleRallyMs ?? 0) > 0 ? `振${Math.ceil((enemy.battleRallyMs ?? 0) / 1000)}s` : "",
+        (enemy.generalSlowMs ?? 0) > 0 ? `缓${Math.ceil((enemy.generalSlowMs ?? 0) / 1000)}s` : "",
       ].filter(Boolean);
       visual.statusText.setText(statuses.join(" · "));
       const hasBuff = statuses.length > 0;

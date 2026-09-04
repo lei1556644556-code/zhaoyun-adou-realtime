@@ -1,7 +1,7 @@
 import {
   ACTIVE_PROP_IDS, BATTLE_BUFFS, BATTLE_BUFF_DROP, BOSS_CHANCES, BOSS_CONFIGS, BOSS_ENEMY_SPEED_PX_PER_SEC, BOSS_MILESTONES,
   DIFFICULTY_CURVES, DIFFICULTY_WEIGHTS, EARLY_ACCOUNT_SHOVEL_BONUS, GAME_CONFIG,
-  GENERAL_EXPERIENCE, GENERAL_LEVEL_ATTACK, GENERAL_LEVEL_SPEED, GENERALS, HERO_PAIRS, INTRO_ROUND_HP_MULTIPLIERS,
+  GENERAL_EXPERIENCE, GENERAL_LEVEL_ATTACK, GENERAL_LEVEL_SPEED, GENERALS, GENERAL_SKILLS, HERO_PAIRS, INTRO_ROUND_HP_MULTIPLIERS,
   MAP_LAYOUTS, NORMAL_ENEMY_SPEED_PX_PER_SEC, PASSIVE_PROP_IDS, PROPS, SOLDIER_LEVEL_ATTACK,
   RULESET_VERSION, RULES_CONFIG_SCHEMA_VERSION, SOLDIER_LEVEL_SPEED, SOLDIERS, TOKEN_POOL, WAVES,
   cellCode, cellCoords, initialOpenCells,
@@ -9,7 +9,8 @@ import {
 import { MATCH_SNAPSHOT_VERSION } from "./types";
 import type {
   BattleEvent, BattleEventPayload, CommandEnvelope, CommandErrorCode, CommandFailure, CommandResult, GameCommand,
-  EnemyState, MatchSnapshot, MatchSnapshotInput, PlayerBattleState, PlayerPropState, PlayerSlot, PropLoadout, ReserveItem, UnitState,
+  EnemyState, GeneralSkillName, MatchSnapshot, MatchSnapshotInput, PendingGeneralImpactState, PlayerBattleState, PlayerPropState,
+  PlayerSlot, PropLoadout, ReserveItem, UnitState, ZhaoPhantomState,
 } from "./types";
 import type { ActivePropId, BattleBuffKind, PassivePropId, SoldierKind } from "./config";
 
@@ -56,11 +57,17 @@ export function normalizeMatchSnapshot(snapshot: MatchSnapshotInput): MatchSnaps
     && incoming.version !== incoming.snapshotVersion) {
     throw new RangeError(`快照版本字段冲突：version=${String(incoming.version)}，snapshotVersion=${String(incoming.snapshotVersion)}`);
   }
+  if (incoming.rulesConfigSchemaVersion !== undefined
+    && incoming.rulesConfigSchemaVersion !== RULES_CONFIG_SCHEMA_VERSION
+    && incoming.rulesConfigSchemaVersion !== "1.4.0") {
+    throw new RangeError(`不支持的规则配置版本：${String(incoming.rulesConfigSchemaVersion)}`);
+  }
   const normalized = snapshot as MatchSnapshot;
   normalized.version ??= MATCH_SNAPSHOT_VERSION;
   normalized.snapshotVersion ??= MATCH_SNAPSHOT_VERSION;
   normalized.rulesetVersion ??= RULESET_VERSION;
-  normalized.rulesConfigSchemaVersion ??= RULES_CONFIG_SCHEMA_VERSION;
+  // 1.5.0 只增加可缺省的技能运行时字段；原 1.4.0 对局可以原地、安全升级。
+  normalized.rulesConfigSchemaVersion = RULES_CONFIG_SCHEMA_VERSION;
   normalized.events ??= [];
   normalized.eventSequence ??= 0;
   normalized.combatEvents ??= [];
@@ -72,6 +79,8 @@ export function normalizeMatchSnapshot(snapshot: MatchSnapshotInput): MatchSnaps
   for (const player of normalized.players) {
     player.introRound ??= 10;
     player.pendingArrowImpacts ??= [];
+    player.pendingGeneralImpacts ??= [];
+    player.zhaoPhantoms ??= [];
     player.rainBossIds ??= [];
     player.visionDarkMs ??= 0;
     player.battleBuffs ??= [];
@@ -88,9 +97,6 @@ export function normalizeMatchSnapshot(snapshot: MatchSnapshotInput): MatchSnaps
   }
   if (incoming.rulesetVersion !== undefined && incoming.rulesetVersion !== RULESET_VERSION) {
     throw new RangeError(`不支持的规则版本：${String(incoming.rulesetVersion)}`);
-  }
-  if (incoming.rulesConfigSchemaVersion !== undefined && incoming.rulesConfigSchemaVersion !== RULES_CONFIG_SCHEMA_VERSION) {
-    throw new RangeError(`不支持的规则配置版本：${String(incoming.rulesConfigSchemaVersion)}`);
   }
   return normalized;
 }
@@ -1477,10 +1483,198 @@ function maybeDropBattleBuff(snapshot: MatchSnapshot, player: PlayerBattleState,
   return config.kind;
 }
 
+function emitGeneralSkill(snapshot: MatchSnapshot, player: PlayerBattleState, unit: UnitState, skillName: GeneralSkillName, targetId?: string) {
+  emitBattleEvent(snapshot, {
+    type: "general-skill", slot: player.slot, unitId: unit.id, unitKind: unit.kind, skillName,
+    sourceCell: unit.cell, ...(unit.secondaryCell === undefined ? {} : { secondaryCell: unit.secondaryCell }),
+    ...(targetId === undefined ? {} : { targetId }),
+  });
+}
+
+function queueGeneralImpact(player: PlayerBattleState, unit: UnitState, impact: Omit<PendingGeneralImpactState, "sourceCell" | "secondaryCell">) {
+  player.pendingGeneralImpacts ??= [];
+  player.pendingGeneralImpacts.push({
+    ...impact, sourceCell: unit.cell,
+    ...(unit.secondaryCell === undefined ? {} : { secondaryCell: unit.secondaryCell }),
+  });
+}
+
+function scheduleJumpSlash(snapshot: MatchSnapshot, player: PlayerBattleState, unit: UnitState, damageValue: number, strikes: number) {
+  const config = unit.kind === "关羽" ? GENERAL_SKILLS.关羽 : GENERAL_SKILLS.张翼;
+  const playback = 1 + 0.2 * unit.level;
+  const initialTarget = [...player.enemies].filter((enemy) => enemy.hp > 0).sort((a, b) => b.progress - a.progress)[0];
+  if (!initialTarget) return;
+  emitGeneralSkill(snapshot, player, unit, "跳斩", initialTarget.id);
+  unit.generalSkillLockMs = strikes * 500 / playback + 500 / (0.8 * playback);
+  for (let strike = 0; strike < strikes; strike += 1) {
+    queueGeneralImpact(player, unit, {
+      id: `jump-slash-${unit.id}-${snapshot.tick}-${strike}`, unitId: unit.id, unitKind: unit.kind,
+      skillName: "跳斩", kind: "jump-slash", targetId: initialTarget.id, damage: damageValue,
+      remainingMs: (strike + 1) * 500 / playback,
+      splashRadiusCells: config.splashRadiusCells, splashDamageMultiplier: config.splashDamageMultiplier,
+    });
+  }
+}
+
+function scheduleHuangZuArrowRain(
+  snapshot: MatchSnapshot, player: PlayerBattleState, unit: UnitState, damageValue: number, targets: EnemyState[],
+) {
+  const config = GENERAL_SKILLS.黄祖;
+  const fallback = [...player.enemies].filter((enemy) => enemy.hp > 0).sort((a, b) => b.progress - a.progress)[0];
+  if (!targets.length && !fallback) return;
+  emitGeneralSkill(snapshot, player, unit, config.name, (targets[0] ?? fallback)?.id);
+  unit.generalSkillLockMs = (config.rounds - 1) * 500;
+  const rng = createRng(snapshot.seed ^ snapshot.tick ^ stringSeed(unit.id) ^ 0x485A);
+  for (let round = 0; round < config.rounds; round += 1) {
+    for (let arrow = 1; arrow <= config.arrowsPerRound; arrow += 1) {
+      const target = targets.length < config.arrowsPerRound
+        ? targets[arrow % targets.length] ?? fallback
+        : targets[Math.floor(rng.next() * targets.length)] ?? fallback;
+      if (!target) continue;
+      queueGeneralImpact(player, unit, {
+        id: `huangzu-arrow-${unit.id}-${snapshot.tick}-${round}-${arrow}`, unitId: unit.id, unitKind: unit.kind,
+        skillName: config.name, kind: "huangzu-arrow", targetId: target.id, damage: damageValue,
+        // 原包各箭追踪 1000–1199ms；每一轮由上一轮射击动画结束后继续。
+        remainingMs: round * 500 + config.projectileDelayMs + Math.floor(rng.next() * config.projectileDelayRangeMs),
+      });
+    }
+  }
+}
+
+function scheduleHolySword(
+  snapshot: MatchSnapshot, player: PlayerBattleState, unit: UnitState, damageValue: number, target: EnemyState,
+) {
+  const config = GENERAL_SKILLS.刘备;
+  emitGeneralSkill(snapshot, player, unit, config.name, target.id);
+  const first = cellCoords(unit.cell);
+  const second = unit.secondaryCell === undefined ? first : cellCoords(unit.secondaryCell);
+  const source = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
+  const targetPoint = enemyPathPoint(snapshot.mapIndex, target);
+  const dx = targetPoint.x - source.x; const dy = targetPoint.y - source.y;
+  const length = Math.max(0.0001, Math.hypot(dx, dy));
+  const direction = { x: dx / length, y: dy / length };
+  const hitTargets = player.enemies.filter((enemy) => {
+    if (enemy.hp <= 0) return false;
+    const point = enemyPathPoint(snapshot.mapIndex, enemy);
+    const offsetX = point.x - source.x; const offsetY = point.y - source.y;
+    const forward = offsetX * direction.x + offsetY * direction.y;
+    const perpendicular = Math.abs(offsetX * direction.y - offsetY * direction.x);
+    return forward >= 0 && perpendicular <= 0.7;
+  });
+  for (const [index, enemy] of hitTargets.entries()) {
+    const point = enemyPathPoint(snapshot.mapIndex, enemy);
+    const distancePx = Math.hypot(point.x - source.x, point.y - source.y) * ORIGINAL_CELL_PX;
+    queueGeneralImpact(player, unit, {
+      id: `holy-sword-${unit.id}-${snapshot.tick}-${index}`, unitId: unit.id, unitKind: unit.kind,
+      skillName: config.name, kind: "holy-sword", targetId: enemy.id,
+      damage: damageValue * config.damageMultiplier, remainingMs: distancePx / 300, stunMs: config.knockdownMs,
+    });
+  }
+}
+
+function scheduleZhaoPhantom(snapshot: MatchSnapshot, player: PlayerBattleState, unit: UnitState, damageValue: number) {
+  const target = [...player.enemies].filter((enemy) => enemy.hp > 0).sort((a, b) => b.progress - a.progress)[0];
+  if (!target) return;
+  const path = expandedPath(snapshot.mapIndex);
+  const pathIndex = Math.max(1, Math.min(path.length - 1, target.pathIndex ?? Math.floor(target.progress * (path.length - 1))));
+  const point = path[pathIndex]!;
+  emitGeneralSkill(snapshot, player, unit, GENERAL_SKILLS.赵云.name, target.id);
+  player.zhaoPhantoms ??= [];
+  player.zhaoPhantoms.push({
+    id: `zhao-phantom-${unit.id}-${snapshot.tick}`, unitId: unit.id, unitKind: "赵云",
+    x: point.x, y: point.y, pathIndex, direction: -1, roundTrips: 0,
+    pulseMs: GENERAL_SKILLS.赵云.pulseMs, launchMs: 500, damage: damageValue, hitEnemyIds: [],
+  });
+}
+
+function tickGeneralImpacts(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: number) {
+  const remaining: PendingGeneralImpactState[] = [];
+  for (const impact of player.pendingGeneralImpacts ?? []) {
+    impact.remainingMs -= deltaMs;
+    if (impact.remainingMs > 0) { remaining.push(impact); continue; }
+    let target = player.enemies.find((enemy) => enemy.id === impact.targetId && enemy.hp > 0);
+    if (impact.kind === "jump-slash") {
+      target = [...player.enemies].filter((enemy) => enemy.hp > 0).sort((a, b) => b.progress - a.progress)[0];
+    }
+    if (!target) continue;
+    const aliveBeforeImpact = new Set(player.enemies.filter((enemy) => enemy.hp > 0).map((enemy) => enemy.id));
+    const applied = damage(target, impact.damage);
+    let hitCount = 1;
+    if (impact.splashRadiusCells && impact.splashDamageMultiplier) {
+      const center = enemyPathPoint(snapshot.mapIndex, target);
+      for (const enemy of player.enemies) {
+        if (enemy.id === target.id || enemy.hp <= 0) continue;
+        if (!attackRangeIntersectsCell(center, enemyPathPoint(snapshot.mapIndex, enemy), impact.splashRadiusCells)) continue;
+        damage(enemy, impact.damage * impact.splashDamageMultiplier); hitCount += 1;
+      }
+    }
+    if (impact.stunMs) target.stunnedMs = Math.max(target.stunnedMs, impact.stunMs);
+    emitBattleEvent(snapshot, {
+      type: "attack", slot: player.slot, unitId: impact.unitId, unitKind: impact.unitKind,
+      sourceCell: impact.sourceCell, ...(impact.secondaryCell === undefined ? {} : { secondaryCell: impact.secondaryCell }),
+      targetId: target.id, targetProgress: target.progress, targetBoss: target.boss,
+      damage: applied, hitCount, special: true, skillName: impact.skillName,
+    });
+    const general = player.units.find((unit) => unit.id === impact.unitId);
+    if (general) grantGeneralExperienceForNewDefeats(snapshot, player, general, aliveBeforeImpact);
+  }
+  player.pendingGeneralImpacts = remaining;
+}
+
+function tickZhaoPhantoms(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: number) {
+  const path = expandedPath(snapshot.mapIndex);
+  const remaining: ZhaoPhantomState[] = [];
+  for (const phantom of player.zhaoPhantoms ?? []) {
+    phantom.launchMs = Math.max(0, phantom.launchMs - deltaMs);
+    if (phantom.launchMs > 0) { remaining.push(phantom); continue; }
+    let distanceCells = GENERAL_SKILLS.赵云.phantomSpeedPxPerSec * deltaMs / 1_000 / ORIGINAL_CELL_PX;
+    while (distanceCells > 0 && phantom.roundTrips < GENERAL_SKILLS.赵云.roundTrips) {
+      const nextIndex = phantom.pathIndex + phantom.direction;
+      if (nextIndex < 0) { phantom.direction = 1; phantom.hitEnemyIds = []; continue; }
+      if (nextIndex >= path.length) {
+        phantom.roundTrips += 1; phantom.hitEnemyIds = [];
+        if (phantom.roundTrips >= GENERAL_SKILLS.赵云.roundTrips) break;
+        phantom.direction = -1; continue;
+      }
+      const next = path[nextIndex]!;
+      const segment = Math.hypot(next.x - phantom.x, next.y - phantom.y);
+      if (segment <= distanceCells) {
+        phantom.x = next.x; phantom.y = next.y; phantom.pathIndex = nextIndex; distanceCells -= segment;
+      } else {
+        phantom.x += (next.x - phantom.x) / segment * distanceCells;
+        phantom.y += (next.y - phantom.y) / segment * distanceCells;
+        distanceCells = 0;
+      }
+    }
+    phantom.pulseMs -= deltaMs;
+    if (phantom.pulseMs <= 0 && phantom.roundTrips < GENERAL_SKILLS.赵云.roundTrips) {
+      phantom.pulseMs += GENERAL_SKILLS.赵云.pulseMs;
+      const targets = player.enemies.filter((enemy) => enemy.hp > 0
+        && Math.hypot(enemyPathPoint(snapshot.mapIndex, enemy).x - phantom.x, enemyPathPoint(snapshot.mapIndex, enemy).y - phantom.y) <= 0.75);
+      const aliveBeforePulse = new Set(player.enemies.filter((enemy) => enemy.hp > 0).map((enemy) => enemy.id));
+      for (const target of targets) damage(target, phantom.damage);
+      phantom.hitEnemyIds = targets.map((target) => target.id);
+      const target = targets[0];
+      if (target) {
+        emitBattleEvent(snapshot, {
+          type: "attack", slot: player.slot, unitId: phantom.unitId, unitKind: phantom.unitKind,
+          sourceCell: 0, sourceX: phantom.x, sourceY: phantom.y,
+          targetId: target.id, targetProgress: target.progress, targetBoss: target.boss,
+          damage: phantom.damage, hitCount: targets.length, special: true, skillName: "七进七出",
+        });
+        const general = player.units.find((unit) => unit.id === phantom.unitId);
+        if (general) grantGeneralExperienceForNewDefeats(snapshot, player, general, aliveBeforePulse);
+      }
+    }
+    if (phantom.roundTrips < GENERAL_SKILLS.赵云.roundTrips) remaining.push(phantom);
+  }
+  player.zhaoPhantoms = remaining;
+}
+
 function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: number) {
   const opponent = snapshot.players[player.slot === 0 ? 1 : 0];
   for (const unit of player.units) {
-    if ((unit.bossChaosMs ?? 0) > 0 || (unit.bossLockedMs ?? 0) !== 0) continue;
+    if ((unit.bossChaosMs ?? 0) > 0 || (unit.bossLockedMs ?? 0) !== 0 || (unit.generalSkillLockMs ?? 0) > 0) continue;
     const stats = unitStats(unit, player, opponent);
     if (!stats) continue;
     // 空窗期只让冷却恢复到“可攻击”，绝不能积累负冷却债务；否则敌人
@@ -1506,50 +1700,44 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
           const pa = enemyPathPoint(snapshot.mapIndex, a); const pb = enemyPathPoint(snapshot.mapIndex, b);
           return Math.hypot(pa.x - position.x, pa.y - position.y) - Math.hypot(pb.x - position.x, pb.y - position.y);
         })[0]!;
+    let attackValue = stats.attack;
+    if (unit.kind === "关羽") {
+      if (unit.repeatedTargetId === target.id) {
+        unit.repeatedTargetAttackBonus = Math.min(
+          (unit.repeatedTargetAttackBonus ?? 0) + GENERAL_SKILLS.关羽.repeatAttackStep,
+          GENERAL_SKILLS.关羽.repeatAttackMaximum,
+        );
+      } else {
+        unit.repeatedTargetId = target.id;
+        unit.repeatedTargetAttackBonus = 0;
+      }
+      attackValue *= 1 + (unit.repeatedTargetAttackBonus ?? 0);
+    }
     const aliveBeforeAttack = new Set(player.enemies.filter((enemy) => enemy.hp > 0).map((enemy) => enemy.id));
 
     // 原包 ta：关羽/张翼在累计普攻后的“下一次攻击”以跳斩替代普攻；
     // 每次跳斩主目标 100%，目标周围 2.5 格再承受 50% 溅射。
-    const jumpSlashCount = unit.kind === "关羽" && unit.attackCount >= 20 ? 5
-      : unit.kind === "张翼" && unit.attackCount >= 20 ? 1 : 0;
+    const jumpSlashCount = unit.kind === "关羽" && unit.attackCount >= GENERAL_SKILLS.关羽.attacks ? GENERAL_SKILLS.关羽.strikes
+      : unit.kind === "张翼" && unit.attackCount >= GENERAL_SKILLS.张翼.attacks ? GENERAL_SKILLS.张翼.strikes : 0;
     if (jumpSlashCount > 0) {
       unit.attackCount = 0;
       unit.cooldownMs = Math.max(0, stats.intervalMs + elapsedCooldown);
-      for (let slash = 0; slash < jumpSlashCount; slash += 1) {
-        const slashTarget = [...player.enemies].filter((enemy) => enemy.hp > 0)
-          .sort((a, b) => b.progress - a.progress)[0];
-        if (!slashTarget) break;
-        const impact = enemyPathPoint(snapshot.mapIndex, slashTarget);
-        const appliedDamage = damage(slashTarget, stats.attack);
-        let hitCount = 1;
-        for (const enemy of player.enemies) {
-          if (enemy.id === slashTarget.id || enemy.hp <= 0) continue;
-          const point = enemyPathPoint(snapshot.mapIndex, enemy);
-          if (!attackRangeIntersectsCell(impact, point, 2.5)) continue;
-          damage(enemy, stats.attack / 2);
-          hitCount += 1;
-        }
-        emitBattleEvent(snapshot, {
-          type: "attack", slot: player.slot, unitId: unit.id, unitKind: unit.kind,
-          sourceCell: unit.cell, ...(unit.secondaryCell === undefined ? {} : { secondaryCell: unit.secondaryCell }),
-          targetId: slashTarget.id, targetProgress: slashTarget.progress, targetBoss: slashTarget.boss,
-          damage: appliedDamage, hitCount, special: true,
-        });
-      }
-      grantGeneralExperienceForNewDefeats(snapshot, player, unit, aliveBeforeAttack);
+      scheduleJumpSlash(snapshot, player, unit, attackValue, jumpSlashCount);
       continue;
     }
 
     // 原包 eC 技能在计数达到阈值后的下一次攻击前释放；随后衔接的普攻不累计下一轮计数。
-    const shoutStunMs = unit.kind === "张飞" && unit.attackCount >= 15 ? 2_000
-      : unit.kind === "关平" && unit.attackCount >= 15 ? 1_000 : 0;
-    const fireArrowRain = unit.kind === "黄忠" && unit.attackCount >= 30;
-    const arrowRain = unit.kind === "黄祖" && unit.attackCount >= 30;
+    const shoutStunMs = unit.kind === "张飞" && unit.attackCount >= GENERAL_SKILLS.张飞.attacks ? GENERAL_SKILLS.张飞.stunMs
+      : unit.kind === "关平" && unit.attackCount >= GENERAL_SKILLS.关平.attacks ? GENERAL_SKILLS.关平.stunMs : 0;
+    const fireArrowRain = unit.kind === "黄忠" && unit.attackCount >= GENERAL_SKILLS.黄忠.attacks;
+    const arrowRain = unit.kind === "黄祖" && unit.attackCount >= GENERAL_SKILLS.黄祖.attacks;
     const preAttackSkill = shoutStunMs > 0 || fireArrowRain || arrowRain;
     if (preAttackSkill) unit.attackCount = 0;
 
-    const baseDamage = unit.kind === "骑" ? stats.attack / 2 : stats.attack;
-    const appliedBaseDamage = damage(target, baseDamage);
+    const baseDamage = unit.kind === "骑" ? attackValue / 2 : attackValue;
+    const normalStrikeCount = unit.kind === "赵云" ? GENERAL_SKILLS.赵云.normalThrusts : 1;
+    let appliedBaseDamage = 0;
+    for (let strike = 0; strike < normalStrikeCount; strike += 1) appliedBaseDamage += damage(target, baseDamage);
     if (!preAttackSkill) unit.attackCount += 1;
     unit.cooldownMs = Math.max(0, stats.intervalMs + elapsedCooldown);
     const effect = emitBattleEvent(snapshot, {
@@ -1563,7 +1751,7 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
       targetProgress: target.progress,
       targetBoss: target.boss,
       damage: appliedBaseDamage,
-      hitCount: 1,
+      hitCount: normalStrikeCount,
       special: false,
     } as Extract<BattleEventPayload, { type: "attack" }>);
 
@@ -1573,8 +1761,8 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
       for (const enemy of inRange) if (enemy.id !== target.id) {
         const point = enemyPathPoint(snapshot.mapIndex, enemy);
         if (!pikeThrustIntersectsCell(position, targetPoint, point)) continue;
-        damage(enemy, stats.attack);
-        effect.hitCount += 1;
+        for (let strike = 0; strike < normalStrikeCount; strike += 1) damage(enemy, attackValue);
+        effect.hitCount += normalStrikeCount;
       }
     }
     if (unit.kind === "骑") {
@@ -1598,43 +1786,51 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
     }
     if (shoutStunMs > 0) {
       for (const enemy of inRange) enemy.stunnedMs = Math.max(enemy.stunnedMs, shoutStunMs);
+      emitGeneralSkill(snapshot, player, unit, "大喝", target.id);
       effect.special = true;
       effect.hitCount = Math.max(effect.hitCount, inRange.length);
     }
+    if (unit.kind === "张飞") {
+      for (const enemy of inRange) {
+        enemy.generalSlowMultiplier = GENERAL_SKILLS.张飞.slowMultiplier;
+        enemy.generalSlowMs = Math.max(enemy.generalSlowMs ?? 0, GENERAL_SKILLS.张飞.slowMs);
+      }
+    }
     if (fireArrowRain) {
       // 原包 Na.TF/_R：整条 A* 路径逐格生成、洗牌并逐箭结算落点。
-      scheduleHuangZhongArrowRain(snapshot, player, unit, stats.attack);
+      emitGeneralSkill(snapshot, player, unit, GENERAL_SKILLS.黄忠.name, target.id);
+      scheduleHuangZhongArrowRain(snapshot, player, unit, attackValue);
       effect.special = true;
     }
     if (arrowRain) {
       // 原包 qa(30)：5 轮、每轮 10 箭；不足 10 个目标时按当前射程列表循环分配。
-      for (let arrow = 1; arrow <= 50; arrow += 1) {
-        const enemy = inRange[arrow % inRange.length];
-        if (enemy) damage(enemy, stats.attack);
-      }
-      effect.hitCount += 50;
+      scheduleHuangZuArrowRain(snapshot, player, unit, attackValue, inRange);
       effect.special = true;
     }
-    if (unit.kind === "赵云" && unit.attackCount >= 30) {
-      effect.damage += damage(target, stats.attack * 7);
+    if (unit.kind === "赵云" && unit.attackCount >= GENERAL_SKILLS.赵云.attacks) {
+      scheduleZhaoPhantom(snapshot, player, unit, attackValue);
       effect.special = true;
       unit.attackCount = 0;
     }
-    if (unit.kind === "刘备" && unit.attackCount >= 20) {
-      const skillDamage = damage(target, stats.attack * 5);
-      target.stunnedMs = Math.max(target.stunnedMs, 2_000);
-      effect.damage += skillDamage;
+    if (unit.kind === "刘备" && unit.attackCount >= GENERAL_SKILLS.刘备.attacks) {
+      scheduleHolySword(snapshot, player, unit, attackValue, target);
       effect.special = true;
       unit.attackCount = 0;
     }
     if (unit.kind === "马超") {
-      const chance = target.boss ? 0.1 : 0.3;
+      const skill = GENERAL_SKILLS.马超;
+      const chance = target.boss ? skill.bossChance : skill.normalChance;
       const roll = createRng(snapshot.seed ^ snapshot.tick ^ unit.attackCount ^ unit.id.length).next();
-      if (roll < chance) { target.stunnedMs = Math.max(target.stunnedMs, target.boss ? 200 : 500); effect.special = true; }
+      if (roll < chance) {
+        target.stunnedMs = Math.max(target.stunnedMs, target.boss ? skill.bossStunMs : skill.normalStunMs);
+        effect.damage += damage(target, target.maxHp * (target.boss ? skill.bossMaxHpDamage : skill.normalMaxHpDamage));
+        effect.special = true; effect.skillName = skill.name;
+      }
     }
     if ((unit.kind === "关兴" || unit.kind === "张苞") && !target.boss) {
       const roll = createRng(snapshot.seed ^ snapshot.tick ^ unit.attackCount ^ unit.id.length ^ 0x109).next();
-      if (roll < 0.1) { target.stunnedMs = Math.max(target.stunnedMs, 300); effect.special = true; }
+      const skill = GENERAL_SKILLS[unit.kind];
+      if (roll < skill.chance) { target.stunnedMs = Math.max(target.stunnedMs, skill.stunMs); effect.special = true; effect.skillName = skill.name; }
     }
     grantGeneralExperienceForNewDefeats(snapshot, player, unit, aliveBeforeAttack);
   }
@@ -1921,6 +2117,10 @@ function tickEnemyBuffs(enemy: EnemyState, deltaMs: number) {
       enemy.battleRallyBonusHp = 0;
     }
   }
+  if ((enemy.generalSlowMs ?? 0) > 0) {
+    enemy.generalSlowMs = Math.max(0, (enemy.generalSlowMs ?? 0) - deltaMs);
+    if (enemy.generalSlowMs === 0) enemy.generalSlowMultiplier = 1;
+  }
   if ((enemy.moveSpeedBuffMs ?? 0) > 0) {
     enemy.moveSpeedBuffMs = Math.max(0, (enemy.moveSpeedBuffMs ?? 0) - deltaMs);
     if (enemy.moveSpeedBuffMs === 0) {
@@ -2069,6 +2269,7 @@ function scheduleHuangZhongArrowRain(snapshot: MatchSnapshot, player: PlayerBatt
       x: point.x, y: point.y, damage: attackValue * 2, remainingMs: cumulativeDelay,
     });
   }
+  unit.generalSkillLockMs = cumulativeDelay;
 }
 
 function tickArrowRain(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: number) {
@@ -2185,7 +2386,7 @@ function advanceEnemyAlongOriginalPath(snapshot: MatchSnapshot, player: PlayerBa
     ? BOSS_ENEMY_SPEED_PX_PER_SEC : BOSS_CONFIGS[enemy.bossType]?.speedPxPerSec ?? BOSS_ENEMY_SPEED_PX_PER_SEC;
   const battleBuffSpeed = ((enemy.battleHasteMs ?? 0) > 0 ? 2 : 1) * ((enemy.battleRallyMs ?? 0) > 0 ? 1.2 : 1);
   const speed = (enemy.boss ? bossSpeed : NORMAL_ENEMY_SPEED_PX_PER_SEC) * silt
-    * (enemy.moveSpeedMultiplier ?? 1) * battleBuffSpeed;
+    * (enemy.moveSpeedMultiplier ?? 1) * (enemy.generalSlowMultiplier ?? 1) * battleBuffSpeed;
   const stepCells = speed * deltaMs / 1_000 / ORIGINAL_CELL_PX;
   enemy.pathX = (enemy.pathX ?? target.x) + dx / (distancePx / ORIGINAL_CELL_PX) * stepCells;
   enemy.pathY = (enemy.pathY ?? target.y) + dy / (distancePx / ORIGINAL_CELL_PX) * stepCells;
@@ -2196,6 +2397,7 @@ function tickProps(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: 
   const props = ensureProps(player);
   for (const id of props.loadout.active) props.cooldowns[id] = Math.max(0, (props.cooldowns[id] ?? 0) - deltaMs);
   for (const unit of player.units) {
+    if ((unit.generalSkillLockMs ?? 0) > 0) unit.generalSkillLockMs = Math.max(0, (unit.generalSkillLockMs ?? 0) - deltaMs);
     if ((unit.temporaryAttackSpeedMs ?? 0) > 0) {
       unit.temporaryAttackSpeedMs = Math.max(0, (unit.temporaryAttackSpeedMs ?? 0) - deltaMs);
       if (unit.temporaryAttackSpeedMs === 0) unit.temporaryAttackSpeedMultiplier = 1;
@@ -2331,6 +2533,8 @@ function tickPlayer(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs:
   }
   tickBossSkills(snapshot, player, deltaMs);
   tickArrowRain(snapshot, player, deltaMs);
+  tickGeneralImpacts(snapshot, player, deltaMs);
+  tickZhaoPhantoms(snapshot, player, deltaMs);
   attack(snapshot, player, deltaMs);
   tickBulldozer(snapshot, player, deltaMs);
   for (const enemy of player.enemies) {
