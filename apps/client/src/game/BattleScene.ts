@@ -62,6 +62,7 @@ export class BattleScene extends Phaser.Scene {
   private tileLayer!: Phaser.GameObjects.Container;
   private selectionGraphics!: Phaser.GameObjects.Graphics;
   private enemyLayer!: Phaser.GameObjects.Container;
+  private fieldEffectLayer!: Phaser.GameObjects.Container;
   private stateLayer!: Phaser.GameObjects.Container;
   private propTargetGraphics!: Phaser.GameObjects.Graphics;
   private effectsLayer!: Phaser.GameObjects.Container;
@@ -97,7 +98,8 @@ export class BattleScene extends Phaser.Scene {
     this.tileLayer = this.add.container(0, 0).setDepth(2);
     this.selectionGraphics = this.add.graphics().setDepth(4);
     this.enemyLayer = this.add.container(0, 0).setDepth(5);
-    this.stateLayer = this.add.container(0, 0).setDepth(6);
+    this.fieldEffectLayer = this.add.container(0, 0).setDepth(6);
+    this.stateLayer = this.add.container(0, 0).setDepth(7);
     this.propTargetGraphics = this.add.graphics().setDepth(20);
     this.effectsLayer = this.add.container(0, 0).setDepth(80);
     this.dragLayer = this.add.container(0, 0).setDepth(1000);
@@ -417,10 +419,22 @@ export class BattleScene extends Phaser.Scene {
     const opponent = this.snapshot.players[this.slot === 0 ? 1 : 0];
     const config = BATTLE_BUFFS.find((candidate) => candidate.kind === this.battleBuffDrag?.buffKind);
     const color = Number.parseInt((config?.color ?? "#f5c65d").slice(1), 16);
+    if (config?.target === "cell") {
+      for (let y = 0; y < GAME_CONFIG.rows / 2; y += 1) for (let x = 0; x < GAME_CONFIG.columns; x += 1) {
+        const canonicalCell = cellIndex(GAME_CONFIG.columns - 1 - x, GAME_CONFIG.rows - 1 - y);
+        const hover = this.battleBuffDrag.hover;
+        const hovered = Boolean(hover && "targetCell" in hover && hover.targetCell === canonicalCell);
+        const px = x * CELL + 6; const py = MAP_TOP + y * CELL + 6;
+        graphics.fillStyle(color, hovered ? 0.34 : 0.09).fillRoundedRect(px, py, CELL - 12, CELL - 12, 9);
+        graphics.lineStyle(hovered ? 7 : 2, color, hovered ? 1 : 0.72).strokeRoundedRect(px, py, CELL - 12, CELL - 12, 9);
+      }
+      return;
+    }
     for (const enemy of opponent.enemies) {
       if (enemy.hp <= 0 || enemy.progress >= 1) continue;
       const point = this.enemyVisualPoint(enemy, true);
-      const hovered = this.battleBuffDrag.hover?.targetEnemyId === enemy.id;
+      const hovered = this.battleBuffDrag.hover && "targetEnemyId" in this.battleBuffDrag.hover
+        && this.battleBuffDrag.hover.targetEnemyId === enemy.id;
       const scale = (enemy.scaleMultiplier ?? 1) * (enemy.battleGiantApplied ? 2 : 1);
       graphics.fillStyle(color, hovered ? 0.34 : 0.1).fillCircle(point.x, point.y, 31 * scale);
       graphics.lineStyle(hovered ? 7 : 3, color, hovered ? 1 : 0.8).strokeCircle(point.x, point.y, 34 * scale);
@@ -571,8 +585,6 @@ export class BattleScene extends Phaser.Scene {
       this.drawUnits(opponent, true, false);
       this.drawUnits(mine, false, true);
       this.drawCamp(mine);
-      this.drawBulldozer(mine, false);
-      this.drawBulldozer(opponent, true);
       if ((mine.visionDarkMs ?? 0) > 0) {
         this.stateLayer.add(this.add.rectangle(WIDTH / 2, MAP_TOP + 400, WIDTH, 800, 0x08121b, 0.67).setDepth(70));
         this.stateLayer.add(this.add.text(WIDTH / 2, MAP_TOP + 400, "噬 目", {
@@ -590,6 +602,7 @@ export class BattleScene extends Phaser.Scene {
     }
     this.hudLastEventText?.setText(mine.lastEvent);
     this.hudBunsText?.setText(String(mine.buns));
+    this.syncBattleFieldObjects(mine, opponent);
     this.syncEnemies(previous);
   }
 
@@ -621,7 +634,6 @@ export class BattleScene extends Phaser.Scene {
       unlockedCells: player.unlockedCells,
       placedProps: player.props?.placed,
       propLoadout: player.props?.loadout,
-      bulldozer: player.props?.bulldozer,
       visionDark: (player.visionDarkMs ?? 0) > 0,
     });
     return JSON.stringify({
@@ -794,7 +806,51 @@ export class BattleScene extends Phaser.Scene {
       this.add.rectangle(mirror ? 34 : -34, 9, 22, 50, 0xc49a58, 1).setStrokeStyle(3, 0x5f3828, 1),
       this.add.text(0, 0, "车", { fontFamily: '"KaiTi", serif', fontSize: "30px", color: "#fff0bc", fontStyle: "bold" }).setOrigin(0.5),
     ]);
-    this.stateLayer.add(body);
+    this.fieldEffectLayer.add(body);
+  }
+
+  private syncBattleFieldObjects(mine: PlayerBattleState, opponent: PlayerBattleState) {
+    this.fieldEffectLayer.removeAll(true);
+    this.drawBattleFieldEffects(mine, false);
+    this.drawBattleFieldEffects(opponent, true);
+    this.drawBulldozer(mine, false);
+    this.drawBulldozer(opponent, true);
+  }
+
+  private drawBattleFieldEffects(player: PlayerBattleState, mirror: boolean) {
+    const add = (object: Phaser.GameObjects.GameObject) => this.fieldEffectLayer.add(object);
+    for (const effect of player.battleFieldEffects ?? []) {
+      const source = cellCoords(effect.cell);
+      const displayed = mirror
+        ? { x: GAME_CONFIG.columns - 1 - source.x, y: GAME_CONFIG.rows - 1 - source.y }
+        : source;
+      const x = (displayed.x + 0.5) * CELL;
+      const y = MAP_TOP + (displayed.y + 0.5) * CELL;
+      if (effect.kind === "smoke") {
+        for (let offset = -2; offset <= 2; offset += 1) for (const axis of ["x", "y"] as const) {
+          if (offset === 0 && axis === "y") continue;
+          const cellX = displayed.x + (axis === "x" ? offset : 0);
+          const cellY = displayed.y + (axis === "y" ? offset : 0);
+          if (cellX < 0 || cellX >= GAME_CONFIG.columns || cellY < 0 || cellY >= GAME_CONFIG.rows) continue;
+          const cloud = this.add.ellipse((cellX + 0.5) * CELL, MAP_TOP + (cellY + 0.5) * CELL,
+            CELL * 0.92, CELL * 0.68, 0x91a7b1, 0.28).setStrokeStyle(2, 0xd6e3e7, 0.5);
+          add(cloud);
+        }
+        add(this.add.text(x, y, `${Math.ceil(effect.remainingMs / 1000)}s`, {
+          fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "17px", color: "#f2fbff", fontStyle: "bold",
+          stroke: "#40545c", strokeThickness: 4,
+        }).setOrigin(0.5));
+      } else {
+        const stake = this.add.container(x, y);
+        stake.add([
+          this.add.ellipse(0, 28, 45, 13, 0x23332c, 0.35),
+          this.add.rectangle(0, 0, 23, 61, 0x8e5a32, 1).setStrokeStyle(4, 0xe1b06b, 1),
+          this.add.rectangle(0, -15, 48, 12, 0x6e452a, 1),
+          this.add.text(0, 0, String(effect.remainingHits), { fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "17px", color: "#fff0c4", fontStyle: "bold" }).setOrigin(0.5),
+        ]);
+        add(stake);
+      }
+    }
   }
 
   private ownPiecePoint(kind: string, level: number) {
@@ -911,6 +967,7 @@ export class BattleScene extends Phaser.Scene {
       else if (event.type === "general-skill") this.playGeneralSkillEvent(event);
       else if (event.type === "boss-skill" && event.phase !== "resolved") this.playBossSkill(event);
       else if (event.type === "battle-buff-dropped" || event.type === "battle-buff-used") this.playBattleBuffEvent(event);
+      else if (event.type === "battle-field-effect-hit") this.playBattleFieldEffectHit(event);
       else if (event.type === "bulldozer" && event.phase === "push") this.cameras.main.shake(90, 0.0018);
     }
     if (this.playedEffectIds.size > 600) this.playedEffectIds.clear();
@@ -1039,9 +1096,11 @@ export class BattleScene extends Phaser.Scene {
       this.tweens.add({ targets: banner, alpha: 1, y: 1148, duration: 180, yoyo: true, hold: 850, onComplete: () => banner.destroy() });
       return;
     }
-    const visual = this.enemyVisuals.get(`${event.targetSlot}:${event.targetEnemyId}`);
-    const x = visual?.root.x ?? WIDTH / 2;
-    const y = visual?.root.y ?? MAP_TOP + 400;
+    const visual = event.targetEnemyId ? this.enemyVisuals.get(`${event.targetSlot}:${event.targetEnemyId}`) : undefined;
+    const mirror = event.targetSlot !== this.slot;
+    const cellPoint = event.targetCell === undefined ? null : this.effectCellPoint(event.targetCell, undefined, mirror);
+    const x = visual?.root.x ?? cellPoint?.x ?? WIDTH / 2;
+    const y = visual?.root.y ?? cellPoint?.y ?? MAP_TOP + 400;
     const ring = this.add.circle(x, y, 22, color, 0.2).setStrokeStyle(7, color, 1);
     const label = this.add.text(x, y - 50, config.name, {
       fontFamily: '"STKaiti", "KaiTi", serif', fontSize: "27px", color: "#fff4cf", fontStyle: "bold",
@@ -1051,6 +1110,23 @@ export class BattleScene extends Phaser.Scene {
     this.tweens.add({ targets: ring, scale: event.buffKind === "giant" ? 4.5 : 3, alpha: 0, duration: 520, onComplete: () => ring.destroy() });
     this.tweens.add({ targets: label, y: y - 82, alpha: 0, duration: 700, onComplete: () => label.destroy() });
     if (event.buffKind === "giant") this.cameras.main.shake(180, 0.003);
+  }
+
+  private playBattleFieldEffectHit(event: Extract<BattleEvent, { type: "battle-field-effect-hit" }>) {
+    const mirror = event.slot !== this.slot;
+    const source = this.effectCellPoint(event.sourceCell, event.secondaryCell, mirror);
+    const target = this.effectCellPoint(event.targetCell, undefined, mirror);
+    const streak = this.add.graphics().lineStyle(5, 0xf2c173, 0.9)
+      .beginPath().moveTo(source.x, source.y).lineTo(target.x, target.y).strokePath();
+    const impact = this.add.circle(target.x, target.y, 17, 0xffd184, 0.5).setStrokeStyle(5, 0x9f6234, 1);
+    const label = this.add.text(target.x, target.y - 43, event.remainingHits > 0 ? `木桩 ${event.remainingHits}` : "木桩击破", {
+      fontFamily: '"STKaiti", "KaiTi", serif', fontSize: "20px", color: "#fff1c7", fontStyle: "bold",
+      stroke: "#53351f", strokeThickness: 4,
+    }).setOrigin(0.5);
+    this.effectsLayer.add([streak, impact, label]);
+    this.tweens.add({ targets: [streak, impact, label], alpha: 0, duration: 380, onComplete: () => {
+      streak.destroy(); impact.destroy(); label.destroy();
+    }});
   }
 
   private playAttackWake(

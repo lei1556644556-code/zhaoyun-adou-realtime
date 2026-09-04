@@ -1,6 +1,6 @@
 /** 原作规则版本；与网络协议版本分开演进。 */
 export const RULESET_VERSION = "1.0.9" as const;
-export const RULES_CONFIG_SCHEMA_VERSION = "1.5.0" as const;
+export const RULES_CONFIG_SCHEMA_VERSION = "1.6.0" as const;
 
 export type RuleVerificationStatus =
   | "package-recorded"
@@ -140,7 +140,7 @@ export const RULE_PROVENANCE = {
   battleBuffDrops: {
     status: "project-adaptation",
     evidenceRefs: ["docs/contracts/battle-buff.md"],
-    note: "普通敌兵 8% 掉落四种等概率局内 BUFF，是产品新增互动机制，不属于原包 1.0.9。",
+    note: "普通敌兵 8% 掉落六种等概率局内 BUFF，是产品新增互动机制，不属于原包 1.0.9。",
   },
   authoritativeTickRate: {
     status: "project-adaptation",
@@ -316,7 +316,7 @@ export const GENERAL_EXPERIENCE = {
   verification: "pending-original-verification",
 } as const;
 
-export type BattleBuffKind = "invulnerable" | "haste" | "giant" | "rally";
+export type BattleBuffKind = "invulnerable" | "haste" | "giant" | "rally" | "smoke" | "decoy";
 
 export interface BattleBuffConfig {
   kind: BattleBuffKind;
@@ -325,14 +325,19 @@ export interface BattleBuffConfig {
   intro: string;
   color: string;
   durationMs: number | null;
+  target: "enemy" | "cell";
+  crossRangeCells?: number;
+  maxHits?: number;
 }
 
 /** 产品新增的局内互动 BUFF；顺序也是确定性等概率抽取顺序。 */
 export const BATTLE_BUFFS = [
-  { kind: "invulnerable", name: "金刚护体", glyph: "免", intro: "使目标怪物 5 秒内免疫任何伤害。", color: "#f5c65d", durationMs: 5_000 },
-  { kind: "haste", name: "疾行", glyph: "疾", intro: "使目标怪物移动速度翻倍，持续 10 秒。", color: "#56cfe1", durationMs: 10_000 },
-  { kind: "giant", name: "巨灵", glyph: "巨", intro: "使目标怪物放大 2 倍，当前生命和生命上限变为原来的 2.5 倍，持续至离场。", color: "#ef8354", durationMs: null },
-  { kind: "rally", name: "振奋", glyph: "振", intro: "半径 2 格内全体怪物移动速度和生命均 +20%，持续 6 秒。", color: "#9bde7e", durationMs: 6_000 },
+  { kind: "invulnerable", name: "金刚护体", glyph: "免", intro: "使目标怪物 5 秒内免疫任何伤害。", color: "#f5c65d", durationMs: 5_000, target: "enemy" },
+  { kind: "haste", name: "疾行", glyph: "疾", intro: "使目标怪物移动速度翻倍，持续 10 秒。", color: "#56cfe1", durationMs: 10_000, target: "enemy" },
+  { kind: "giant", name: "巨灵", glyph: "巨", intro: "使目标怪物放大 2 倍，当前生命和生命上限变为原来的 2.5 倍，持续至离场。", color: "#ef8354", durationMs: null, target: "enemy" },
+  { kind: "rally", name: "振奋", glyph: "振", intro: "半径 2 格内全体怪物移动速度和生命均 +20%，持续 6 秒。", color: "#9bde7e", durationMs: 6_000, target: "enemy" },
+  { kind: "smoke", name: "烟幕", glyph: "雾", intro: "拖到对方格子；烟雾沿上下左右各扩散 2 格，区域内怪物不会被士兵或武将攻击，持续 6 秒。", color: "#a7bac4", durationMs: 6_000, target: "cell", crossRangeCells: 2 },
+  { kind: "decoy", name: "诱敌木桩", glyph: "桩", intro: "拖到对方格子；攻击范围能覆盖木桩的士兵和武将必须优先攻击它，最多吸收 10 次攻击。", color: "#d39a62", durationMs: null, target: "cell", maxHits: 10 },
 ] as const satisfies readonly BattleBuffConfig[];
 
 export const BATTLE_BUFF_DROP = {

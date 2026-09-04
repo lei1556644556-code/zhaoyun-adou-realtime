@@ -2,7 +2,7 @@
 
 审计日期：2026-09-03；负责模块：01 规则与数值基线。
 
-机器配置：`packages/shared/src/config.ts` → `RULES_CONFIG_1_0_9`；规则版本：`1.0.9`；配置结构版本：`1.5.0`。
+机器配置：`packages/shared/src/config.ts` → `RULES_CONFIG_1_0_9`；规则版本：`1.0.9`；配置结构版本：`1.6.0`。
 
 ## 1. 审计结论
 

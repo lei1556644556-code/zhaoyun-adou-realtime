@@ -9,7 +9,7 @@ import {
 import { MATCH_SNAPSHOT_VERSION } from "./types";
 import type {
   BattleEvent, BattleEventPayload, CommandEnvelope, CommandErrorCode, CommandFailure, CommandResult, GameCommand,
-  EnemyState, GeneralSkillName, MatchSnapshot, MatchSnapshotInput, PendingGeneralImpactState, PlayerBattleState, PlayerPropState,
+  BattleFieldEffectState, EnemyState, GeneralSkillName, MatchSnapshot, MatchSnapshotInput, PendingGeneralImpactState, PlayerBattleState, PlayerPropState,
   PlayerSlot, PropLoadout, ReserveItem, UnitState, ZhaoPhantomState,
 } from "./types";
 import type { ActivePropId, BattleBuffKind, PassivePropId, SoldierKind } from "./config";
@@ -20,6 +20,7 @@ export interface Rng { next(): number; }
 // connected client. Bounding the ledger keeps long matches and their
 // Supabase checkpoints from growing with every drag and recruit forever.
 const ACCEPTED_COMMAND_HISTORY_LIMIT = 256;
+const SMOKE_CROSS_RANGE_CELLS = BATTLE_BUFFS.find((buff) => buff.kind === "smoke")?.crossRangeCells ?? 2;
 
 function trimAcceptedCommands(snapshot: MatchSnapshot) {
   const commandIds = Object.keys(snapshot.acceptedCommands);
@@ -59,6 +60,7 @@ export function normalizeMatchSnapshot(snapshot: MatchSnapshotInput): MatchSnaps
   }
   if (incoming.rulesConfigSchemaVersion !== undefined
     && incoming.rulesConfigSchemaVersion !== RULES_CONFIG_SCHEMA_VERSION
+    && incoming.rulesConfigSchemaVersion !== "1.5.0"
     && incoming.rulesConfigSchemaVersion !== "1.4.0") {
     throw new RangeError(`不支持的规则配置版本：${String(incoming.rulesConfigSchemaVersion)}`);
   }
@@ -66,7 +68,7 @@ export function normalizeMatchSnapshot(snapshot: MatchSnapshotInput): MatchSnaps
   normalized.version ??= MATCH_SNAPSHOT_VERSION;
   normalized.snapshotVersion ??= MATCH_SNAPSHOT_VERSION;
   normalized.rulesetVersion ??= RULESET_VERSION;
-  // 1.5.0 只增加可缺省的技能运行时字段；原 1.4.0 对局可以原地、安全升级。
+  // 1.5/1.6 只增加可缺省的技能、场地效果和补给状态；旧对局可原地、安全升级。
   normalized.rulesConfigSchemaVersion = RULES_CONFIG_SCHEMA_VERSION;
   normalized.events ??= [];
   normalized.eventSequence ??= 0;
@@ -84,6 +86,7 @@ export function normalizeMatchSnapshot(snapshot: MatchSnapshotInput): MatchSnaps
     player.rainBossIds ??= [];
     player.visionDarkMs ??= 0;
     player.battleBuffs ??= [];
+    player.battleFieldEffects ??= [];
     ensureProps(player);
     for (const unit of player.units) if (GENERALS[unit.kind]) {
       const floor = generalExperienceFloor(unit.kind, unit.level);
@@ -183,6 +186,7 @@ function ensureProps(player: PlayerBattleState) {
   player.props.charges ??= {};
   player.props.placed ??= [];
   player.props.shovelSupplyClaimed ??= false;
+  player.props.bulldozerSupplyClaimed ??= false;
   return player.props;
 }
 
@@ -209,7 +213,7 @@ function createPlayer(slot: PlayerSlot, mapIndex: number, introRound = 10): Play
     wave: 1, phase: "preparing", prepareMs: GAME_CONFIG.prepareMs,
     interwaveMs: 0, spawnMs: GAME_CONFIG.spawnMs, remainingToSpawn: firstWave[0],
     introRound: Math.max(0, Math.floor(introRound)),
-    units: [], reserve: [], unlockedCells: initialOpenCells(mapIndex), enemies: [], battleBuffs: [], props: emptyPropState(), lastEvent: "等待双方布阵",
+    units: [], reserve: [], unlockedCells: initialOpenCells(mapIndex), enemies: [], battleBuffs: [], battleFieldEffects: [], props: emptyPropState(), lastEvent: "等待双方布阵",
   };
 }
 
@@ -1187,6 +1191,26 @@ function applyRallyBuff(enemy: EnemyState) {
   enemy.battleRallyMs = 6_000;
 }
 
+function validBattleBuffCell(cell: number) {
+  if (!Number.isInteger(cell) || cell < 0 || cell >= GAME_CONFIG.rows * GAME_CONFIG.columns) return false;
+  // 对手的权威棋盘同样以自己位于下半场存储；玩家只可投放到其己方半场。
+  return cellCoords(cell).y >= GAME_CONFIG.rows / 2;
+}
+
+function effectCoversEnemy(snapshot: MatchSnapshot, effect: BattleFieldEffectState, enemy: EnemyState) {
+  if (effect.kind !== "smoke" || effect.remainingMs <= 0) return false;
+  const center = cellCoords(effect.cell);
+  const point = enemyPathPoint(snapshot.mapIndex, enemy);
+  const dx = Math.abs(point.x - center.x);
+  const dy = Math.abs(point.y - center.y);
+  return (dx <= SMOKE_CROSS_RANGE_CELLS && dy <= 0.5)
+    || (dy <= SMOKE_CROSS_RANGE_CELLS && dx <= 0.5);
+}
+
+function enemyHiddenBySmoke(snapshot: MatchSnapshot, player: PlayerBattleState, enemy: EnemyState) {
+  return (player.battleFieldEffects ?? []).some((effect) => effectCoversEnemy(snapshot, effect, enemy));
+}
+
 function useBattleBuff(
   snapshot: MatchSnapshot,
   player: PlayerBattleState,
@@ -1197,7 +1221,38 @@ function useBattleBuff(
   if (!item) return "该局内BUFF不存在或已经使用";
   const targetSlot: PlayerSlot = player.slot === 0 ? 1 : 0;
   const opponent = snapshot.players[targetSlot];
-  const target = opponent.enemies.find((enemy) => enemy.id === command.targetEnemyId && enemy.hp > 0 && enemy.progress < 1);
+  const config = BATTLE_BUFFS.find((candidate) => candidate.kind === item.kind);
+  if (!config) return "局内BUFF配置不存在";
+
+  if (config.target === "cell") {
+    if (command.targetCell === undefined || !validBattleBuffCell(command.targetCell)) return "请拖到对方半场的格子上";
+    const targetCell = command.targetCell;
+    opponent.battleFieldEffects ??= [];
+    if (item.kind === "smoke") {
+      const existing = opponent.battleFieldEffects.find((effect) => effect.kind === "smoke" && effect.cell === targetCell);
+      if (existing?.kind === "smoke") existing.remainingMs = config.durationMs ?? 6_000;
+      else opponent.battleFieldEffects.push({ id: `field-smoke-${item.id}`, kind: "smoke", cell: targetCell, remainingMs: config.durationMs ?? 6_000 });
+    } else if (item.kind === "decoy") {
+      if (opponent.battleFieldEffects.some((effect) => effect.kind === "decoy" && effect.cell === targetCell)) return "该格子已经有诱敌木桩";
+      opponent.battleFieldEffects.push({ id: `field-decoy-${item.id}`, kind: "decoy", cell: targetCell, remainingHits: "maxHits" in config ? config.maxHits : 10 });
+    } else {
+      return "局内BUFF目标类型不匹配";
+    }
+    player.battleBuffs = player.battleBuffs.filter((candidate) => candidate.id !== item.id);
+    player.lastEvent = `${config.name}已投放到对方棋盘`;
+    const affectedEnemyIds = item.kind === "smoke"
+      ? opponent.enemies.filter((enemy) => effectCoversEnemy(snapshot, { id: "preview", kind: "smoke", cell: targetCell, remainingMs: config.durationMs ?? 6_000 }, enemy)).map((enemy) => enemy.id)
+      : [];
+    emitBattleEvent(snapshot, {
+      type: "battle-buff-used", slot: player.slot, buffInstanceId: item.id, buffKind: item.kind,
+      targetSlot, targetCell, affectedEnemyIds,
+    });
+    return null;
+  }
+
+  const target = command.targetEnemyId
+    ? opponent.enemies.find((enemy) => enemy.id === command.targetEnemyId && enemy.hp > 0 && enemy.progress < 1)
+    : undefined;
   if (!target) return "请拖到正在进攻对方的怪物身上";
   if (item.kind === "giant" && target.battleGiantApplied) return "该怪物已经获得巨灵效果";
 
@@ -1221,7 +1276,6 @@ function useBattleBuff(
   }
 
   player.battleBuffs = player.battleBuffs.filter((candidate) => candidate.id !== item.id);
-  const config = BATTLE_BUFFS.find((candidate) => candidate.kind === item.kind);
   player.lastEvent = `${config?.name ?? "局内BUFF"}已施加给对方怪物`;
   emitBattleEvent(snapshot, {
     type: "battle-buff-used", slot: player.slot, buffInstanceId: item.id, buffKind: item.kind,
@@ -1350,7 +1404,10 @@ function validGameCommand(value: unknown): value is GameCommand {
         && (value.targetCell === undefined || isCellOrSlot(value.targetCell))
         && (value.reserveId === undefined || isNonEmptyString(value.reserveId));
     case "USE_BATTLE_BUFF":
-      return isNonEmptyString(value.buffInstanceId) && isNonEmptyString(value.targetEnemyId);
+      return isNonEmptyString(value.buffInstanceId)
+        && (value.targetEnemyId === undefined || isNonEmptyString(value.targetEnemyId))
+        && (value.targetCell === undefined || isCellOrSlot(value.targetCell))
+        && (value.targetEnemyId !== undefined || value.targetCell !== undefined);
     case "DROP_RESERVE":
       return isNonEmptyString(value.reserveId) && isCellOrSlot(value.targetCell);
     case "DROP_RESERVE_TO_SLOT":
@@ -1592,9 +1649,11 @@ function tickGeneralImpacts(snapshot: MatchSnapshot, player: PlayerBattleState, 
   for (const impact of player.pendingGeneralImpacts ?? []) {
     impact.remainingMs -= deltaMs;
     if (impact.remainingMs > 0) { remaining.push(impact); continue; }
-    let target = player.enemies.find((enemy) => enemy.id === impact.targetId && enemy.hp > 0);
+    let target = player.enemies.find((enemy) => enemy.id === impact.targetId && enemy.hp > 0
+      && !enemyHiddenBySmoke(snapshot, player, enemy));
     if (impact.kind === "jump-slash") {
-      target = [...player.enemies].filter((enemy) => enemy.hp > 0).sort((a, b) => b.progress - a.progress)[0];
+      target = [...player.enemies].filter((enemy) => enemy.hp > 0 && !enemyHiddenBySmoke(snapshot, player, enemy))
+        .sort((a, b) => b.progress - a.progress)[0];
     }
     if (!target) continue;
     const aliveBeforeImpact = new Set(player.enemies.filter((enemy) => enemy.hp > 0).map((enemy) => enemy.id));
@@ -1603,7 +1662,7 @@ function tickGeneralImpacts(snapshot: MatchSnapshot, player: PlayerBattleState, 
     if (impact.splashRadiusCells && impact.splashDamageMultiplier) {
       const center = enemyPathPoint(snapshot.mapIndex, target);
       for (const enemy of player.enemies) {
-        if (enemy.id === target.id || enemy.hp <= 0) continue;
+        if (enemy.id === target.id || enemy.hp <= 0 || enemyHiddenBySmoke(snapshot, player, enemy)) continue;
         if (!attackRangeIntersectsCell(center, enemyPathPoint(snapshot.mapIndex, enemy), impact.splashRadiusCells)) continue;
         damage(enemy, impact.damage * impact.splashDamageMultiplier); hitCount += 1;
       }
@@ -1649,7 +1708,7 @@ function tickZhaoPhantoms(snapshot: MatchSnapshot, player: PlayerBattleState, de
     phantom.pulseMs -= deltaMs;
     if (phantom.pulseMs <= 0 && phantom.roundTrips < GENERAL_SKILLS.赵云.roundTrips) {
       phantom.pulseMs += GENERAL_SKILLS.赵云.pulseMs;
-      const targets = player.enemies.filter((enemy) => enemy.hp > 0
+      const targets = player.enemies.filter((enemy) => enemy.hp > 0 && !enemyHiddenBySmoke(snapshot, player, enemy)
         && Math.hypot(enemyPathPoint(snapshot.mapIndex, enemy).x - phantom.x, enemyPathPoint(snapshot.mapIndex, enemy).y - phantom.y) <= 0.75);
       const aliveBeforePulse = new Set(player.enemies.filter((enemy) => enemy.hp > 0).map((enemy) => enemy.id));
       for (const target of targets) damage(target, phantom.damage);
@@ -1682,12 +1741,41 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
     // 让固定步长下的平均攻击间隔继续贴近配置值。
     const elapsedCooldown = Math.max(0, unit.cooldownMs) - deltaMs;
     unit.cooldownMs = Math.max(0, elapsedCooldown);
-    if (player.enemies.length === 0) continue;
     const firstPosition = cellCoords(unit.cell);
     const secondPosition = unit.secondaryCell === undefined ? firstPosition : cellCoords(unit.secondaryCell);
     const position = { x: (firstPosition.x + secondPosition.x) / 2, y: (firstPosition.y + secondPosition.y) / 2 };
+    const decoy = [...(player.battleFieldEffects ?? [])]
+      .filter((effect): effect is Extract<BattleFieldEffectState, { kind: "decoy" }> => effect.kind === "decoy"
+        && effect.remainingHits > 0 && attackRangeIntersectsCell(position, cellCoords(effect.cell), stats.range))
+      .sort((a, b) => {
+        const pa = cellCoords(a.cell); const pb = cellCoords(b.cell);
+        return Math.hypot(pa.x - position.x, pa.y - position.y) - Math.hypot(pb.x - position.x, pb.y - position.y)
+          || a.id.localeCompare(b.id);
+      })[0];
+    if (decoy) {
+      if (elapsedCooldown > 0) continue;
+      decoy.remainingHits -= 1;
+      unit.attackCount += 1;
+      unit.cooldownMs = Math.max(0, stats.intervalMs + elapsedCooldown);
+      if (unit.kind === "关羽") {
+        unit.repeatedTargetId = decoy.id;
+        unit.repeatedTargetAttackBonus = 0;
+      }
+      emitBattleEvent(snapshot, {
+        type: "battle-field-effect-hit", slot: player.slot, effectId: decoy.id, effectKind: "decoy",
+        unitId: unit.id, unitKind: unit.kind, sourceCell: unit.cell,
+        ...(unit.secondaryCell === undefined ? {} : { secondaryCell: unit.secondaryCell }),
+        targetCell: decoy.cell, remainingHits: decoy.remainingHits,
+      });
+      if (decoy.remainingHits <= 0) {
+        player.battleFieldEffects = (player.battleFieldEffects ?? []).filter((effect) => effect.id !== decoy.id);
+        player.lastEvent = "诱敌木桩已被击破";
+      }
+      continue;
+    }
+    if (player.enemies.length === 0) continue;
     const inRange = player.enemies.filter((enemy) => {
-      if (enemy.hp <= 0) return false;
+      if (enemy.hp <= 0 || enemyHiddenBySmoke(snapshot, player, enemy)) return false;
       const point = enemyPathPoint(snapshot.mapIndex, enemy);
       return attackRangeIntersectsCell(position, point, stats.range);
     });
@@ -2278,7 +2366,7 @@ function tickArrowRain(snapshot: MatchSnapshot, player: PlayerBattleState, delta
   for (const impact of pending) {
     impact.remainingMs -= deltaMs;
     if (impact.remainingMs > 0) { remaining.push(impact); continue; }
-    const targets = player.enemies.filter((enemy) => enemy.hp > 0
+    const targets = player.enemies.filter((enemy) => enemy.hp > 0 && !enemyHiddenBySmoke(snapshot, player, enemy)
       && Math.hypot(enemyPathPoint(snapshot.mapIndex, enemy).x + 0.5 - impact.x,
         enemyPathPoint(snapshot.mapIndex, enemy).y + 0.5 - impact.y) <= 150 / ORIGINAL_CELL_PX);
     const aliveBeforeImpact = new Set(targets.map((target) => target.id));
@@ -2295,7 +2383,7 @@ function tickArrowRain(snapshot: MatchSnapshot, player: PlayerBattleState, delta
 
 export function bulldozerSupplyAvailable(snapshot: MatchSnapshot, player: PlayerBattleState) {
   const props = ensureProps(player);
-  if (props.bulldozer) return false;
+  if (props.bulldozer || props.bulldozerSupplyClaimed) return false;
   const route = expandedPath(snapshot.mapIndex);
   return player.enemies.some((enemy) => route.length - (enemy.pathIndex ?? 1) <= 5);
 }
@@ -2310,7 +2398,9 @@ function claimBulldozerSupply(snapshot: MatchSnapshot, player: PlayerBattleState
     if (routeIndices.length > 11) break;
   }
   const start = route[startIndex] ?? { x: 0, y: 0 };
-  ensureProps(player).bulldozer = { x: start.x, y: start.y, routeIndices, cursor: 0, phase: "moving", fadeMs: 5_000 };
+  const props = ensureProps(player);
+  props.bulldozerSupplyClaimed = true;
+  props.bulldozer = { x: start.x, y: start.y, routeIndices, cursor: 0, phase: "moving", fadeMs: 5_000 };
   emitBattleEvent(snapshot, { type: "bulldozer", slot: player.slot, phase: "launched", targetIds: [] });
   player.lastEvent = "推土车出动（原广告补给已直接领取）";
   return null;
@@ -2504,6 +2594,17 @@ function tickProps(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: 
   }
 }
 
+function tickBattleFieldEffects(player: PlayerBattleState, deltaMs: number) {
+  const remaining: BattleFieldEffectState[] = [];
+  for (const effect of player.battleFieldEffects ?? []) {
+    if (effect.kind === "smoke") {
+      effect.remainingMs = Math.max(0, effect.remainingMs - deltaMs);
+      if (effect.remainingMs > 0) remaining.push(effect);
+    } else if (effect.remainingHits > 0) remaining.push(effect);
+  }
+  player.battleFieldEffects = remaining;
+}
+
 function advanceWave(player: PlayerBattleState) {
   if (player.wave >= GAME_CONFIG.maxWaves) {
     player.phase = "finished";
@@ -2526,6 +2627,7 @@ function tickPlayer(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs:
   }
   if (player.phase !== "battle") return;
   tickProps(snapshot, player, deltaMs);
+  tickBattleFieldEffects(player, deltaMs);
   player.spawnMs -= deltaMs;
   if (player.remainingToSpawn > 0 && player.spawnMs <= 0) {
     spawnEnemy(snapshot, player);

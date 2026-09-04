@@ -1,5 +1,5 @@
 import {
-  GAME_CONFIG, PROPS, cellCode, cellCoords, cellIndex, enemyPathPoint,
+  BATTLE_BUFFS, GAME_CONFIG, PROPS, cellCode, cellCoords, cellIndex, enemyPathPoint,
   type ActivePropId, type BattleBuffKind, type GameCommand, type MatchSnapshot, type PlayerSlot,
 } from "@adou/shared";
 
@@ -59,11 +59,9 @@ export type ActivePropDropPayload =
   | Readonly<{ propId: ActivePropId; targetCell: number }>
   | Readonly<{ propId: ActivePropId; reserveId: string }>;
 
-export type BattleBuffDropPayload = Readonly<{
-  buffInstanceId: string;
-  buffKind: BattleBuffKind;
-  targetEnemyId: string;
-}>;
+export type BattleBuffDropPayload =
+  | Readonly<{ buffInstanceId: string; buffKind: BattleBuffKind; targetEnemyId: string }>
+  | Readonly<{ buffInstanceId: string; buffKind: BattleBuffKind; targetCell: number }>;
 
 export function createPointerGesture(pointerId: number, start: Point, threshold: number): PointerGesture {
   return { pointerId, start, current: start, threshold, dragging: false };
@@ -196,6 +194,17 @@ export function battleBuffDropTargetAt(
   buffKind: BattleBuffKind,
   point: Point,
 ): BattleBuffDropPayload | null {
+  const config = BATTLE_BUFFS.find((candidate) => candidate.kind === buffKind);
+  if (config?.target === "cell") {
+    const board = battleDropTargetAt(point, "generalPart");
+    if (board.type !== "cell") return null;
+    const displayed = cellCoords(board.targetCell);
+    if (displayed.y >= GAME_CONFIG.rows / 2) return null;
+    return {
+      buffInstanceId, buffKind,
+      targetCell: cellIndex(GAME_CONFIG.columns - 1 - displayed.x, GAME_CONFIG.rows - 1 - displayed.y),
+    };
+  }
   const opponent = snapshot.players[viewerSlot === 0 ? 1 : 0];
   let best: { id: string; distance: number } | null = null;
   for (const enemy of opponent.enemies) {
@@ -214,5 +223,6 @@ export function battleBuffDropTargetAt(
 }
 
 export function commandForBattleBuffDrop(payload: BattleBuffDropPayload): GameCommand {
-  return { type: "USE_BATTLE_BUFF", buffInstanceId: payload.buffInstanceId, targetEnemyId: payload.targetEnemyId };
+  return { type: "USE_BATTLE_BUFF", buffInstanceId: payload.buffInstanceId,
+    ...( "targetEnemyId" in payload ? { targetEnemyId: payload.targetEnemyId } : { targetCell: payload.targetCell }) };
 }

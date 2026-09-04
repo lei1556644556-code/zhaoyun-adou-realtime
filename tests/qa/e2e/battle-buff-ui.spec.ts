@@ -18,6 +18,8 @@ function battleBuffSnapshot() {
     { id: "buff-haste", kind: "haste" },
     { id: "buff-giant", kind: "giant" },
     { id: "buff-rally", kind: "rally" },
+    { id: "buff-smoke", kind: "smoke" },
+    { id: "buff-decoy", kind: "decoy" },
   ];
   snapshot.players[1].enemies = [{
     id: "inspect-boss", hp: 700, maxHp: 700, progress: 0, boss: true, bossType: 0, stunnedMs: 0,
@@ -35,13 +37,22 @@ test("shows buff details, boss skills, and drags a buff to the opponent monster"
   await openRestoredBattle(page);
   const dock = page.locator("#battle-buff-dock");
   await expect(dock).toBeVisible();
-  await expect(page.locator("#battle-buff-bar button")).toHaveCount(4);
+  await expect(page.locator("#battle-buff-bar button")).toHaveCount(6);
   const dockBox = await dock.boundingBox();
   const recruitLeft = await designPoint(page, 188, 1222);
   const campBottom = await designPoint(page, 95, 1140);
   expect(dockBox).not.toBeNull();
   expect(dockBox!.x + dockBox!.width).toBeLessThanOrEqual(recruitLeft.x + 8);
   expect(dockBox!.y).toBeGreaterThanOrEqual(campBottom.y - 1);
+
+  const next = page.locator("#battle-buff-next");
+  await expect(next).toBeEnabled();
+  await next.click();
+  await expect.poll(() => page.locator("#battle-buff-bar").evaluate((bar) => bar.scrollLeft)).toBeGreaterThan(0);
+  await page.locator('[data-battle-buff-kind="smoke"]').click();
+  await expect(page.locator("#unit-inspector-name")).toHaveText("烟幕");
+  await expect(page.locator("#unit-inspector-level")).toContainText("对方格子");
+  await page.locator("#unit-inspector-close").click();
 
   await page.locator('[data-battle-buff-kind="rally"]').click();
   await expect(page.locator("#unit-inspector-name")).toHaveText("振奋");
@@ -71,6 +82,25 @@ test("shows buff details, boss skills, and drags a buff to the opponent monster"
     const saved = raw ? JSON.parse(raw) : null;
     return saved?.snapshot?.players?.[1]?.enemies?.[0]?.battleInvulnerableMs;
   }, QA_USER_ID)).toBe(5_000);
+
+  await page.locator("#battle-buff-next").click();
+  const smoke = page.locator('[data-battle-buff-kind="smoke"]');
+  await smoke.scrollIntoViewIfNeeded();
+  await expect(smoke).toBeVisible();
+  const smokeSource = await smoke.boundingBox();
+  const smokeCell = await designPoint(page, 280, 480);
+  expect(smokeSource).not.toBeNull();
+  await page.mouse.move(smokeSource!.x + smokeSource!.width / 2, smokeSource!.y + smokeSource!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(smokeSource!.x + smokeSource!.width / 2 + 18, smokeSource!.y + smokeSource!.height / 2, { steps: 3 });
+  await page.mouse.move(smokeCell.x, smokeCell.y, { steps: 12 });
+  await page.mouse.up();
+  await expect(smoke).toHaveCount(0);
+  await expect.poll(() => page.evaluate((userId) => {
+    const raw = localStorage.getItem(`adou-practice-save-v1:${userId}`);
+    const saved = raw ? JSON.parse(raw) : null;
+    return saved?.snapshot?.players?.[1]?.battleFieldEffects?.[0]?.kind;
+  }, QA_USER_ID)).toBe("smoke");
 
   await testInfo.attach(`${testInfo.project.name}-battle-buffs`, {
     body: await page.screenshot({ fullPage: true }), contentType: "image/png",

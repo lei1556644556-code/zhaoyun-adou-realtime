@@ -97,6 +97,10 @@ export interface BattleBuffItem {
   kind: BattleBuffKind;
 }
 
+export type BattleFieldEffectState =
+  | { id: string; kind: "smoke"; cell: number; remainingMs: number }
+  | { id: string; kind: "decoy"; cell: number; remainingHits: number };
+
 export interface ArrowRainImpactState {
   id: string;
   unitId: string;
@@ -177,6 +181,8 @@ export interface PlayerPropState {
   shovelSupplyClaimed?: boolean;
   /** 原包敌军距终点 5 个路径节点时出现的推土车广告补给；网页端直接领取。 */
   bulldozer?: BulldozerState;
+  /** 推土车补给每局只可领取一次；载具离场后仍保持为 true。 */
+  bulldozerSupplyClaimed?: boolean;
 }
 
 export interface BattleEventBase {
@@ -296,8 +302,21 @@ export type BattleEventPayload =
     buffInstanceId: string;
     buffKind: BattleBuffKind;
     targetSlot: PlayerSlot;
-    targetEnemyId: string;
+    targetEnemyId?: string;
+    targetCell?: number;
     affectedEnemyIds: string[];
+  }
+  | {
+    type: "battle-field-effect-hit";
+    slot: PlayerSlot;
+    effectId: string;
+    effectKind: "decoy";
+    unitId: string;
+    unitKind: string;
+    sourceCell: number;
+    secondaryCell?: number;
+    targetCell: number;
+    remainingHits: number;
   }
   | {
     type: "boss-skill";
@@ -405,6 +424,8 @@ export interface PlayerBattleState {
   enemies: EnemyState[];
   /** 仅在当前对局快照中存在，不进入账号道具数据库。 */
   battleBuffs?: BattleBuffItem[];
+  /** 对手投放到本方棋盘的烟幕和诱敌木桩，仅在当前对局存在。 */
+  battleFieldEffects?: BattleFieldEffectState[];
   pendingArrowImpacts?: ArrowRainImpactState[];
   pendingGeneralImpacts?: PendingGeneralImpactState[];
   zhaoPhantoms?: ZhaoPhantomState[];
@@ -474,7 +495,7 @@ export type GameCommand =
   | { type: "RECRUIT" }
   | { type: "SET_PROP_LOADOUT"; loadout: PropLoadout; earlyAccountShovelBonus?: boolean }
   | { type: "USE_PROP"; propId: ActivePropId; targetUnitId?: string; targetEnemyId?: string; targetCell?: number; reserveId?: string }
-  | { type: "USE_BATTLE_BUFF"; buffInstanceId: string; targetEnemyId: string }
+  | { type: "USE_BATTLE_BUFF"; buffInstanceId: string; targetEnemyId?: string; targetCell?: number }
   | { type: "CLAIM_SHOVEL_SUPPLY" }
   | { type: "CLAIM_BULLDOZER_SUPPLY" }
   | { type: "DROP_RESERVE"; reserveId: string; targetCell: number }

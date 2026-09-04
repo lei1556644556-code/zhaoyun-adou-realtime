@@ -218,9 +218,12 @@ button { touch-action: manipulation; }
 body.is-dragging-prop, body.is-dragging-prop * { cursor: grabbing !important; }
 .battle-buff-dock { position: absolute; z-index: 18; left: 1.4cqw; bottom: 16.875cqw; display: flex; width: 27.5cqw; height: 17.5cqw; min-height: 54px; max-height: 76px; flex-direction: column; border: 1px solid rgba(239,198,94,.74); border-radius: 10px; padding: 4px; background: rgba(37,65,55,.93); box-shadow: 0 9px 25px rgba(24,42,36,.35); }
 .battle-buff-dock > span { display: block; flex: 0 0 auto; margin-bottom: 2px; color: #ffe9a6; font-size: 9px; font-weight: 900; letter-spacing: .06em; text-align: center; }
-.battle-buff-bar { display: flex; flex: 1; gap: 4px; min-height: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.battle-buff-controls { display: flex; flex: 1; min-height: 0; gap: 3px; overflow: hidden; }
+.battle-buff-page { flex: 0 0 18px; min-width: 0; border: 0; border-radius: 6px; padding: 0; background: rgba(255,233,166,.17); color: #ffe9a6; cursor: pointer; font: 900 18px/1 sans-serif; }
+.battle-buff-page:disabled { opacity: .2; cursor: default; }
+.battle-buff-bar { display: flex; flex: 1; gap: 4px; min-width: 0; min-height: 0; overflow-x: auto; overflow-y: hidden; scroll-behavior: smooth; scroll-snap-type: x mandatory; scrollbar-width: none; }
 .battle-buff-bar::-webkit-scrollbar { display: none; }
-.battle-buff-bar button { position: relative; display: flex; flex: 0 0 42px; align-items: center; justify-content: center; min-width: 0; border: 1px solid color-mix(in srgb, var(--buff-color), transparent 30%); border-radius: 8px; padding: 3px; background: rgba(255,250,229,.96); color: #354f45; cursor: grab; touch-action: none; user-select: none; }
+.battle-buff-bar button { position: relative; display: flex; flex: 0 0 42px; align-items: center; justify-content: center; min-width: 0; border: 1px solid color-mix(in srgb, var(--buff-color), transparent 30%); border-radius: 8px; padding: 3px; background: rgba(255,250,229,.96); color: #354f45; cursor: grab; scroll-snap-align: start; touch-action: none; user-select: none; }
 .battle-buff-bar button i { display: grid; place-items: center; width: 28px; height: 31px; border-radius: 7px; background: #284a3d; color: var(--buff-color); font: 900 19px/1 "KaiTi", serif; font-style: normal; }
 .battle-buff-bar button b { display: none; }
 .battle-buff-bar button em { position: absolute; right: 3px; bottom: 1px; color: #99533d; font-size: 9px; font-style: normal; font-weight: 900; }

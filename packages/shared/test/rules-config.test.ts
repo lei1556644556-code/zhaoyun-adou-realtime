@@ -58,15 +58,16 @@ describe("1.0.9 versioned rules config", () => {
     expect(RULES_CONFIG_1_0_9.waves.bossSkills).toBe(BOSS_SKILL_RULES);
   });
 
-  it("publishes the four equal-probability project battle buffs and 8% normal-enemy drop rule", () => {
+  it("publishes the six equal-probability project battle buffs and 8% normal-enemy drop rule", () => {
     expect(RULES_CONFIG_1_0_9.battleBuffs.catalog).toBe(BATTLE_BUFFS);
     expect(RULES_CONFIG_1_0_9.battleBuffs.drop).toBe(BATTLE_BUFF_DROP);
     expect(BATTLE_BUFF_DROP).toEqual({ chance: 0.08, eligible: "normal-enemy-defeat", selection: "uniform" });
-    expect(BATTLE_BUFFS.map((buff) => buff.kind)).toEqual(["invulnerable", "haste", "giant", "rally"]);
+    expect(BATTLE_BUFFS.map((buff) => buff.kind)).toEqual(["invulnerable", "haste", "giant", "rally", "smoke", "decoy"]);
+    expect(BATTLE_BUFFS.slice(-2).map((buff) => buff.target)).toEqual(["cell", "cell"]);
   });
   it("publishes one versioned entry point and honest evidence metadata", () => {
     expect(RULES_CONFIG_1_0_9.rulesetVersion).toBe("1.0.9");
-    expect(RULES_CONFIG_1_0_9.schemaVersion).toBe("1.5.0");
+    expect(RULES_CONFIG_1_0_9.schemaVersion).toBe("1.6.0");
     expect(RULES_CONFIG_1_0_9.evidence).toBe(RULE_EVIDENCE_SOURCES);
     expect(RULES_CONFIG_1_0_9.provenance).toBe(RULE_PROVENANCE);
     expect(RULE_EVIDENCE_SOURCES.originalPackage.artifactPath).toBeNull();

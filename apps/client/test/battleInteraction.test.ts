@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GAME_CONFIG, cellCoords, cloneSnapshot, createMatch } from "@adou/shared";
+import { GAME_CONFIG, cellCoords, cellIndex, cloneSnapshot, createMatch } from "@adou/shared";
 import {
   BATTLE_INPUT,
   BATTLE_LAYOUT,
@@ -169,5 +169,21 @@ describe("in-match buff dragging", () => {
   it("maps the visual drop to the authoritative buff command", () => {
     expect(commandForBattleBuffDrop({ buffInstanceId: "buff-2", buffKind: "rally", targetEnemyId: "enemy-9" }))
       .toEqual({ type: "USE_BATTLE_BUFF", buffInstanceId: "buff-2", targetEnemyId: "enemy-9" });
+    expect(commandForBattleBuffDrop({ buffInstanceId: "buff-3", buffKind: "smoke", targetCell: cellIndex(3, 8) }))
+      .toEqual({ type: "USE_BATTLE_BUFF", buffInstanceId: "buff-3", targetCell: cellIndex(3, 8) });
+  });
+
+  it("maps smoke and decoy drops from the visible opponent half to canonical cells", () => {
+    const snapshot = createMatch("cell-buff-drag", 18, 0);
+    const visible = { x: 2, y: 3 };
+    const point = {
+      x: (visible.x + 0.5) * GAME_CONFIG.cellSize,
+      y: GAME_CONFIG.mapTop + (visible.y + 0.5) * GAME_CONFIG.cellSize,
+    };
+    expect(battleBuffDropTargetAt(snapshot, 0, "smoke-1", "smoke", point)).toEqual({
+      buffInstanceId: "smoke-1", buffKind: "smoke",
+      targetCell: cellIndex(GAME_CONFIG.columns - 1 - visible.x, GAME_CONFIG.rows - 1 - visible.y),
+    });
+    expect(battleBuffDropTargetAt(snapshot, 0, "decoy-1", "decoy", { x: point.x, y: GAME_CONFIG.mapTop + 6.5 * GAME_CONFIG.cellSize })).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BATTLE_BUFFS, BOSS_CONFIGS, GAME_CONFIG, GENERAL_SKILLS, INTRO_ROUND_HP_MULTIPLIERS, MAP_LAYOUTS, NORMAL_ENEMY_SPEED_PX_PER_SEC,
-  PROPS, TOKEN_POOL, applyCommand, attackRangeIntersectsCell, cellCode, cellIndex, createMatch, createRng, executeCommand,
+  PROPS, TOKEN_POOL, applyCommand, attackRangeIntersectsCell, bulldozerSupplyAvailable, cellCode, cellIndex, createMatch, createRng, executeCommand,
   initialOpenCells, normalizeMatchSnapshot, pathLengthCells, pathPoint, stepMatch, type CommandEnvelope, type MatchSnapshot,
 } from "../src";
 
@@ -54,13 +54,18 @@ function generalSkillFixture(kind: string, attackCount: number, hp = 10_000) {
 }
 
 describe("1.0.9 authoritative simulation", () => {
-  it("migrates 1.4.0 in-progress saves to the additive 1.5.0 skill runtime without clearing play", () => {
+  it("migrates 1.4.0 and 1.5.0 saves to the additive 1.6.0 field-effect runtime without clearing play", () => {
     const previous = createMatch("PREVIOUS-SCHEMA", 109) as unknown as Record<string, unknown>;
     previous.rulesConfigSchemaVersion = "1.4.0";
     const migrated = normalizeMatchSnapshot(previous as unknown as MatchSnapshot);
-    expect(migrated.rulesConfigSchemaVersion).toBe("1.5.0");
+    expect(migrated.rulesConfigSchemaVersion).toBe("1.6.0");
     expect(migrated.players[0].pendingGeneralImpacts).toEqual([]);
     expect(migrated.players[0].zhaoPhantoms).toEqual([]);
+    expect(migrated.players[0].battleFieldEffects).toEqual([]);
+    expect(migrated.players[0].props?.bulldozerSupplyClaimed).toBe(false);
+    const previous15 = createMatch("PREVIOUS-SCHEMA-15", 110) as unknown as Record<string, unknown>;
+    previous15.rulesConfigSchemaVersion = "1.5.0";
+    expect(normalizeMatchSnapshot(previous15 as unknown as MatchSnapshot).rulesConfigSchemaVersion).toBe("1.6.0");
   });
 
   it("uses the package-backed board and opening values", () => {
@@ -626,6 +631,7 @@ describe("1.0.9 authoritative simulation", () => {
     }];
     expect(applyCommand(match, 0, { type: "CLAIM_BULLDOZER_SUPPLY" }).ok).toBe(true);
     expect(player.props?.bulldozer?.routeIndices).toHaveLength(12);
+    expect(player.props?.bulldozerSupplyClaimed).toBe(true);
     stepMatch(match, 100);
     expect(match.events).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "bulldozer", phase: "push", targetIds: ["near-adou"] }),
@@ -636,6 +642,12 @@ describe("1.0.9 authoritative simulation", () => {
       pathY: path[startIndex - 1]!.y,
     });
     expect(player.enemies[0]!.progress).toBeCloseTo((startIndex - 1) / (path.length - 1), 8);
+    player.props!.bulldozer!.phase = "fading";
+    player.props!.bulldozer!.fadeMs = 100;
+    stepMatch(match, 100);
+    expect(player.props?.bulldozer).toBeUndefined();
+    expect(bulldozerSupplyAvailable(match, player)).toBe(false);
+    expect(applyCommand(match, 0, { type: "CLAIM_BULLDOZER_SUPPLY" })).toMatchObject({ ok: false });
   });
 
   it("awards a deterministic 1–10 bun treasure on every successful gold-seeker shovel", () => {
@@ -1096,7 +1108,7 @@ describe("project battle buff drops", () => {
     return match;
   }
 
-  it("stores deterministic 8% normal-enemy drops in the current-match inventory with four uniform kinds", () => {
+  it("stores deterministic 8% normal-enemy drops in the current-match inventory with six uniform kinds", () => {
     const match = buffMatch();
     const defender = match.players[0];
     defender.units = [{ id: "killer", kind: "刀", level: 5, cell: cellIndex(2, 7), cooldownMs: 0, attackCount: 0 }];
@@ -1120,11 +1132,11 @@ describe("project battle buff drops", () => {
     }
   });
 
-  it("applies all four buffs only to live monsters attacking the opponent and consumes on success", () => {
+  it("applies all four monster buffs only to live monsters attacking the opponent and consumes on success", () => {
     const match = buffMatch();
     const owner = match.players[0];
     const opponent = match.players[1];
-    owner.battleBuffs = BATTLE_BUFFS.map((buff, index) => ({ id: `buff-${index}`, kind: buff.kind }));
+    owner.battleBuffs = BATTLE_BUFFS.slice(0, 4).map((buff, index) => ({ id: `buff-${index}`, kind: buff.kind }));
     opponent.enemies = [
       { id: "center", hp: 100, maxHp: 100, progress: 0.2, boss: false, stunnedMs: 100_000, pathX: 0, pathY: 9, pathIndex: 1 },
       { id: "near", hp: 200, maxHp: 200, progress: 0.3, boss: false, stunnedMs: 100_000, pathX: 0, pathY: 7, pathIndex: 1 },
@@ -1146,6 +1158,43 @@ describe("project battle buff drops", () => {
       type: "battle-buff-used", buffKind: "rally", targetSlot: 1,
       targetEnemyId: "center", affectedEnemyIds: ["center", "near"],
     });
+  });
+
+  it("places a six-second cross-shaped smoke screen that blocks normal and special targeting", () => {
+    const match = buffMatch();
+    const owner = match.players[0]; const opponent = match.players[1];
+    owner.battleBuffs = [{ id: "smoke", kind: "smoke" }];
+    opponent.units = [{ id: "attacker", kind: "刀", level: 5, cell: cellIndex(2, 7), cooldownMs: 0, attackCount: 0 }];
+    opponent.enemies = [{ id: "hidden", hp: 100, maxHp: 100, progress: 0.4, boss: false, stunnedMs: 0, pathX: 2, pathY: 7, pathIndex: 1 }];
+
+    expect(applyCommand(match, 0, { type: "USE_BATTLE_BUFF", buffInstanceId: "smoke", targetCell: cellIndex(2, 7) }).ok).toBe(true);
+    expect(opponent.battleFieldEffects).toEqual([expect.objectContaining({ kind: "smoke", cell: cellIndex(2, 7), remainingMs: 6_000 })]);
+    stepMatch(match, 100);
+    expect(opponent.enemies[0]!.hp).toBe(100);
+    expect(match.events.some((event) => event.type === "attack")).toBe(false);
+    stepMatch(match, 5_900);
+    expect(opponent.battleFieldEffects).toEqual([]);
+    expect(opponent.enemies[0]!.hp).toBeLessThan(100);
+  });
+
+  it("forces every in-range soldier or general to spend ten attacks on an enemy decoy", () => {
+    const match = buffMatch();
+    const owner = match.players[0]; const opponent = match.players[1];
+    owner.battleBuffs = [{ id: "decoy", kind: "decoy" }];
+    opponent.units = [{ id: "attacker", kind: "刀", level: 5, cell: cellIndex(2, 7), cooldownMs: 0, attackCount: 0 }];
+    opponent.enemies = [{ id: "protected", hp: 100, maxHp: 100, progress: 0.4, boss: false, stunnedMs: 0, pathX: 2, pathY: 7, pathIndex: 1 }];
+
+    expect(applyCommand(match, 0, { type: "USE_BATTLE_BUFF", buffInstanceId: "decoy", targetCell: cellIndex(2, 7) }).ok).toBe(true);
+    for (let hit = 9; hit >= 0; hit -= 1) {
+      opponent.units[0]!.cooldownMs = 0;
+      stepMatch(match, 100);
+      expect(opponent.enemies[0]!.hp).toBe(100);
+      expect(match.events).toContainEqual(expect.objectContaining({ type: "battle-field-effect-hit", remainingHits: hit }));
+    }
+    expect(opponent.battleFieldEffects).toEqual([]);
+    opponent.units[0]!.cooldownMs = 0;
+    stepMatch(match, 100);
+    expect(opponent.enemies[0]!.hp).toBeLessThan(100);
   });
 
   it("keeps immunity authoritative, expires timed bonuses, and rejects duplicate giant use without consuming", () => {

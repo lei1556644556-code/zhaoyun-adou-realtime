@@ -125,7 +125,11 @@ app.innerHTML = `
           <div id="game" class="game-frame"></div>
           <div class="battle-buff-dock" id="battle-buff-dock" aria-label="本局掉落BUFF" hidden>
             <span>本局BUFF</span>
-            <div id="battle-buff-bar" class="battle-buff-bar"></div>
+            <div class="battle-buff-controls">
+              <button id="battle-buff-prev" class="battle-buff-page" type="button" aria-label="查看前面的BUFF">‹</button>
+              <div id="battle-buff-bar" class="battle-buff-bar"></div>
+              <button id="battle-buff-next" class="battle-buff-page" type="button" aria-label="查看后面的BUFF">›</button>
+            </div>
           </div>
         </section>
         <aside class="tactics-panel">
@@ -145,7 +149,7 @@ app.innerHTML = `
               <li>轻点棋子（不拖动）可查看实际攻击、攻速、射程与技能。</li>
               <li>姓名两字合将后占两格；上阵后拖出任一字即可拆分。</li>
               <li>铲子拖到高亮草格可扩一格。</li>
-              <li>主动道具从上方图标拖到高亮目标；局内BUFF在征兵左侧，点击看说明、拖到对方怪物使用。</li>
+              <li>主动道具从上方图标拖到高亮目标；局内BUFF在征兵左侧，可用左右箭头翻页，再拖到对方怪物或格子使用。</li>
               <li>棕色只走敌兵，白色才可布阵，绿色草地不可通行或放置。</li>
             </ol>
           </div>
@@ -403,7 +407,7 @@ function renderBattleBuffs() {
     const matching = items.filter((item) => item.kind === config.kind);
     return `${config.kind}:${matching.map((item) => item.id).join(",")}`;
   }).join("|");
-  if (bar.dataset.structureKey === structureKey) return;
+  if (bar.dataset.structureKey === structureKey) { updateBattleBuffPager(); return; }
   bar.dataset.structureKey = structureKey;
   if (!items.length) {
     bar.replaceChildren();
@@ -417,11 +421,20 @@ function renderBattleBuffs() {
     button.dataset.battleBuffId = matching[0]!.id;
     button.dataset.battleBuffKind = config.kind;
     button.style.setProperty("--buff-color", config.color);
-    button.setAttribute("aria-label", `${config.name}，剩余${matching.length}个。点击查看说明，拖到对方怪物使用。`);
+    button.setAttribute("aria-label", `${config.name}，剩余${matching.length}个。点击查看说明，拖到${config.target === "cell" ? "对方格子" : "对方怪物"}使用。`);
     button.innerHTML = `<i>${config.glyph}</i><b>${config.name}</b><em>×${matching.length}</em>`;
     return [button];
   });
   bar.replaceChildren(...buttons);
+  bar.scrollLeft = 0;
+  requestAnimationFrame(updateBattleBuffPager);
+}
+
+function updateBattleBuffPager() {
+  const bar = get<HTMLElement>("battle-buff-bar");
+  const overflow = bar.scrollWidth > bar.clientWidth + 1;
+  get<HTMLButtonElement>("battle-buff-prev").disabled = !overflow || bar.scrollLeft <= 1;
+  get<HTMLButtonElement>("battle-buff-next").disabled = !overflow || bar.scrollLeft + bar.clientWidth >= bar.scrollWidth - 1;
 }
 
 function activePropInstruction(propId: ActivePropId) {
@@ -544,7 +557,9 @@ function beginBattleBuffDrag(event: PointerEvent) {
   document.body.classList.add("is-dragging-prop");
   hideUnitInspector();
   const config = BATTLE_BUFFS.find((candidate) => candidate.kind === battleBuffPointer?.buffKind);
-  get("prop-target-hint").textContent = `把${config?.name ?? "BUFF"}拖到正在进攻对方的怪物身上`;
+  get("prop-target-hint").textContent = config?.target === "cell"
+    ? `把${config.name}拖到对方半场的格子上`
+    : `把${config?.name ?? "BUFF"}拖到正在进攻对方的怪物身上`;
   game.events.emit("battle:buff-drag-start", {
     buffInstanceId: battleBuffPointer.buffInstanceId, buffKind: battleBuffPointer.buffKind,
   });
@@ -618,11 +633,12 @@ function showBattleBuffInspector(kind: BattleBuffKind) {
   rarity.textContent = "本局掉落BUFF";
   rarity.dataset.rarity = "gold";
   get("unit-inspector-name").textContent = config.name;
-  get("unit-inspector-level").textContent = "仅本局有效 · 拖到对方怪物使用";
+  const targetLabel = config.target === "cell" ? "对方格子" : "对方怪物";
+  get("unit-inspector-level").textContent = `仅本局有效 · 拖到${targetLabel}使用`;
   setInspectorStats([
     ["掉落", "击败敌兵 8%"],
-    ["抽取", "四种等概率"],
-    ["目标", "对方怪物"],
+    ["抽取", "六种等概率"],
+    ["目标", targetLabel],
     ["持续", config.durationMs === null ? "直至离场" : `${config.durationMs / 1000}秒`],
   ]);
   get("unit-inspector-skill").textContent = config.intro;
@@ -1277,6 +1293,13 @@ activePropBar.addEventListener("click", (event) => {
   if (button && !button.disabled) useActiveProp(Number(button.dataset.useProp) as ActivePropId);
 });
 const battleBuffBar = get("battle-buff-bar");
+battleBuffBar.addEventListener("scroll", updateBattleBuffPager, { passive: true });
+get("battle-buff-prev").addEventListener("click", () => {
+  battleBuffBar.scrollBy({ left: -battleBuffBar.clientWidth, behavior: "smooth" });
+});
+get("battle-buff-next").addEventListener("click", () => {
+  battleBuffBar.scrollBy({ left: battleBuffBar.clientWidth, behavior: "smooth" });
+});
 battleBuffBar.addEventListener("pointerdown", (event) => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-battle-buff-id]");
   if (button) beginBattleBuffPointer(event, button);
@@ -1330,12 +1353,12 @@ document.querySelectorAll<HTMLButtonElement>("[data-copy-room-code]").forEach((b
   });
 });
 game.events.on("battle:buff-drop", (payload: BattleBuffDropPayload) => {
-  get("prop-target-hint").textContent = "局内BUFF：点击查看，拖到进攻对方的怪物使用。";
+  get("prop-target-hint").textContent = "局内BUFF：点击查看，按左右箭头翻页，拖到对方怪物或格子使用。";
   commandSink?.(commandForBattleBuffDrop(payload));
 });
 game.events.on("battle:buff-drop-miss", (payload: { buffKind: BattleBuffKind }) => {
   const config = BATTLE_BUFFS.find((candidate) => candidate.kind === payload.buffKind);
-  showToast(`没有放到有效目标：请把${config?.name ?? "BUFF"}拖到进攻对方的怪物身上`);
+  showToast(`没有放到有效目标：请把${config?.name ?? "BUFF"}拖到${config?.target === "cell" ? "对方半场格子" : "进攻对方的怪物身上"}`);
 });
 document.querySelectorAll<HTMLButtonElement>("[data-copy-room-link]").forEach((button) => {
   button.addEventListener("click", () => {

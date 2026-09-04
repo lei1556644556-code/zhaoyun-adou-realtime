@@ -2,8 +2,8 @@ import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 const outputDirectory = path.resolve(process.cwd(), process.argv[2] ?? "dist");
-// 1.5.0 增加可离线演算的完整武将技能状态机，给予不到 1% 的净增长空间。
-const limits = { ".js": 1_660_000, ".css": 30_000 };
+// 1.6.0 增加烟幕/木桩的权威场地表现；相对 1.5.0 仅给予约 0.3% 的净增长空间。
+const limits = { ".js": 1_665_000, ".css": 30_000 };
 const files = [];
 
 async function walk(directory) {
