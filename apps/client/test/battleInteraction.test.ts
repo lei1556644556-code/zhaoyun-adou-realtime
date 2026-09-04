@@ -4,8 +4,10 @@ import {
   BATTLE_INPUT,
   BATTLE_LAYOUT,
   activePropDropTargetAt,
+  battleBuffDropTargetAt,
   battleDropTargetAt,
   commandForActivePropDrop,
+  commandForBattleBuffDrop,
   commandForBattleCampDrop,
   commandForBattleDrop,
   createPointerGesture,
@@ -140,5 +142,32 @@ describe("active prop dragging", () => {
       .toEqual({ type: "USE_PROP", propId: 10, targetUnitId: "own-2" });
     expect(commandForActivePropDrop({ propId: 9, targetCell: 55 }))
       .toEqual({ type: "USE_PROP", propId: 9, targetCell: 55 });
+  });
+});
+
+describe("in-match buff dragging", () => {
+  it("targets only a live monster on the mirrored opponent route", () => {
+    const snapshot = createMatch("buff-drag", 12, 0);
+    snapshot.players[0].enemies.push({
+      id: "own-monster", hp: 10, maxHp: 10, progress: 0, boss: false, stunnedMs: 0,
+      pathX: 0, pathY: 9, pathIndex: 1,
+    });
+    snapshot.players[1].enemies.push({
+      id: "opponent-monster", hp: 10, maxHp: 10, progress: 0, boss: false, stunnedMs: 0,
+      pathX: 0, pathY: 9, pathIndex: 1,
+    });
+    const mirroredOpponentPoint = {
+      x: (GAME_CONFIG.columns - 1 - 0 + 0.5) * GAME_CONFIG.cellSize,
+      y: GAME_CONFIG.mapTop + (GAME_CONFIG.rows - 1 - 9 + 0.5) * GAME_CONFIG.cellSize,
+    };
+    expect(battleBuffDropTargetAt(snapshot, 0, "buff-1", "haste", mirroredOpponentPoint)).toEqual({
+      buffInstanceId: "buff-1", buffKind: "haste", targetEnemyId: "opponent-monster",
+    });
+    expect(battleBuffDropTargetAt(snapshot, 0, "buff-1", "haste", { x: 40, y: 960 })).toBeNull();
+  });
+
+  it("maps the visual drop to the authoritative buff command", () => {
+    expect(commandForBattleBuffDrop({ buffInstanceId: "buff-2", buffKind: "rally", targetEnemyId: "enemy-9" }))
+      .toEqual({ type: "USE_BATTLE_BUFF", buffInstanceId: "buff-2", targetEnemyId: "enemy-9" });
   });
 });

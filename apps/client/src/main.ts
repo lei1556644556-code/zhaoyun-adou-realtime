@@ -1,17 +1,17 @@
 import "./styles.css";
 import {
-  ACTIVE_PROP_IDS, GAME_CONFIG, GENERAL_EXPERIENCE, GENERAL_LEVEL_ATTACK, GENERAL_LEVEL_SPEED, GENERALS, HERO_PAIRS, MAP_LAYOUTS,
+  ACTIVE_PROP_IDS, BATTLE_BUFFS, BOSS_CONFIGS, GAME_CONFIG, GENERAL_EXPERIENCE, GENERAL_LEVEL_ATTACK, GENERAL_LEVEL_SPEED, GENERALS, HERO_PAIRS, MAP_LAYOUTS,
   PASSIVE_PROP_IDS, PROPS, PROP_RARITY_COLORS, PROP_RARITY_NAMES, SOLDIER_LEVEL_ATTACK,
   SOLDIER_LEVEL_SPEED, SOLDIERS,
   bulldozerSupplyAvailable, shovelSupplyCount,
-  type ActivePropId, type GameCommand, type MatchSnapshot, type PlayerSlot, type PropLoadout,
+  type ActivePropId, type BattleBuffKind, type GameCommand, type MatchSnapshot, type PlayerSlot, type PropLoadout,
 } from "@adou/shared";
 import { IMAGE_ASSETS } from "./game/assets";
 import { createGame } from "./game/BattleScene";
 import {
-  BATTLE_INPUT, commandForActivePropDrop, commandForBattleCampDrop, commandForBattleDrop,
+  BATTLE_INPUT, commandForActivePropDrop, commandForBattleBuffDrop, commandForBattleCampDrop, commandForBattleDrop,
   createPointerGesture, updatePointerGesture,
-  type ActivePropDropPayload, type BattleCampDropPayload, type BattleDropPayload, type PointerGesture,
+  type ActivePropDropPayload, type BattleBuffDropPayload, type BattleCampDropPayload, type BattleDropPayload, type PointerGesture,
 } from "./game/battleInteraction";
 import { PracticeEngine } from "./game/PracticeEngine";
 import { RealtimeClient } from "./net/RealtimeClient";
@@ -22,6 +22,7 @@ import {
   SupabaseService, type AccountEconomy, type CloudProgress, type PlayerProfile, type ShopOffer,
 } from "./auth/SupabaseService";
 import { freshEconomy, normalizeEconomy } from "./auth/economy";
+import { mergeOwnedProps, parseDailyPropCache, sameOwnedProps, type DailyPropCache } from "./auth/dailyPropPersistence";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("Missing #app");
@@ -122,6 +123,10 @@ app.innerHTML = `
             </div>
           </section>
           <div id="game" class="game-frame"></div>
+          <div class="battle-buff-dock" id="battle-buff-dock" aria-label="本局掉落BUFF" hidden>
+            <span>本局BUFF</span>
+            <div id="battle-buff-bar" class="battle-buff-bar"></div>
+          </div>
         </section>
         <aside class="tactics-panel">
           <p class="eyebrow">战局状态</p>
@@ -140,7 +145,7 @@ app.innerHTML = `
               <li>轻点棋子（不拖动）可查看实际攻击、攻速、射程与技能。</li>
               <li>姓名两字合将后占两格；上阵后拖出任一字即可拆分。</li>
               <li>铲子拖到高亮草格可扩一格。</li>
-              <li>主动道具从上方图标拖到高亮目标；包子轻点即用。</li>
+              <li>主动道具从上方图标拖到高亮目标；局内BUFF在征兵左侧，点击看说明、拖到对方怪物使用。</li>
               <li>棕色只走敌兵，白色才可布阵，绿色草地不可通行或放置。</li>
             </ol>
           </div>
@@ -215,6 +220,9 @@ let currentProfile: PlayerProfile | null = null;
 let authMode: "login" | "register" = "login";
 let cloudSaveTimer = 0;
 let cloudSaveInFlight: Promise<void> | null = null;
+let cloudSaveQueued = false;
+let cloudSaveRetryTimer = 0;
+let cloudSaveRetryAttempt = 0;
 let propLoadout: PropLoadout = { active: [], passive: [] };
 let economy: AccountEconomy = freshEconomy();
 let inspectedTarget: { kind: string; level: number; unitId?: string; reserveId?: string; ownerSlot?: PlayerSlot } | null = null;
@@ -227,6 +235,14 @@ let activePropPointer: {
   ghost: HTMLButtonElement | null;
 } | null = null;
 let suppressActivePropClick = false;
+let battleBuffPointer: {
+  buffInstanceId: string;
+  buffKind: BattleBuffKind;
+  button: HTMLButtonElement;
+  gesture: PointerGesture;
+  ghost: HTMLButtonElement | null;
+} | null = null;
+let suppressBattleBuffClick = false;
 
 const ACTIVE_MODE_KEY = "adou-active-mode-v1";
 const PRACTICE_SAVE_KEY = "adou-practice-save-v1";
@@ -234,6 +250,7 @@ const ONLINE_SESSION_KEY = "adou-session";
 const BATTLEFIELD_ZOOM_KEY = "adou-battlefield-zoom-v1";
 const PIECE_DISPLAY_MODE_KEY = "adou-piece-display-mode-v1";
 const PROP_LOADOUT_KEY = "adou-prop-loadout-v1";
+const DAILY_PROP_CACHE_KEY = "adou-daily-props-v1";
 
 function get<T extends HTMLElement>(id: string) {
   const element = document.getElementById(id);
@@ -300,8 +317,9 @@ function renderPropPicker() {
 
 function savePropLoadout() {
   localStorage.setItem(scopedStorageKey(PROP_LOADOUT_KEY), JSON.stringify(propLoadout));
+  cacheDailyProps();
   renderPropPicker();
-  scheduleCloudSave();
+  scheduleCloudSave(true);
 }
 
 function toggleProp(id: number) {
@@ -374,6 +392,36 @@ function renderActiveProps() {
       ? `${Math.ceil(cooldown / 1000)}秒`
       : PROPS[id]?.target === "self" ? "轻点使用" : "拖动使用";
   }
+}
+
+function renderBattleBuffs() {
+  const dock = get<HTMLElement>("battle-buff-dock");
+  const bar = get("battle-buff-bar");
+  const items = snapshot?.players[slot].battleBuffs ?? [];
+  dock.hidden = items.length === 0;
+  const structureKey = BATTLE_BUFFS.map((config) => {
+    const matching = items.filter((item) => item.kind === config.kind);
+    return `${config.kind}:${matching.map((item) => item.id).join(",")}`;
+  }).join("|");
+  if (bar.dataset.structureKey === structureKey) return;
+  bar.dataset.structureKey = structureKey;
+  if (!items.length) {
+    bar.replaceChildren();
+    return;
+  }
+  const buttons = BATTLE_BUFFS.flatMap((config) => {
+    const matching = items.filter((item) => item.kind === config.kind);
+    if (!matching.length) return [];
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.battleBuffId = matching[0]!.id;
+    button.dataset.battleBuffKind = config.kind;
+    button.style.setProperty("--buff-color", config.color);
+    button.setAttribute("aria-label", `${config.name}，剩余${matching.length}个。点击查看说明，拖到对方怪物使用。`);
+    button.innerHTML = `<i>${config.glyph}</i><b>${config.name}</b><em>×${matching.length}</em>`;
+    return [button];
+  });
+  bar.replaceChildren(...buttons);
 }
 
 function activePropInstruction(propId: ActivePropId) {
@@ -470,6 +518,77 @@ function moveActivePropPointer(event: PointerEvent) {
   }
 }
 
+function beginBattleBuffPointer(event: PointerEvent, button: HTMLButtonElement) {
+  if (battleBuffPointer || activePropPointer || !event.isPrimary) return;
+  const buffInstanceId = button.dataset.battleBuffId;
+  const buffKind = button.dataset.battleBuffKind as BattleBuffKind | undefined;
+  if (!buffInstanceId || !BATTLE_BUFFS.some((config) => config.kind === buffKind)) return;
+  const threshold = event.pointerType === "touch" ? BATTLE_INPUT.touchDragThresholdPx : BATTLE_INPUT.mouseDragThresholdPx;
+  battleBuffPointer = {
+    buffInstanceId, buffKind: buffKind!, button,
+    gesture: createPointerGesture(event.pointerId, { x: event.clientX, y: event.clientY }, threshold),
+    ghost: null,
+  };
+  button.classList.add("is-pressed");
+  button.setPointerCapture?.(event.pointerId);
+}
+
+function beginBattleBuffDrag(event: PointerEvent) {
+  if (!battleBuffPointer || battleBuffPointer.ghost) return;
+  const ghost = battleBuffPointer.button.cloneNode(true) as HTMLButtonElement;
+  ghost.classList.remove("is-pressed");
+  ghost.classList.add("active-prop-drag-ghost", "battle-buff-drag-ghost");
+  document.body.append(ghost);
+  battleBuffPointer.ghost = ghost;
+  battleBuffPointer.button.classList.add("is-drag-source");
+  document.body.classList.add("is-dragging-prop");
+  hideUnitInspector();
+  const config = BATTLE_BUFFS.find((candidate) => candidate.kind === battleBuffPointer?.buffKind);
+  get("prop-target-hint").textContent = `把${config?.name ?? "BUFF"}拖到正在进攻对方的怪物身上`;
+  game.events.emit("battle:buff-drag-start", {
+    buffInstanceId: battleBuffPointer.buffInstanceId, buffKind: battleBuffPointer.buffKind,
+  });
+  moveBattleBuffPointer(event);
+}
+
+function moveBattleBuffPointer(event: PointerEvent) {
+  if (!battleBuffPointer) return;
+  const update = updatePointerGesture(battleBuffPointer.gesture, event.pointerId, { x: event.clientX, y: event.clientY });
+  if (!update.accepted) return;
+  battleBuffPointer.gesture = update.gesture;
+  if (update.beganDrag) beginBattleBuffDrag(event);
+  if (!update.gesture.dragging || !battleBuffPointer?.ghost) return;
+  event.preventDefault();
+  battleBuffPointer.ghost.style.left = `${event.clientX}px`;
+  battleBuffPointer.ghost.style.top = `${event.clientY}px`;
+  game.events.emit("battle:buff-drag-move", {
+    buffInstanceId: battleBuffPointer.buffInstanceId, buffKind: battleBuffPointer.buffKind,
+    clientX: event.clientX, clientY: event.clientY,
+  });
+}
+
+function finishBattleBuffPointer(event: PointerEvent, cancelled = false) {
+  if (!battleBuffPointer || battleBuffPointer.gesture.pointerId !== event.pointerId) return;
+  const update = updatePointerGesture(battleBuffPointer.gesture, event.pointerId, { x: event.clientX, y: event.clientY });
+  battleBuffPointer.gesture = update.gesture;
+  if (update.beganDrag) beginBattleBuffDrag(event);
+  const dragged = Boolean(battleBuffPointer.ghost);
+  const payload = {
+    buffInstanceId: battleBuffPointer.buffInstanceId, buffKind: battleBuffPointer.buffKind,
+    clientX: event.clientX, clientY: event.clientY,
+  };
+  if (dragged) {
+    event.preventDefault();
+    suppressBattleBuffClick = true;
+    game.events.emit(cancelled ? "battle:buff-drag-cancel" : "battle:buff-drag-end", payload);
+  }
+  battleBuffPointer.button.classList.remove("is-pressed", "is-drag-source");
+  battleBuffPointer.ghost?.remove();
+  document.body.classList.remove("is-dragging-prop");
+  battleBuffPointer = null;
+  if (dragged) window.setTimeout(() => { suppressBattleBuffClick = false; }, 0);
+}
+
 function unitArtPath(kind: string) {
   if (kind in IMAGE_ASSETS.troops) return IMAGE_ASSETS.troops[kind as keyof typeof IMAGE_ASSETS.troops].path;
   if (kind in IMAGE_ASSETS.heroes) return IMAGE_ASSETS.heroes[kind as keyof typeof IMAGE_ASSETS.heroes].path;
@@ -477,10 +596,77 @@ function unitArtPath(kind: string) {
   return null;
 }
 
+function setInspectorStats(entries: Array<[string, string]>) {
+  const rows = [...get("unit-inspector").querySelectorAll<HTMLElement>(".unit-inspector-stats > div")];
+  rows.forEach((row, index) => {
+    const [label, value] = entries[index] ?? ["—", "—"];
+    row.querySelector("dt")!.textContent = label;
+    row.querySelector("dd")!.textContent = value;
+  });
+}
+
+function showBattleBuffInspector(kind: BattleBuffKind) {
+  const config = BATTLE_BUFFS.find((candidate) => candidate.kind === kind);
+  if (!config) return;
+  inspectedTarget = null;
+  const art = get<HTMLImageElement>("unit-inspector-art");
+  art.hidden = true;
+  const glyph = get("unit-inspector-glyph");
+  glyph.hidden = false;
+  glyph.textContent = config.glyph;
+  const rarity = get("unit-inspector-rarity");
+  rarity.textContent = "本局掉落BUFF";
+  rarity.dataset.rarity = "gold";
+  get("unit-inspector-name").textContent = config.name;
+  get("unit-inspector-level").textContent = "仅本局有效 · 拖到对方怪物使用";
+  setInspectorStats([
+    ["掉落", "击败敌兵 8%"],
+    ["抽取", "四种等概率"],
+    ["目标", "对方怪物"],
+    ["持续", config.durationMs === null ? "直至离场" : `${config.durationMs / 1000}秒`],
+  ]);
+  get("unit-inspector-skill").textContent = config.intro;
+  get<HTMLElement>("unit-inspector").hidden = false;
+}
+
+function showEnemyInspector(payload: { ownerSlot: PlayerSlot; enemyId: string }) {
+  const enemy = snapshot?.players[payload.ownerSlot].enemies.find((candidate) => candidate.id === payload.enemyId);
+  if (!enemy) return;
+  inspectedTarget = null;
+  const config = enemy.bossType === undefined ? undefined : BOSS_CONFIGS[enemy.bossType];
+  const art = get<HTMLImageElement>("unit-inspector-art");
+  art.hidden = false;
+  art.src = enemy.boss ? IMAGE_ASSETS.enemies.bossHorned.path : IMAGE_ASSETS.enemies.rebel.path;
+  get("unit-inspector-glyph").hidden = true;
+  const rarity = get("unit-inspector-rarity");
+  rarity.textContent = enemy.boss ? "关卡 BOSS" : "行军怪物";
+  rarity.dataset.rarity = enemy.boss ? "gold" : "base";
+  get("unit-inspector-name").textContent = enemy.boss ? `BOSS · ${config?.name ?? "敌将"}` : "敌兵";
+  get("unit-inspector-level").textContent = payload.ownerSlot === slot ? "正在进攻我方" : "正在进攻对方";
+  const speedBuff = ((enemy.battleHasteMs ?? 0) > 0 ? 2 : 1) * ((enemy.battleRallyMs ?? 0) > 0 ? 1.2 : 1)
+    * (enemy.moveSpeedMultiplier ?? 1);
+  setInspectorStats([
+    ["生命", `${Math.ceil(enemy.hp)} / ${Math.ceil(enemy.maxHp)}`],
+    ["移速", `${speedBuff.toFixed(1)}倍`],
+    ["技能间隔", config ? `${config.cooldownMs / 1000}秒` : "无"],
+    ["技能范围", config ? `${config.range}格` : "无"],
+  ]);
+  const statuses = BATTLE_BUFFS.filter((buff) => (
+    buff.kind === "invulnerable" ? (enemy.battleInvulnerableMs ?? 0) > 0
+      : buff.kind === "haste" ? (enemy.battleHasteMs ?? 0) > 0
+        : buff.kind === "giant" ? enemy.battleGiantApplied
+          : (enemy.battleRallyMs ?? 0) > 0
+  )).map((buff) => buff.name);
+  const description = config ? `技能「${config.name}」：${config.intro}` : "普通敌兵沿棕色道路进攻阿斗。";
+  get("unit-inspector-skill").textContent = statuses.length ? `${description} 当前BUFF：${statuses.join("、")}。` : description;
+  get<HTMLElement>("unit-inspector").hidden = false;
+}
+
 function showUnitInspector(payload: { kind: string; level: number; unitId?: string; reserveId?: string; ownerSlot?: PlayerSlot }) {
   const { kind, level } = payload;
   inspectedTarget = payload;
   const panel = get<HTMLElement>("unit-inspector");
+  setInspectorStats([["攻击", "—"], ["攻速", "—"], ["射程", "—"], ["方式", "—"]]);
   const hero = GENERALS[kind];
   const soldier = SOLDIERS[kind as keyof typeof SOLDIERS];
   const base = hero ?? soldier;
@@ -623,10 +809,61 @@ function currentCloudProgress(): CloudProgress {
   };
 }
 
+function cacheDailyProps() {
+  if (!currentProfile) return;
+  const cached: DailyPropCache = {
+    version: 1,
+    dayKey: economy.dayKey,
+    updatedAt: Date.now(),
+    ownedProps: economy.ownedProps,
+    propLoadout,
+  };
+  localStorage.setItem(scopedStorageKey(DAILY_PROP_CACHE_KEY), JSON.stringify(cached));
+}
+
 function setCloudStatus(message: string, tone: "syncing" | "ok" | "error" = "ok") {
   const status = get("cloud-status");
   status.textContent = message;
   status.dataset.tone = tone;
+}
+
+function flushCloudSave() {
+  if (!currentProfile) return Promise.resolve();
+  cloudSaveQueued = true;
+  if (cloudSaveInFlight) return cloudSaveInFlight;
+  cloudSaveInFlight = (async () => {
+    try {
+      while (cloudSaveQueued && currentProfile) {
+        cloudSaveQueued = false;
+        const profile = currentProfile;
+        const progress = currentCloudProgress();
+        try {
+          await cloud.saveProgress(profile, progress);
+          profile.progress = progress;
+          window.clearTimeout(cloudSaveRetryTimer);
+          cloudSaveRetryTimer = 0;
+          cloudSaveRetryAttempt = 0;
+          setCloudStatus("云端已同步", "ok");
+        } catch (error) {
+          cloudSaveQueued = true;
+          const retryDelay = Math.min(15_000, 1_000 * 2 ** cloudSaveRetryAttempt);
+          cloudSaveRetryAttempt = Math.min(cloudSaveRetryAttempt + 1, 4);
+          window.clearTimeout(cloudSaveRetryTimer);
+          cloudSaveRetryTimer = window.setTimeout(() => {
+            cloudSaveRetryTimer = 0;
+            void flushCloudSave();
+          }, retryDelay);
+          setCloudStatus("同步失败，稍后重试", "error");
+          showToast(error instanceof Error ? error.message : "云存档同步失败");
+          break;
+        }
+      }
+    } finally {
+      cloudSaveInFlight = null;
+      if (cloudSaveQueued && !cloudSaveRetryTimer && currentProfile) void flushCloudSave();
+    }
+  })();
+  return cloudSaveInFlight;
 }
 
 function scheduleCloudSave(force = false) {
@@ -635,25 +872,15 @@ function scheduleCloudSave(force = false) {
   window.clearTimeout(cloudSaveTimer);
   cloudSaveTimer = 0;
   setCloudStatus("正在同步", "syncing");
-  const run = async () => {
+  if (force) {
+    window.clearTimeout(cloudSaveRetryTimer);
+    cloudSaveRetryTimer = 0;
+    void flushCloudSave();
+  }
+  else cloudSaveTimer = window.setTimeout(() => {
     cloudSaveTimer = 0;
-    if (!currentProfile) return;
-    const profile = currentProfile;
-    const progress = currentCloudProgress();
-    try {
-      if (cloudSaveInFlight) await cloudSaveInFlight;
-      cloudSaveInFlight = cloud.saveProgress(profile, progress);
-      await cloudSaveInFlight;
-      setCloudStatus("云端已同步", "ok");
-    } catch (error) {
-      setCloudStatus("同步失败", "error");
-      showToast(error instanceof Error ? error.message : "云存档同步失败");
-    } finally {
-      cloudSaveInFlight = null;
-    }
-  };
-  if (force) void run();
-  else cloudSaveTimer = window.setTimeout(() => void run(), 2400);
+    void flushCloudSave();
+  }, 2400);
 }
 
 function enterBattle(mode: string, network: boolean) {
@@ -883,6 +1110,7 @@ function grantProp(id: number) {
     if (id === 22 && existing.level < 3) existing.level += 1;
   } else economy.ownedProps.push({ id, level: 1 });
   propLoadout = pruneLoadout(propLoadout);
+  cacheDailyProps();
   renderPropPicker();
   renderEconomy();
 }
@@ -989,6 +1217,7 @@ function updateSnapshot(next: MatchSnapshot) {
     : `${mine.wave} / ${GAME_CONFIG.maxWaves}`;
   game.events.emit("battle:snapshot", next, slot);
   renderActiveProps();
+  renderBattleBuffs();
   const loadoutKey = `${next.roomId}:${slot}`;
   if (activeMode === "online" && !mine.props?.configured && loadoutSentKey !== loadoutKey) {
     loadoutSentKey = loadoutKey;
@@ -1003,6 +1232,7 @@ function updateSnapshot(next: MatchSnapshot) {
 
 game.events.on("battle:recruit", () => commandSink?.({ type: "RECRUIT" }));
 game.events.on("battle:inspect", (payload: { kind: string; level: number; unitId?: string; reserveId?: string; ownerSlot?: PlayerSlot }) => showUnitInspector(payload));
+game.events.on("battle:inspect-enemy", (payload: { ownerSlot: PlayerSlot; enemyId: string }) => showEnemyInspector(payload));
 game.events.on("battle:inspect-hide", () => hideUnitInspector(false));
 game.events.on("battle:prop-drop", (payload: ActivePropDropPayload) => {
   get("prop-target-hint").textContent = "按住道具，拖到高亮目标。";
@@ -1046,6 +1276,19 @@ activePropBar.addEventListener("click", (event) => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-use-prop]");
   if (button && !button.disabled) useActiveProp(Number(button.dataset.useProp) as ActivePropId);
 });
+const battleBuffBar = get("battle-buff-bar");
+battleBuffBar.addEventListener("pointerdown", (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-battle-buff-id]");
+  if (button) beginBattleBuffPointer(event, button);
+});
+document.addEventListener("pointermove", moveBattleBuffPointer, { passive: false });
+document.addEventListener("pointerup", (event) => finishBattleBuffPointer(event));
+document.addEventListener("pointercancel", (event) => finishBattleBuffPointer(event, true));
+battleBuffBar.addEventListener("click", (event) => {
+  if (suppressBattleBuffClick) { event.preventDefault(); return; }
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-battle-buff-kind]");
+  if (button) showBattleBuffInspector(button.dataset.battleBuffKind as BattleBuffKind);
+});
 get("claim-normal").addEventListener("click", () => claimResult(1));
 get("claim-double").addEventListener("click", () => claimResult(2));
 get("shop-offers").addEventListener("click", (event) => {
@@ -1085,6 +1328,14 @@ document.querySelectorAll<HTMLButtonElement>("[data-copy-room-code]").forEach((b
     const code = currentRoomCode();
     if (code) void copyRoomText(code, `房间号 ${code} 已复制`);
   });
+});
+game.events.on("battle:buff-drop", (payload: BattleBuffDropPayload) => {
+  get("prop-target-hint").textContent = "局内BUFF：点击查看，拖到进攻对方的怪物使用。";
+  commandSink?.(commandForBattleBuffDrop(payload));
+});
+game.events.on("battle:buff-drop-miss", (payload: { buffKind: BattleBuffKind }) => {
+  const config = BATTLE_BUFFS.find((candidate) => candidate.kind === payload.buffKind);
+  showToast(`没有放到有效目标：请把${config?.name ?? "BUFF"}拖到进攻对方的怪物身上`);
 });
 document.querySelectorAll<HTMLButtonElement>("[data-copy-room-link]").forEach((button) => {
   button.addEventListener("click", () => {
@@ -1126,6 +1377,10 @@ document.addEventListener("keydown", (event) => {
   if (activePropPointer) {
     const pointerId = activePropPointer.gesture.pointerId;
     finishActivePropPointer(new PointerEvent("pointercancel", { pointerId }), true);
+  }
+  if (battleBuffPointer) {
+    const pointerId = battleBuffPointer.gesture.pointerId;
+    finishBattleBuffPointer(new PointerEvent("pointercancel", { pointerId }), true);
   }
   hideUnitInspector();
 });
@@ -1224,10 +1479,22 @@ async function enterAccount(profile: PlayerProfile) {
   currentProfile = profile;
   const remoteDayKey = profile.progress?.economy?.dayKey;
   economy = normalizeEconomy(profile.progress?.economy);
+  const dailyCacheKey = scopedStorageKey(DAILY_PROP_CACHE_KEY);
+  const cachedDailyProps = parseDailyPropCache(localStorage.getItem(dailyCacheKey), economy.dayKey);
+  if (!cachedDailyProps) localStorage.removeItem(dailyCacheKey);
+  const remoteOwnedProps = economy.ownedProps;
+  if (cachedDailyProps) economy.ownedProps = mergeOwnedProps(remoteOwnedProps, cachedDailyProps.ownedProps);
+  let recoveredDailyProps = !sameOwnedProps(remoteOwnedProps, economy.ownedProps);
   try {
     const local = JSON.parse(localStorage.getItem(scopedStorageKey(PROP_LOADOUT_KEY)) ?? "null");
-    propLoadout = pruneLoadout(normalizeStoredLoadout(profile.progress?.propLoadout ?? local));
+    const remoteLoadout = profile.progress?.propLoadout ?? local;
+    const cachedLoadoutIsNewer = Boolean(cachedDailyProps && cachedDailyProps.updatedAt > (profile.progress?.savedAt ?? 0));
+    const selectedLoadout = cachedLoadoutIsNewer ? cachedDailyProps!.propLoadout : remoteLoadout;
+    propLoadout = pruneLoadout(normalizeStoredLoadout(selectedLoadout));
+    recoveredDailyProps ||= cachedLoadoutIsNewer
+      && JSON.stringify(normalizeStoredLoadout(remoteLoadout)) !== JSON.stringify(propLoadout);
   } catch { propLoadout = pruneLoadout(normalizeStoredLoadout(profile.progress?.propLoadout)); }
+  cacheDailyProps();
   renderPropPicker();
   renderActiveProps();
   renderEconomy();
@@ -1235,7 +1502,7 @@ async function enterAccount(profile: PlayerProfile) {
   setCloudStatus("云端已连接", "ok");
   authScreen.hidden = true;
   lobby.hidden = false;
-  if (remoteDayKey !== economy.dayKey) scheduleCloudSave(true);
+  if (remoteDayKey !== economy.dayKey || recoveredDailyProps) scheduleCloudSave(true);
   if (economy.pendingResult || economy.pendingShop) { showPostgame(); return; }
   if (invitedRoom) {
     await enterInvitedRoom();
@@ -1272,7 +1539,9 @@ get("logout").addEventListener("click", async () => {
   const button = get<HTMLButtonElement>("logout");
   button.disabled = true;
   savePractice(true);
-  if (cloudSaveInFlight) await cloudSaveInFlight.catch(() => undefined);
+  window.clearTimeout(cloudSaveTimer);
+  cloudSaveTimer = 0;
+  await flushCloudSave();
   practice?.stop(); online?.close();
   try { await cloud.signOut(); }
   catch (error) { showToast(error instanceof Error ? error.message : "退出账号失败"); button.disabled = false; return; }
@@ -1282,8 +1551,13 @@ get("logout").addEventListener("click", async () => {
   button.disabled = false;
 });
 
-window.addEventListener("beforeunload", () => savePractice(true));
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") savePractice(true); });
+window.addEventListener("beforeunload", () => { cacheDailyProps(); savePractice(true); });
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "hidden") return;
+  cacheDailyProps();
+  savePractice(true);
+  scheduleCloudSave(true);
+});
 window.addEventListener("resize", applyBattlefieldScale);
 window.visualViewport?.addEventListener("resize", applyBattlefieldScale);
 new ResizeObserver(applyBattlefieldScale).observe(document.querySelector<HTMLElement>(".battle-toolbar")!);

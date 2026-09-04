@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   BOSS_SKILL_RULES,
+  BATTLE_BUFFS,
+  BATTLE_BUFF_DROP,
   ACTIVE_PROP_IDS,
   ATTACK_RANGE_RULES,
   BOSS_CHANCES,
@@ -54,9 +56,16 @@ describe("1.0.9 versioned rules config", () => {
     expect(BOSS_SKILL_RULES).toHaveLength(12);
     expect(RULES_CONFIG_1_0_9.waves.bossSkills).toBe(BOSS_SKILL_RULES);
   });
+
+  it("publishes the four equal-probability project battle buffs and 8% normal-enemy drop rule", () => {
+    expect(RULES_CONFIG_1_0_9.battleBuffs.catalog).toBe(BATTLE_BUFFS);
+    expect(RULES_CONFIG_1_0_9.battleBuffs.drop).toBe(BATTLE_BUFF_DROP);
+    expect(BATTLE_BUFF_DROP).toEqual({ chance: 0.08, eligible: "normal-enemy-defeat", selection: "uniform" });
+    expect(BATTLE_BUFFS.map((buff) => buff.kind)).toEqual(["invulnerable", "haste", "giant", "rally"]);
+  });
   it("publishes one versioned entry point and honest evidence metadata", () => {
     expect(RULES_CONFIG_1_0_9.rulesetVersion).toBe("1.0.9");
-    expect(RULES_CONFIG_1_0_9.schemaVersion).toBe("1.3.0");
+    expect(RULES_CONFIG_1_0_9.schemaVersion).toBe("1.4.0");
     expect(RULES_CONFIG_1_0_9.evidence).toBe(RULE_EVIDENCE_SOURCES);
     expect(RULES_CONFIG_1_0_9.provenance).toBe(RULE_PROVENANCE);
     expect(RULE_EVIDENCE_SOURCES.originalPackage.artifactPath).toBeNull();
@@ -84,13 +93,14 @@ describe("1.0.9 versioned rules config", () => {
       propRuntimeDetails: "pending-original-verification",
       propAcquisition: "pending-original-verification",
       directGrantInsteadOfAds: "project-adaptation",
+      battleBuffDrops: "project-adaptation",
       authoritativeTickRate: "project-adaptation",
     });
   });
 
   it("locks every current battle constant, including package-recorded cadence values", () => {
     expect(GAME_CONFIG).toEqual({
-      protocolVersion: "0.4.0",
+      protocolVersion: "0.5.0",
       columns: 8,
       rows: 10,
       designWidth: 640,

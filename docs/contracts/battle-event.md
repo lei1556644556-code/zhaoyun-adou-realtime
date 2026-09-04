@@ -25,7 +25,7 @@ interface BattleEventBase {
 - `tick`：事件发生的权威模拟 Tick；
 - `stateVersion`：产生该事件的状态转换版本。
 
-首版事件类型覆盖：征兵、单位上阵/移动/回营/交换、合成升级、武将拆分、开垦、营地移动、道具使用、攻击命中、敌军死亡、阿斗受击和对局结束。事件只描述已经由内核结算的事实，不接受客户端回写。
+事件类型覆盖：征兵、单位上阵/移动/回营/交换、合成升级、武将拆分、开垦、营地移动、账号道具使用、局内 BUFF 掉落/使用、攻击命中、敌军死亡、阿斗受击和对局结束。事件只描述已经由内核结算的事实，不接受客户端回写。
 
 | `type` | 关键载荷 |
 |---|---|
@@ -39,6 +39,7 @@ interface BattleEventBase {
 | `cell-unlocked` | 开垦格号与被消耗的铲子 ID |
 | `reserve-moved` | 营地项 ID 与最终槽位 |
 | `prop-used` / `prop-triggered` | 道具 ID、使用目标或触发后受影响对象 ID |
+| `battle-buff-dropped` / `battle-buff-used` | 局内 BUFF 实例、类型、来源敌兵或使用目标与受影响对象 ID |
 | `attack` | 攻击者、主目标、伤害、命中数、技能标记与目标进度 |
 | `enemy-defeated` | 敌军 ID、Boss 标记与该敌军奖励 |
 | `player-damaged` | 逃脱数量、剩余生命与补偿馒头 |

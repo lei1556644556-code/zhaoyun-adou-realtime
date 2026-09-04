@@ -1,4 +1,5 @@
 import type { AccountEconomy, OwnedProp } from "./SupabaseService";
+import { normalizeOwnedProps } from "./dailyPropPersistence";
 
 export function shanghaiDayKey(now = new Date()) {
   return new Intl.DateTimeFormat("en-CA", {
@@ -27,10 +28,7 @@ export function normalizeEconomy(value: unknown, dayKey = shanghaiDayKey()): Acc
   if (raw.dayKey !== dayKey) {
     return { ...freshEconomy(gold, stamina, dayKey), totalMatches, completedMatchKeys };
   }
-  const ownedProps = (Array.isArray(raw.ownedProps) ? raw.ownedProps : [])
-    .filter((entry): entry is OwnedProp => Boolean(entry) && Number(entry.id) >= 2 && Number(entry.id) <= 24 && Number(entry.id) !== 23)
-    .filter((entry, index, entries) => entries.findIndex((other) => Number(other.id) === Number(entry.id)) === index)
-    .map((entry) => ({ id: Number(entry.id), level: Number(entry.id) === 22 ? Math.max(1, Math.min(3, Math.floor(Number(entry.level) || 1))) : 1 }));
+  const ownedProps: OwnedProp[] = normalizeOwnedProps(raw.ownedProps);
   return {
     dayKey, gold, stamina: Math.max(0, Math.min(30, stamina)),
     winDay: Math.max(0, Math.floor(Number(raw.winDay) || 0)),

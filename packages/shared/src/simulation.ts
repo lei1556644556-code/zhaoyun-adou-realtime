@@ -1,5 +1,5 @@
 import {
-  ACTIVE_PROP_IDS, BOSS_CHANCES, BOSS_CONFIGS, BOSS_ENEMY_SPEED_PX_PER_SEC, BOSS_MILESTONES,
+  ACTIVE_PROP_IDS, BATTLE_BUFFS, BATTLE_BUFF_DROP, BOSS_CHANCES, BOSS_CONFIGS, BOSS_ENEMY_SPEED_PX_PER_SEC, BOSS_MILESTONES,
   DIFFICULTY_CURVES, DIFFICULTY_WEIGHTS, EARLY_ACCOUNT_SHOVEL_BONUS, GAME_CONFIG,
   GENERAL_EXPERIENCE, GENERAL_LEVEL_ATTACK, GENERAL_LEVEL_SPEED, GENERALS, HERO_PAIRS, INTRO_ROUND_HP_MULTIPLIERS,
   MAP_LAYOUTS, NORMAL_ENEMY_SPEED_PX_PER_SEC, PASSIVE_PROP_IDS, PROPS, SOLDIER_LEVEL_ATTACK,
@@ -11,7 +11,7 @@ import type {
   BattleEvent, BattleEventPayload, CommandEnvelope, CommandErrorCode, CommandFailure, CommandResult, GameCommand,
   EnemyState, MatchSnapshot, MatchSnapshotInput, PlayerBattleState, PlayerPropState, PlayerSlot, PropLoadout, ReserveItem, UnitState,
 } from "./types";
-import type { ActivePropId, PassivePropId, SoldierKind } from "./config";
+import type { ActivePropId, BattleBuffKind, PassivePropId, SoldierKind } from "./config";
 
 export interface Rng { next(): number; }
 
@@ -74,6 +74,7 @@ export function normalizeMatchSnapshot(snapshot: MatchSnapshotInput): MatchSnaps
     player.pendingArrowImpacts ??= [];
     player.rainBossIds ??= [];
     player.visionDarkMs ??= 0;
+    player.battleBuffs ??= [];
     ensureProps(player);
     for (const unit of player.units) if (GENERALS[unit.kind]) {
       const floor = generalExperienceFloor(unit.kind, unit.level);
@@ -202,7 +203,7 @@ function createPlayer(slot: PlayerSlot, mapIndex: number, introRound = 10): Play
     wave: 1, phase: "preparing", prepareMs: GAME_CONFIG.prepareMs,
     interwaveMs: 0, spawnMs: GAME_CONFIG.spawnMs, remainingToSpawn: firstWave[0],
     introRound: Math.max(0, Math.floor(introRound)),
-    units: [], reserve: [], unlockedCells: initialOpenCells(mapIndex), enemies: [], props: emptyPropState(), lastEvent: "等待双方布阵",
+    units: [], reserve: [], unlockedCells: initialOpenCells(mapIndex), enemies: [], battleBuffs: [], props: emptyPropState(), lastEvent: "等待双方布阵",
   };
 }
 
@@ -1170,6 +1171,59 @@ function useProp(
   return null;
 }
 
+function applyRallyBuff(enemy: EnemyState) {
+  if ((enemy.battleRallyMs ?? 0) <= 0) {
+    const bonus = enemy.maxHp * 0.2;
+    enemy.maxHp += bonus;
+    enemy.hp += bonus;
+    enemy.battleRallyBonusHp = bonus;
+  }
+  enemy.battleRallyMs = 6_000;
+}
+
+function useBattleBuff(
+  snapshot: MatchSnapshot,
+  player: PlayerBattleState,
+  command: Extract<GameCommand, { type: "USE_BATTLE_BUFF" }>,
+): string | null {
+  player.battleBuffs ??= [];
+  const item = player.battleBuffs.find((candidate) => candidate.id === command.buffInstanceId);
+  if (!item) return "该局内BUFF不存在或已经使用";
+  const targetSlot: PlayerSlot = player.slot === 0 ? 1 : 0;
+  const opponent = snapshot.players[targetSlot];
+  const target = opponent.enemies.find((enemy) => enemy.id === command.targetEnemyId && enemy.hp > 0 && enemy.progress < 1);
+  if (!target) return "请拖到正在进攻对方的怪物身上";
+  if (item.kind === "giant" && target.battleGiantApplied) return "该怪物已经获得巨灵效果";
+
+  let affected: EnemyState[] = [target];
+  if (item.kind === "invulnerable") target.battleInvulnerableMs = Math.max(target.battleInvulnerableMs ?? 0, 5_000);
+  else if (item.kind === "haste") target.battleHasteMs = Math.max(target.battleHasteMs ?? 0, 10_000);
+  else if (item.kind === "giant") {
+    target.hp *= 2.5;
+    target.maxHp *= 2.5;
+    if ((target.inspireBonusHp ?? 0) > 0) target.inspireBonusHp = (target.inspireBonusHp ?? 0) * 2.5;
+    if ((target.battleRallyBonusHp ?? 0) > 0) target.battleRallyBonusHp = (target.battleRallyBonusHp ?? 0) * 2.5;
+    target.battleGiantApplied = true;
+  } else if (item.kind === "rally") {
+    const center = enemyPathPoint(snapshot.mapIndex, target);
+    affected = opponent.enemies.filter((enemy) => {
+      if (enemy.hp <= 0 || enemy.progress >= 1) return false;
+      const point = enemyPathPoint(snapshot.mapIndex, enemy);
+      return Math.hypot(point.x - center.x, point.y - center.y) <= 2;
+    });
+    for (const enemy of affected) applyRallyBuff(enemy);
+  }
+
+  player.battleBuffs = player.battleBuffs.filter((candidate) => candidate.id !== item.id);
+  const config = BATTLE_BUFFS.find((candidate) => candidate.kind === item.kind);
+  player.lastEvent = `${config?.name ?? "局内BUFF"}已施加给对方怪物`;
+  emitBattleEvent(snapshot, {
+    type: "battle-buff-used", slot: player.slot, buffInstanceId: item.id, buffKind: item.kind,
+    targetSlot, targetEnemyId: target.id, affectedEnemyIds: affected.map((enemy) => enemy.id),
+  });
+  return null;
+}
+
 /**
  * 安装包 nB：只有初始白色布阵格均被占用、营地没有铲子且仍有空位时，
  * 才出现局内铲子补给；一次最多补足两个营地格。
@@ -1210,6 +1264,7 @@ function dispatchCommand(snapshot: MatchSnapshot, player: PlayerBattleState, com
     case "RECRUIT": return recruit(snapshot, player, rng);
     case "SET_PROP_LOADOUT": return setPropLoadout(snapshot, player, command.loadout, command.earlyAccountShovelBonus);
     case "USE_PROP": return useProp(snapshot, player, command, rng);
+    case "USE_BATTLE_BUFF": return useBattleBuff(snapshot, player, command);
     case "CLAIM_SHOVEL_SUPPLY": return claimShovelSupply(snapshot, player);
     case "CLAIM_BULLDOZER_SUPPLY": return claimBulldozerSupply(snapshot, player);
     case "DROP_RESERVE": return dropReserve(snapshot, player, command.reserveId, command.targetCell);
@@ -1288,6 +1343,8 @@ function validGameCommand(value: unknown): value is GameCommand {
         && (value.targetEnemyId === undefined || isNonEmptyString(value.targetEnemyId))
         && (value.targetCell === undefined || isCellOrSlot(value.targetCell))
         && (value.reserveId === undefined || isNonEmptyString(value.reserveId));
+    case "USE_BATTLE_BUFF":
+      return isNonEmptyString(value.buffInstanceId) && isNonEmptyString(value.targetEnemyId);
     case "DROP_RESERVE":
       return isNonEmptyString(value.reserveId) && isCellOrSlot(value.targetCell);
     case "DROP_RESERVE_TO_SLOT":
@@ -1399,7 +1456,25 @@ function spawnEnemy(snapshot: MatchSnapshot, player: PlayerBattleState) {
 }
 
 function damage(enemy: PlayerBattleState["enemies"][number], amount: number) {
+  if ((enemy.battleInvulnerableMs ?? 0) > 0) return 0;
   enemy.hp -= amount;
+  return amount;
+}
+
+function maybeDropBattleBuff(snapshot: MatchSnapshot, player: PlayerBattleState, enemy: EnemyState): BattleBuffKind | null {
+  if (enemy.boss) return null;
+  const rng = createRng(snapshot.seed ^ snapshot.tick ^ stringSeed(enemy.id) ^ (player.slot * 0x45D9F3B) ^ 0xB0FF);
+  if (rng.next() >= BATTLE_BUFF_DROP.chance) return null;
+  const config = BATTLE_BUFFS[Math.floor(rng.next() * BATTLE_BUFFS.length)]!;
+  const id = `buff-${player.slot}-${enemy.id}`;
+  player.battleBuffs ??= [];
+  if (player.battleBuffs.some((item) => item.id === id)) return null;
+  player.battleBuffs.push({ id, kind: config.kind });
+  emitBattleEvent(snapshot, {
+    type: "battle-buff-dropped", slot: player.slot, buffInstanceId: id,
+    buffKind: config.kind, sourceEnemyId: enemy.id,
+  });
+  return config.kind;
 }
 
 function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: number) {
@@ -1445,7 +1520,7 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
           .sort((a, b) => b.progress - a.progress)[0];
         if (!slashTarget) break;
         const impact = enemyPathPoint(snapshot.mapIndex, slashTarget);
-        damage(slashTarget, stats.attack);
+        const appliedDamage = damage(slashTarget, stats.attack);
         let hitCount = 1;
         for (const enemy of player.enemies) {
           if (enemy.id === slashTarget.id || enemy.hp <= 0) continue;
@@ -1458,7 +1533,7 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
           type: "attack", slot: player.slot, unitId: unit.id, unitKind: unit.kind,
           sourceCell: unit.cell, ...(unit.secondaryCell === undefined ? {} : { secondaryCell: unit.secondaryCell }),
           targetId: slashTarget.id, targetProgress: slashTarget.progress, targetBoss: slashTarget.boss,
-          damage: stats.attack, hitCount, special: true,
+          damage: appliedDamage, hitCount, special: true,
         });
       }
       grantGeneralExperienceForNewDefeats(snapshot, player, unit, aliveBeforeAttack);
@@ -1474,7 +1549,7 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
     if (preAttackSkill) unit.attackCount = 0;
 
     const baseDamage = unit.kind === "骑" ? stats.attack / 2 : stats.attack;
-    damage(target, baseDamage);
+    const appliedBaseDamage = damage(target, baseDamage);
     if (!preAttackSkill) unit.attackCount += 1;
     unit.cooldownMs = Math.max(0, stats.intervalMs + elapsedCooldown);
     const effect = emitBattleEvent(snapshot, {
@@ -1487,7 +1562,7 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
       targetId: target.id,
       targetProgress: target.progress,
       targetBoss: target.boss,
-      damage: baseDamage,
+      damage: appliedBaseDamage,
       hitCount: 1,
       special: false,
     } as Extract<BattleEventPayload, { type: "attack" }>);
@@ -1541,15 +1616,14 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
       effect.special = true;
     }
     if (unit.kind === "赵云" && unit.attackCount >= 30) {
-      damage(target, stats.attack * 7);
-      effect.damage += stats.attack * 7;
+      effect.damage += damage(target, stats.attack * 7);
       effect.special = true;
       unit.attackCount = 0;
     }
     if (unit.kind === "刘备" && unit.attackCount >= 20) {
-      damage(target, stats.attack * 5);
+      const skillDamage = damage(target, stats.attack * 5);
       target.stunnedMs = Math.max(target.stunnedMs, 2_000);
-      effect.damage += stats.attack * 5;
+      effect.damage += skillDamage;
       effect.special = true;
       unit.attackCount = 0;
     }
@@ -1579,14 +1653,21 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
     player.enemies = player.enemies.filter((enemy) => enemy.hp > 0);
     const reward = defeated.reduce((sum, enemy) => sum + (enemy.boss ? GAME_CONFIG.bossKillBuns : GAME_CONFIG.normalKillBuns), 0);
     player.buns += reward;
-    for (const enemy of defeated) emitBattleEvent(snapshot, {
-      type: "enemy-defeated", slot: player.slot, enemyId: enemy.id, boss: enemy.boss,
-      rewardBuns: enemy.boss ? GAME_CONFIG.bossKillBuns : GAME_CONFIG.normalKillBuns,
-    });
+    const dropped: BattleBuffKind[] = [];
+    for (const enemy of defeated) {
+      emitBattleEvent(snapshot, {
+        type: "enemy-defeated", slot: player.slot, enemyId: enemy.id, boss: enemy.boss,
+        rewardBuns: enemy.boss ? GAME_CONFIG.bossKillBuns : GAME_CONFIG.normalKillBuns,
+      });
+      const buff = maybeDropBattleBuff(snapshot, player, enemy);
+      if (buff) dropped.push(buff);
+    }
     for (const deadBoss of defeated.filter((enemy) => enemy.bossType === 4)) {
       player.rainBossIds = (player.rainBossIds ?? []).filter((id) => id !== deadBoss.id);
     }
-    player.lastEvent = defeated.some((enemy) => enemy.boss) ? `击败Boss，+${reward}馒头` : `击败敌人，+${reward}馒头`;
+    const droppedNames = dropped.map((kind) => BATTLE_BUFFS.find((buff) => buff.kind === kind)?.name).filter(Boolean);
+    const rewardText = defeated.some((enemy) => enemy.boss) ? `击败Boss，+${reward}馒头` : `击败敌人，+${reward}馒头`;
+    player.lastEvent = droppedNames.length ? `${rewardText} · 掉落${droppedNames.join("、")}` : rewardText;
   }
 }
 
@@ -1826,15 +1907,31 @@ function tickUnitBossStatuses(player: PlayerBattleState, deltaMs: number) {
 }
 
 function tickEnemyBuffs(enemy: EnemyState, deltaMs: number) {
-  if ((enemy.moveSpeedBuffMs ?? 0) <= 0) return;
-  enemy.moveSpeedBuffMs = Math.max(0, (enemy.moveSpeedBuffMs ?? 0) - deltaMs);
-  if (enemy.moveSpeedBuffMs > 0) return;
-  enemy.moveSpeedMultiplier = 1;
-  enemy.scaleMultiplier = 1;
-  if ((enemy.inspireBonusHp ?? 0) > 0) {
-    enemy.maxHp = Math.max(1, enemy.maxHp - (enemy.inspireBonusHp ?? 0));
-    enemy.hp = Math.min(enemy.hp, enemy.maxHp);
-    enemy.inspireBonusHp = 0;
+  if ((enemy.battleInvulnerableMs ?? 0) > 0) {
+    enemy.battleInvulnerableMs = Math.max(0, (enemy.battleInvulnerableMs ?? 0) - deltaMs);
+  }
+  if ((enemy.battleHasteMs ?? 0) > 0) {
+    enemy.battleHasteMs = Math.max(0, (enemy.battleHasteMs ?? 0) - deltaMs);
+  }
+  if ((enemy.battleRallyMs ?? 0) > 0) {
+    enemy.battleRallyMs = Math.max(0, (enemy.battleRallyMs ?? 0) - deltaMs);
+    if (enemy.battleRallyMs === 0 && (enemy.battleRallyBonusHp ?? 0) > 0) {
+      enemy.maxHp = Math.max(1, enemy.maxHp - (enemy.battleRallyBonusHp ?? 0));
+      enemy.hp = Math.min(enemy.hp, enemy.maxHp);
+      enemy.battleRallyBonusHp = 0;
+    }
+  }
+  if ((enemy.moveSpeedBuffMs ?? 0) > 0) {
+    enemy.moveSpeedBuffMs = Math.max(0, (enemy.moveSpeedBuffMs ?? 0) - deltaMs);
+    if (enemy.moveSpeedBuffMs === 0) {
+      enemy.moveSpeedMultiplier = 1;
+      enemy.scaleMultiplier = 1;
+      if ((enemy.inspireBonusHp ?? 0) > 0) {
+        enemy.maxHp = Math.max(1, enemy.maxHp - (enemy.inspireBonusHp ?? 0));
+        enemy.hp = Math.min(enemy.hp, enemy.maxHp);
+        enemy.inspireBonusHp = 0;
+      }
+    }
   }
 }
 
@@ -2086,7 +2183,9 @@ function advanceEnemyAlongOriginalPath(snapshot: MatchSnapshot, player: PlayerBa
   const silt = hasPassive(player, 18) ? 0.9 : 1;
   const bossSpeed = enemy.bossType === undefined
     ? BOSS_ENEMY_SPEED_PX_PER_SEC : BOSS_CONFIGS[enemy.bossType]?.speedPxPerSec ?? BOSS_ENEMY_SPEED_PX_PER_SEC;
-  const speed = (enemy.boss ? bossSpeed : NORMAL_ENEMY_SPEED_PX_PER_SEC) * silt * (enemy.moveSpeedMultiplier ?? 1);
+  const battleBuffSpeed = ((enemy.battleHasteMs ?? 0) > 0 ? 2 : 1) * ((enemy.battleRallyMs ?? 0) > 0 ? 1.2 : 1);
+  const speed = (enemy.boss ? bossSpeed : NORMAL_ENEMY_SPEED_PX_PER_SEC) * silt
+    * (enemy.moveSpeedMultiplier ?? 1) * battleBuffSpeed;
   const stepCells = speed * deltaMs / 1_000 / ORIGINAL_CELL_PX;
   enemy.pathX = (enemy.pathX ?? target.x) + dx / (distancePx / ORIGINAL_CELL_PX) * stepCells;
   enemy.pathY = (enemy.pathY ?? target.y) + dy / (distancePx / ORIGINAL_CELL_PX) * stepCells;
@@ -2153,14 +2252,18 @@ function tickProps(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: 
       return endCells.some((cell) => Math.hypot(point.x - cell.x, point.y - cell.y) <= 1);
     });
     if (threatened && props.meteorMs === 0) {
-      const defeatedIds = player.enemies.filter((enemy) => {
+      const defeated = player.enemies.filter((enemy) => {
+        if ((enemy.battleInvulnerableMs ?? 0) > 0) return false;
         const point = enemyPathPoint(snapshot.mapIndex, enemy);
         return endCells.some((cell) => Math.hypot(point.x - cell.x, point.y - cell.y) <= 1);
-      }).map((enemy) => enemy.id);
+      });
+      const defeatedIds = defeated.map((enemy) => enemy.id);
       player.enemies = player.enemies.filter((enemy) => {
+        if ((enemy.battleInvulnerableMs ?? 0) > 0) return true;
         const point = enemyPathPoint(snapshot.mapIndex, enemy);
         return !endCells.some((cell) => Math.hypot(point.x - cell.x, point.y - cell.y) <= 1);
       });
+      for (const enemy of defeated) maybeDropBattleBuff(snapshot, player, enemy);
       props.meteorMs = 300_000;
       player.lastEvent = "陨石落下，清除阿斗附近敌军";
       emitBattleEvent(snapshot, { type: "prop-triggered", slot: player.slot, propId: 20, targetIds: defeatedIds });
@@ -2180,14 +2283,18 @@ function tickProps(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: 
       targetIds = [trigger.id];
     }
     else {
-      targetIds = player.enemies.filter((enemy) => {
+      const defeated = player.enemies.filter((enemy) => {
+        if ((enemy.battleInvulnerableMs ?? 0) > 0) return false;
         const point = enemyPathPoint(snapshot.mapIndex, enemy);
         return Math.hypot(point.x - cell.x, point.y - cell.y) <= 0.75;
-      }).map((enemy) => enemy.id);
+      });
+      targetIds = defeated.map((enemy) => enemy.id);
       player.enemies = player.enemies.filter((enemy) => {
+        if ((enemy.battleInvulnerableMs ?? 0) > 0) return true;
         const point = enemyPathPoint(snapshot.mapIndex, enemy);
         return Math.hypot(point.x - cell.x, point.y - cell.y) > 0.75;
       });
+      for (const enemy of defeated) maybeDropBattleBuff(snapshot, player, enemy);
     }
     props.placed = props.placed.filter((candidate) => candidate.id !== placed.id);
     player.lastEvent = placed.propId === 8 ? "陷阱触发：敌人眩晕5秒" : "地雷触发：范围敌军被消灭";

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  BOSS_CONFIGS, GAME_CONFIG, INTRO_ROUND_HP_MULTIPLIERS, MAP_LAYOUTS, NORMAL_ENEMY_SPEED_PX_PER_SEC,
+  BATTLE_BUFFS, BOSS_CONFIGS, GAME_CONFIG, INTRO_ROUND_HP_MULTIPLIERS, MAP_LAYOUTS, NORMAL_ENEMY_SPEED_PX_PER_SEC,
   PROPS, TOKEN_POOL, applyCommand, attackRangeIntersectsCell, cellCode, cellIndex, createMatch, executeCommand,
   initialOpenCells, pathLengthCells, pathPoint, stepMatch, type CommandEnvelope, type MatchSnapshot,
 } from "../src";
@@ -973,5 +973,137 @@ describe("1.0.9 authoritative simulation", () => {
     player.enemies = [{ id: "trap-target", hp: 10, maxHp: 10, progress: 0, boss: false, stunnedMs: 0 }];
     stepMatch(match, 100);
     expect(player.enemies[0]?.stunnedMs).toBe(4_900);
+  });
+});
+
+describe("project battle buff drops", () => {
+  function buffMatch() {
+    const match = createMatch("BATTLE-BUFF", 47);
+    match.phase = "battle";
+    for (const player of match.players) {
+      player.phase = "battle";
+      player.prepareMs = 0;
+      player.spawnMs = 999_999;
+      player.remainingToSpawn = 1;
+      player.units = [];
+      player.enemies = [];
+    }
+    return match;
+  }
+
+  it("stores deterministic 8% normal-enemy drops in the current-match inventory with four uniform kinds", () => {
+    const match = buffMatch();
+    const defender = match.players[0];
+    defender.units = [{ id: "killer", kind: "刀", level: 5, cell: cellIndex(2, 7), cooldownMs: 0, attackCount: 0 }];
+    const counts = new Map(BATTLE_BUFFS.map((buff) => [buff.kind, 0]));
+    for (let index = 0; index < 2_000; index += 1) {
+      defender.units[0]!.cooldownMs = 0;
+      defender.enemies = [{
+        id: `drop-candidate-${index}`, hp: 1, maxHp: 1, progress: 0.4, boss: false, stunnedMs: 100_000,
+        pathX: 2, pathY: 7, pathIndex: 1,
+      }];
+      stepMatch(match, 100);
+      const event = match.events.find((candidate) => candidate.type === "battle-buff-dropped");
+      if (event?.type === "battle-buff-dropped") counts.set(event.buffKind, (counts.get(event.buffKind) ?? 0) + 1);
+    }
+    expect(defender.battleBuffs).toHaveLength([...counts.values()].reduce((sum, count) => sum + count, 0));
+    expect(defender.battleBuffs!.length).toBeGreaterThanOrEqual(120);
+    expect(defender.battleBuffs!.length).toBeLessThanOrEqual(200);
+    for (const count of counts.values()) {
+      expect(count).toBeGreaterThanOrEqual(20);
+      expect(count).toBeLessThanOrEqual(65);
+    }
+  });
+
+  it("applies all four buffs only to live monsters attacking the opponent and consumes on success", () => {
+    const match = buffMatch();
+    const owner = match.players[0];
+    const opponent = match.players[1];
+    owner.battleBuffs = BATTLE_BUFFS.map((buff, index) => ({ id: `buff-${index}`, kind: buff.kind }));
+    opponent.enemies = [
+      { id: "center", hp: 100, maxHp: 100, progress: 0.2, boss: false, stunnedMs: 100_000, pathX: 0, pathY: 9, pathIndex: 1 },
+      { id: "near", hp: 200, maxHp: 200, progress: 0.3, boss: false, stunnedMs: 100_000, pathX: 0, pathY: 7, pathIndex: 1 },
+      { id: "far", hp: 300, maxHp: 300, progress: 0.4, boss: true, bossType: 0, stunnedMs: 100_000, pathX: 4, pathY: 7, pathIndex: 1 },
+    ];
+
+    expect(applyCommand(match, 0, { type: "USE_BATTLE_BUFF", buffInstanceId: "buff-0", targetEnemyId: "center" }).ok).toBe(true);
+    expect(opponent.enemies[0]!.battleInvulnerableMs).toBe(5_000);
+    expect(applyCommand(match, 0, { type: "USE_BATTLE_BUFF", buffInstanceId: "buff-1", targetEnemyId: "center" }).ok).toBe(true);
+    expect(opponent.enemies[0]!.battleHasteMs).toBe(10_000);
+    expect(applyCommand(match, 0, { type: "USE_BATTLE_BUFF", buffInstanceId: "buff-2", targetEnemyId: "far" }).ok).toBe(true);
+    expect(opponent.enemies[2]).toMatchObject({ hp: 750, maxHp: 750, battleGiantApplied: true });
+    expect(applyCommand(match, 0, { type: "USE_BATTLE_BUFF", buffInstanceId: "buff-3", targetEnemyId: "center" }).ok).toBe(true);
+    expect(opponent.enemies[0]).toMatchObject({ hp: 120, maxHp: 120, battleRallyMs: 6_000 });
+    expect(opponent.enemies[1]).toMatchObject({ hp: 240, maxHp: 240, battleRallyMs: 6_000 });
+    expect(opponent.enemies[2]!.battleRallyMs).toBeUndefined();
+    expect(owner.battleBuffs).toEqual([]);
+    expect(match.events.at(-1)).toMatchObject({
+      type: "battle-buff-used", buffKind: "rally", targetSlot: 1,
+      targetEnemyId: "center", affectedEnemyIds: ["center", "near"],
+    });
+  });
+
+  it("keeps immunity authoritative, expires timed bonuses, and rejects duplicate giant use without consuming", () => {
+    const match = buffMatch();
+    const owner = match.players[0];
+    const opponent = match.players[1];
+    owner.battleBuffs = [
+      { id: "immune", kind: "invulnerable" },
+      { id: "rally", kind: "rally" },
+      { id: "giant-a", kind: "giant" },
+      { id: "giant-b", kind: "giant" },
+    ];
+    opponent.units = [{ id: "attacker", kind: "刀", level: 5, cell: cellIndex(2, 7), cooldownMs: 0, attackCount: 0 }];
+    opponent.enemies = [{
+      id: "target", hp: 100, maxHp: 100, progress: 0.4, boss: false, stunnedMs: 100_000,
+      pathX: 2, pathY: 7, pathIndex: 1,
+    }];
+    expect(applyCommand(match, 0, { type: "USE_BATTLE_BUFF", buffInstanceId: "immune", targetEnemyId: "target" }).ok).toBe(true);
+    stepMatch(match, 100);
+    expect(opponent.enemies[0]!.hp).toBe(100);
+    expect(match.events.find((event) => event.type === "attack")).toMatchObject({ type: "attack", damage: 0 });
+
+    expect(applyCommand(match, 0, { type: "USE_BATTLE_BUFF", buffInstanceId: "rally", targetEnemyId: "target" }).ok).toBe(true);
+    opponent.units = [];
+    stepMatch(match, 6_000);
+    expect(opponent.enemies[0]).toMatchObject({ hp: 100, maxHp: 100, battleRallyMs: 0, battleRallyBonusHp: 0 });
+
+    expect(applyCommand(match, 0, { type: "USE_BATTLE_BUFF", buffInstanceId: "giant-a", targetEnemyId: "target" }).ok).toBe(true);
+    const duplicate = applyCommand(match, 0, { type: "USE_BATTLE_BUFF", buffInstanceId: "giant-b", targetEnemyId: "target" });
+    expect(duplicate).toMatchObject({ ok: false, message: "该怪物已经获得巨灵效果" });
+    expect(owner.battleBuffs).toContainEqual({ id: "giant-b", kind: "giant" });
+  });
+
+  it("keeps an invulnerable monster alive when it triggers an instant-kill landmine", () => {
+    const match = buffMatch();
+    const defender = match.players[0];
+    defender.props!.placed = [{ id: "mine", propId: 9, cell: cellIndex(0, 9) }];
+    defender.enemies = [{
+      id: "immune-trap-target", hp: 100, maxHp: 100, progress: 0, boss: false, stunnedMs: 0,
+      pathX: 0, pathY: 9, pathIndex: 1, battleInvulnerableMs: 5_000,
+    }];
+
+    stepMatch(match, 100);
+
+    expect(defender.enemies).toContainEqual(expect.objectContaining({ id: "immune-trap-target", hp: 100 }));
+    expect(defender.props!.placed).toEqual([]);
+  });
+
+  it("multiplies movement by 2x for haste and by 1.2x for rally", () => {
+    const distanceAfter = (kind?: "haste" | "rally") => {
+      const match = buffMatch();
+      const enemy = {
+        id: `walker-${kind ?? "plain"}`, hp: 100, maxHp: 100, progress: 0, boss: false, stunnedMs: 0,
+        pathX: 0, pathY: 9, pathIndex: 1,
+        ...(kind === "haste" ? { battleHasteMs: 10_000 } : {}),
+        ...(kind === "rally" ? { battleRallyMs: 6_000, battleRallyBonusHp: 20 } : {}),
+      };
+      match.players[0].enemies = [enemy];
+      stepMatch(match, 400);
+      return 9 - (match.players[0].enemies[0]!.pathY ?? 9);
+    };
+    const plain = distanceAfter();
+    expect(distanceAfter("haste")).toBeCloseTo(plain * 2, 8);
+    expect(distanceAfter("rally")).toBeCloseTo(plain * 1.2, 8);
   });
 });

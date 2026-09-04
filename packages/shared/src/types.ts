@@ -1,4 +1,4 @@
-import type { ActivePropId, BattlePropId, PassivePropId } from "./config";
+import type { ActivePropId, BattleBuffKind, BattlePropId, PassivePropId } from "./config";
 
 export type PlayerSlot = 0 | 1;
 export type MatchPhase = "waiting" | "preparing" | "battle" | "finished";
@@ -66,6 +66,12 @@ export interface EnemyState {
   moveSpeedBuffMs?: number;
   inspireBonusHp?: number;
   scaleMultiplier?: number;
+  /** 产品新增局内 BUFF 状态；各计时器由权威模拟推进。 */
+  battleInvulnerableMs?: number;
+  battleHasteMs?: number;
+  battleGiantApplied?: boolean;
+  battleRallyMs?: number;
+  battleRallyBonusHp?: number;
   bossCooldownMs?: number;
   bossSkillElapsedMs?: number;
   bossSkillTargetIds?: string[];
@@ -75,6 +81,12 @@ export interface EnemyState {
   summonedKind?: "zombie" | "cavalry" | "puppet";
   summonedUnitKind?: string;
   summonedUnitLevel?: number;
+}
+
+export interface BattleBuffItem {
+  /** 本局唯一实例 ID，成功使用后消耗。 */
+  id: string;
+  kind: BattleBuffKind;
 }
 
 export interface ArrowRainImpactState {
@@ -229,6 +241,22 @@ export type BattleEventPayload =
     rewardBuns?: number;
   }
   | {
+    type: "battle-buff-dropped";
+    slot: PlayerSlot;
+    buffInstanceId: string;
+    buffKind: BattleBuffKind;
+    sourceEnemyId: string;
+  }
+  | {
+    type: "battle-buff-used";
+    slot: PlayerSlot;
+    buffInstanceId: string;
+    buffKind: BattleBuffKind;
+    targetSlot: PlayerSlot;
+    targetEnemyId: string;
+    affectedEnemyIds: string[];
+  }
+  | {
     type: "boss-skill";
     slot: PlayerSlot;
     bossId: string;
@@ -317,6 +345,8 @@ export interface PlayerBattleState {
   /** 初始为地图里的 1_0；铲子可加入任意己方 2_0，不要求相邻。 */
   unlockedCells: number[];
   enemies: EnemyState[];
+  /** 仅在当前对局快照中存在，不进入账号道具数据库。 */
+  battleBuffs?: BattleBuffItem[];
   pendingArrowImpacts?: ArrowRainImpactState[];
   /** 仍在生效的甄宓降雨 Boss；每个来源对尚未升级驱散的单位施加 -20% 攻速。 */
   rainBossIds?: string[];
@@ -384,6 +414,7 @@ export type GameCommand =
   | { type: "RECRUIT" }
   | { type: "SET_PROP_LOADOUT"; loadout: PropLoadout; earlyAccountShovelBonus?: boolean }
   | { type: "USE_PROP"; propId: ActivePropId; targetUnitId?: string; targetEnemyId?: string; targetCell?: number; reserveId?: string }
+  | { type: "USE_BATTLE_BUFF"; buffInstanceId: string; targetEnemyId: string }
   | { type: "CLAIM_SHOVEL_SUPPLY" }
   | { type: "CLAIM_BULLDOZER_SUPPLY" }
   | { type: "DROP_RESERVE"; reserveId: string; targetCell: number }

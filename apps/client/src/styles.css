@@ -144,7 +144,7 @@ button { touch-action: manipulation; }
 .exit-match:hover { background: rgba(151,93,69,.08); }
 
 .battle-layout { display: grid; grid-template-columns: minmax(0, var(--game-width)) minmax(270px, 340px); justify-content: center; gap: 16px; align-items: start; }
-.playfield-card { position: relative; width: min(var(--game-width), 100%); min-width: 0; overflow: hidden; border: 1px solid rgba(225,202,151,.55); background: #edf0df; box-shadow: 0 20px 55px rgba(0,0,0,.3); transition: width .16s ease; }
+.playfield-card { container-type: inline-size; position: relative; width: min(var(--game-width), 100%); min-width: 0; overflow: hidden; border: 1px solid rgba(225,202,151,.55); background: #edf0df; box-shadow: 0 20px 55px rgba(0,0,0,.3); transition: width .16s ease; }
 .match-ready-panel {
   position: absolute;
   z-index: 15;
@@ -216,6 +216,19 @@ button { touch-action: manipulation; }
 .active-prop-drag-ghost b { font-size: 11px; }
 .active-prop-drag-ghost small { color: #8e5844; font-size: 9px; }
 body.is-dragging-prop, body.is-dragging-prop * { cursor: grabbing !important; }
+.battle-buff-dock { position: absolute; z-index: 18; left: 1.4cqw; bottom: 16.875cqw; display: flex; width: 27.5cqw; height: 17.5cqw; min-height: 54px; max-height: 76px; flex-direction: column; border: 1px solid rgba(239,198,94,.74); border-radius: 10px; padding: 4px; background: rgba(37,65,55,.93); box-shadow: 0 9px 25px rgba(24,42,36,.35); }
+.battle-buff-dock > span { display: block; flex: 0 0 auto; margin-bottom: 2px; color: #ffe9a6; font-size: 9px; font-weight: 900; letter-spacing: .06em; text-align: center; }
+.battle-buff-bar { display: flex; flex: 1; gap: 4px; min-height: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.battle-buff-bar::-webkit-scrollbar { display: none; }
+.battle-buff-bar button { position: relative; display: flex; flex: 0 0 42px; align-items: center; justify-content: center; min-width: 0; border: 1px solid color-mix(in srgb, var(--buff-color), transparent 30%); border-radius: 8px; padding: 3px; background: rgba(255,250,229,.96); color: #354f45; cursor: grab; touch-action: none; user-select: none; }
+.battle-buff-bar button i { display: grid; place-items: center; width: 28px; height: 31px; border-radius: 7px; background: #284a3d; color: var(--buff-color); font: 900 19px/1 "KaiTi", serif; font-style: normal; }
+.battle-buff-bar button b { display: none; }
+.battle-buff-bar button em { position: absolute; right: 3px; bottom: 1px; color: #99533d; font-size: 9px; font-style: normal; font-weight: 900; }
+.battle-buff-bar button.is-pressed { transform: scale(.96); box-shadow: inset 0 0 0 2px var(--buff-color); }
+.battle-buff-bar button.is-drag-source { opacity: .3; }
+.battle-buff-drag-ghost { grid-template-columns: 32px auto; min-width: 112px; border-color: var(--buff-color); }
+.battle-buff-drag-ghost i { color: var(--buff-color); }
+.battle-buff-drag-ghost em { justify-self: end; color: #99533d; font-size: 10px; font-style: normal; font-weight: 900; }
 .howto { margin-top: 22px; color: #626b64; font-size: 13px; line-height: 1.65; }
 .howto b { color: #3f5b50; }
 .howto ol { margin: 8px 0 0; padding-left: 21px; }
@@ -342,6 +355,11 @@ body.is-dragging-prop, body.is-dragging-prop * { cursor: grabbing !important; }
   .unit-inspector-portrait { flex-basis: 72px; width: 72px; height: 72px; }
   .unit-inspector-portrait img { width: 70px; height: 70px; }
   .unit-inspector h2 { font-size: 26px; }
+  .battle-buff-dock { min-height: 54px; border-radius: 8px; padding: 3px; }
+  .battle-buff-dock > span { margin-bottom: 1px; font-size: 8px; }
+  .battle-buff-bar { gap: 3px; }
+  .battle-buff-bar button { flex-basis: 40px; padding: 2px; }
+  .battle-buff-bar button i { width: 27px; height: 29px; font-size: 17px; }
   .postgame-overlay { place-items: end center; padding: 0; }
   .postgame-card { width: 100%; max-height: 92dvh; border-width: 1px 0 0; border-radius: 22px 22px 0 0; padding: 22px 16px calc(20px + env(safe-area-inset-bottom)); }
   .postgame-actions, .shop-offers { grid-template-columns: 1fr; }

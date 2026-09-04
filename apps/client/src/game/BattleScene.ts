@@ -1,14 +1,14 @@
 import Phaser from "phaser";
 import {
-  GAME_CONFIG, GENERALS, MAP_LAYOUTS, PROPS, SOLDIERS, attackRangeIntersectsCell, cellCode, cellCoords, cellIndex,
+  BATTLE_BUFFS, GAME_CONFIG, GENERALS, MAP_LAYOUTS, PROPS, SOLDIERS, attackRangeIntersectsCell, cellCode, cellCoords, cellIndex,
   enemyPathPoint, pathPoint,
-  type ActivePropId, type BattleEvent, type CombatEffectEvent, type EnemyState, type HeroRarity, type MatchSnapshot, type PlayerBattleState, type PlayerSlot,
+  type ActivePropId, type BattleBuffKind, type BattleEvent, type CombatEffectEvent, type EnemyState, type HeroRarity, type MatchSnapshot, type PlayerBattleState, type PlayerSlot,
 } from "@adou/shared";
 import { allImageAssets, HERO_ASSET_KEYS, IMAGE_ASSETS, TROOP_ASSET_KEYS } from "./assets";
 import {
-  BATTLE_INPUT, BATTLE_LAYOUT, activePropDropTargetAt, battleDropTargetAt, createPointerGesture, isTapGesture, updatePointerGesture,
+  BATTLE_INPUT, BATTLE_LAYOUT, activePropDropTargetAt, battleBuffDropTargetAt, battleDropTargetAt, createPointerGesture, isTapGesture, updatePointerGesture,
   resolveBattleInspection, worldDragThreshold,
-  type ActivePropDropPayload, type BattleInspectSelection, type DragSource, type PointerGesture,
+  type ActivePropDropPayload, type BattleBuffDropPayload, type BattleInspectSelection, type DragSource, type PointerGesture,
 } from "./battleInteraction";
 
 const WIDTH = GAME_CONFIG.designWidth;
@@ -34,9 +34,11 @@ type PointerAction =
       offsetX: number;
       offsetY: number;
     }
+  | { type: "enemy"; ownerSlot: PlayerSlot; enemyId: string }
   | { type: "recruit" };
 type ActivePointer = { gesture: PointerGesture; action: PointerAction };
 type PropDragPointer = { propId: ActivePropId; clientX: number; clientY: number };
+type BattleBuffDragPointer = { buffInstanceId: string; buffKind: BattleBuffKind; clientX: number; clientY: number };
 type EnemyVisual = {
   root: Phaser.GameObjects.Container;
   figure: Phaser.GameObjects.Container;
@@ -44,6 +46,8 @@ type EnemyVisual = {
   baseSize: number;
   imageBody: boolean;
   healthBar: Phaser.GameObjects.Rectangle;
+  statusText: Phaser.GameObjects.Text;
+  aura: Phaser.GameObjects.Arc;
   healthBarWidth: number;
   seed: number;
   boss: boolean;
@@ -71,6 +75,7 @@ export class BattleScene extends Phaser.Scene {
   private draggingPartIndex: 0 | 1 | null = null;
   private selectedUnit: BattleInspectSelection | null = null;
   private activePropDrag: { propId: ActivePropId; hover: ActivePropDropPayload | null } | null = null;
+  private battleBuffDrag: { buffInstanceId: string; buffKind: BattleBuffKind; hover: BattleBuffDropPayload | null } | null = null;
   private mapSignature = "";
   private staticRenderSignature = "";
   private enemyVisuals = new Map<string, EnemyVisual>();
@@ -111,6 +116,10 @@ export class BattleScene extends Phaser.Scene {
     this.game.events.on("battle:prop-drag-move", this.onPropDragMove, this);
     this.game.events.on("battle:prop-drag-end", this.onPropDragEnd, this);
     this.game.events.on("battle:prop-drag-cancel", this.onPropDragCancel, this);
+    this.game.events.on("battle:buff-drag-start", this.onBattleBuffDragStart, this);
+    this.game.events.on("battle:buff-drag-move", this.onBattleBuffDragMove, this);
+    this.game.events.on("battle:buff-drag-end", this.onBattleBuffDragEnd, this);
+    this.game.events.on("battle:buff-drag-cancel", this.onBattleBuffDragCancel, this);
     this.game.events.on(Phaser.Core.Events.BLUR, this.onPointerCancel, this);
     this.game.events.emit("battle:scene-ready");
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
@@ -124,10 +133,15 @@ export class BattleScene extends Phaser.Scene {
       this.game.events.off("battle:prop-drag-move", this.onPropDragMove, this);
       this.game.events.off("battle:prop-drag-end", this.onPropDragEnd, this);
       this.game.events.off("battle:prop-drag-cancel", this.onPropDragCancel, this);
+      this.game.events.off("battle:buff-drag-start", this.onBattleBuffDragStart, this);
+      this.game.events.off("battle:buff-drag-move", this.onBattleBuffDragMove, this);
+      this.game.events.off("battle:buff-drag-end", this.onBattleBuffDragEnd, this);
+      this.game.events.off("battle:buff-drag-cancel", this.onBattleBuffDragCancel, this);
       this.game.events.off(Phaser.Core.Events.BLUR, this.onPointerCancel, this);
       this.game.canvas.classList.remove("is-battle-ready");
       this.resetPointerState();
       this.onPropDragCancel();
+      this.onBattleBuffDragCancel();
       this.clearEnemyVisuals();
     });
   }
@@ -173,6 +187,15 @@ export class BattleScene extends Phaser.Scene {
     this.activePointer = {
       gesture: createPointerGesture(pointer.id, point, this.pointerThreshold(pointer)),
       action: { type: "recruit" },
+    };
+  }
+
+  private beginEnemyPointer(pointer: Phaser.Input.Pointer, ownerSlot: PlayerSlot, enemyId: string) {
+    if (this.activePointer || !pointer.primaryDown) return;
+    const point = this.pointerPoint(pointer);
+    this.activePointer = {
+      gesture: createPointerGesture(pointer.id, point, this.pointerThreshold(pointer)),
+      action: { type: "enemy", ownerSlot, enemyId },
     };
   }
 
@@ -258,6 +281,19 @@ export class BattleScene extends Phaser.Scene {
         this.game.events.emit("battle:recruit");
         return;
       }
+      if (active.action.type === "enemy") {
+        const { ownerSlot, enemyId } = active.action;
+        const owner = this.snapshot?.players[ownerSlot];
+        const enemy = owner?.enemies.find((candidate) => candidate.id === enemyId);
+        if (!enemy) {
+          this.clearInspection(true);
+          return;
+        }
+        this.selectedUnit = null;
+        this.game.events.emit("battle:inspect-enemy", { ownerSlot, enemyId: enemy.id });
+        this.drawSelectedRange();
+        return;
+      }
       const inspection = active.action.selection && this.snapshot
         ? resolveBattleInspection(this.snapshot, active.action.selection)
         : { kind: active.action.inspectKind, level: active.action.level };
@@ -337,6 +373,58 @@ export class BattleScene extends Phaser.Scene {
     this.activePropDrag = null;
     this.propTargetGraphics?.clear();
     this.game.canvas.classList.remove("is-prop-targeting");
+  }
+
+  private battleBuffDropAt(payload: BattleBuffDragPointer) {
+    if (!this.snapshot) return null;
+    const point = this.clientToWorld(payload.clientX, payload.clientY);
+    return point ? battleBuffDropTargetAt(
+      this.snapshot, this.slot, payload.buffInstanceId, payload.buffKind, point,
+    ) : null;
+  }
+
+  private onBattleBuffDragStart(payload: Pick<BattleBuffDragPointer, "buffInstanceId" | "buffKind">) {
+    this.onPropDragCancel();
+    this.battleBuffDrag = { ...payload, hover: null };
+    this.game.canvas.classList.add("is-prop-targeting");
+    this.drawBattleBuffTargets();
+  }
+
+  private onBattleBuffDragMove(payload: BattleBuffDragPointer) {
+    if (!this.battleBuffDrag || this.battleBuffDrag.buffInstanceId !== payload.buffInstanceId) return;
+    this.battleBuffDrag.hover = this.battleBuffDropAt(payload);
+    this.drawBattleBuffTargets();
+  }
+
+  private onBattleBuffDragEnd(payload: BattleBuffDragPointer) {
+    if (!this.battleBuffDrag || this.battleBuffDrag.buffInstanceId !== payload.buffInstanceId) return;
+    const target = this.battleBuffDropAt(payload);
+    this.onBattleBuffDragCancel();
+    if (target) this.game.events.emit("battle:buff-drop", target);
+    else this.game.events.emit("battle:buff-drop-miss", { buffKind: payload.buffKind });
+  }
+
+  private onBattleBuffDragCancel() {
+    this.battleBuffDrag = null;
+    this.propTargetGraphics?.clear();
+    this.game.canvas.classList.remove("is-prop-targeting");
+  }
+
+  private drawBattleBuffTargets() {
+    const graphics = this.propTargetGraphics;
+    graphics.clear();
+    if (!this.snapshot || !this.battleBuffDrag) return;
+    const opponent = this.snapshot.players[this.slot === 0 ? 1 : 0];
+    const config = BATTLE_BUFFS.find((candidate) => candidate.kind === this.battleBuffDrag?.buffKind);
+    const color = Number.parseInt((config?.color ?? "#f5c65d").slice(1), 16);
+    for (const enemy of opponent.enemies) {
+      if (enemy.hp <= 0 || enemy.progress >= 1) continue;
+      const point = this.enemyVisualPoint(enemy, true);
+      const hovered = this.battleBuffDrag.hover?.targetEnemyId === enemy.id;
+      const scale = (enemy.scaleMultiplier ?? 1) * (enemy.battleGiantApplied ? 2 : 1);
+      graphics.fillStyle(color, hovered ? 0.34 : 0.1).fillCircle(point.x, point.y, 31 * scale);
+      graphics.lineStyle(hovered ? 7 : 3, color, hovered ? 1 : 0.8).strokeCircle(point.x, point.y, 34 * scale);
+    }
   }
 
   private activePropTargetKey(target: ActivePropDropPayload | null) {
@@ -448,6 +536,7 @@ export class BattleScene extends Phaser.Scene {
     this.slot = slot;
     if (!this.activePointer || this.isDragging) this.renderState(previous, false);
     else this.syncEnemies(previous);
+    if (this.battleBuffDrag) this.drawBattleBuffTargets();
     this.playBattleEvents(snapshot.events ?? []);
     // The canvas exists before preload/create and the first authoritative
     // snapshot finish. Only expose it after interactive pieces have rendered,
@@ -820,6 +909,7 @@ export class BattleScene extends Phaser.Scene {
       if (event.type === "attack") this.playAttackEffect(event);
       else if (event.type === "arrow-rain-impact") this.playArrowRainImpact(event);
       else if (event.type === "boss-skill" && event.phase !== "resolved") this.playBossSkill(event);
+      else if (event.type === "battle-buff-dropped" || event.type === "battle-buff-used") this.playBattleBuffEvent(event);
       else if (event.type === "bulldozer" && event.phase === "push") this.cameras.main.shake(90, 0.0018);
     }
     if (this.playedEffectIds.size > 600) this.playedEffectIds.clear();
@@ -927,6 +1017,35 @@ export class BattleScene extends Phaser.Scene {
         this.playImpactEffect(target.x, target.y, event, style, angle, reducedMotion);
       },
     });
+  }
+
+  private playBattleBuffEvent(event: Extract<BattleEvent, { type: "battle-buff-dropped" | "battle-buff-used" }>) {
+    const config = BATTLE_BUFFS.find((candidate) => candidate.kind === event.buffKind);
+    if (!config) return;
+    const color = Number.parseInt(config.color.slice(1), 16);
+    if (event.type === "battle-buff-dropped") {
+      if (event.slot !== this.slot) return;
+      const banner = this.add.container(110, 1190).setAlpha(0).setDepth(96);
+      const plate = this.add.rectangle(0, 0, 184, 58, 0x29483d, 0.94).setStrokeStyle(3, color, 1);
+      const label = this.add.text(0, 0, `掉落 · ${config.name}`, {
+        fontFamily: '"STKaiti", "KaiTi", serif', fontSize: "23px", color: "#fff4cf", fontStyle: "bold",
+      }).setOrigin(0.5);
+      banner.add([plate, label]); this.effectsLayer.add(banner);
+      this.tweens.add({ targets: banner, alpha: 1, y: 1148, duration: 180, yoyo: true, hold: 850, onComplete: () => banner.destroy() });
+      return;
+    }
+    const visual = this.enemyVisuals.get(`${event.targetSlot}:${event.targetEnemyId}`);
+    const x = visual?.root.x ?? WIDTH / 2;
+    const y = visual?.root.y ?? MAP_TOP + 400;
+    const ring = this.add.circle(x, y, 22, color, 0.2).setStrokeStyle(7, color, 1);
+    const label = this.add.text(x, y - 50, config.name, {
+      fontFamily: '"STKaiti", "KaiTi", serif', fontSize: "27px", color: "#fff4cf", fontStyle: "bold",
+      stroke: "#263b32", strokeThickness: 5,
+    }).setOrigin(0.5);
+    this.effectsLayer.add([ring, label]);
+    this.tweens.add({ targets: ring, scale: event.buffKind === "giant" ? 4.5 : 3, alpha: 0, duration: 520, onComplete: () => ring.destroy() });
+    this.tweens.add({ targets: label, y: y - 82, alpha: 0, duration: 700, onComplete: () => label.destroy() });
+    if (event.buffKind === "giant") this.cameras.main.shake(180, 0.003);
   }
 
   private playAttackWake(
@@ -1325,7 +1444,7 @@ export class BattleScene extends Phaser.Scene {
     return { x: (x + 0.5) * CELL, y: MAP_TOP + (y + 0.5) * CELL };
   }
 
-  private createEnemyVisual(enemy: EnemyState, mirror: boolean, x: number, y: number) {
+  private createEnemyVisual(enemy: EnemyState, ownerSlot: PlayerSlot, mirror: boolean, x: number, y: number) {
     const seed = [...enemy.id].reduce((total, character) => total + character.charCodeAt(0), 0);
     const regularKeys = [IMAGE_ASSETS.enemies.rebel.key, IMAGE_ASSETS.enemies.brute.key, IMAGE_ASSETS.enemies.scout.key, IMAGE_ASSETS.enemies.captain.key];
     const bossKeys = [IMAGE_ASSETS.enemies.bossHorned.key, IMAGE_ASSETS.enemies.bossBanner.key];
@@ -1333,13 +1452,20 @@ export class BattleScene extends Phaser.Scene {
     const size = enemy.boss ? 74 : 53;
     const radius = enemy.boss ? 31 : 23;
     const healthBarWidth = enemy.boss ? 54 : 38;
-    const root = this.add.container(x, y);
+    const root = this.add.container(x, y).setSize(enemy.boss ? 92 : 72, enemy.boss ? 92 : 72);
+    root.setInteractive(
+      new Phaser.Geom.Circle(root.width / 2, root.height / 2, enemy.boss ? 46 : 36),
+      Phaser.Geom.Circle.Contains,
+    );
+    if (root.input) root.input.cursor = "pointer";
+    root.on("pointerdown", (pointer: Phaser.Input.Pointer) => this.beginEnemyPointer(pointer, ownerSlot, enemy.id));
     const figure = this.add.container(0, 0);
+    const aura = this.add.circle(0, 0, radius + 8, 0xf5c65d, 0).setStrokeStyle(3, 0xf5c65d, 0);
     const shadow = this.add.ellipse(0, radius * 0.7, enemy.boss ? 54 : 34, enemy.boss ? 16 : 10, 0x1f302b, 0.4);
     const frame = this.add.circle(0, 0, radius, enemy.boss ? 0x8f2f2d : mirror ? 0x475c66 : 0x5e3c35, 0.88)
       .setStrokeStyle(enemy.boss ? 3 : 2, enemy.boss ? 0xffd06e : 0xf0e5cf, 0.96);
     const imageBody = this.pieceDisplayMode === "image";
-    const scaleMultiplier = enemy.scaleMultiplier ?? 1;
+    const scaleMultiplier = (enemy.scaleMultiplier ?? 1) * (enemy.battleGiantApplied ? 2 : 1);
     const body = imageBody
       ? this.add.image(0, 1, imageKey).setDisplaySize(size * scaleMultiplier, size * scaleMultiplier)
       : this.add.text(0, 0, enemy.boss ? "将" : "兵", {
@@ -1352,9 +1478,13 @@ export class BattleScene extends Phaser.Scene {
     const ratio = Math.max(0, enemy.hp / enemy.maxHp);
     const healthBar = this.add.rectangle(-healthBarWidth / 2, -radius - 9, Math.max(0.01, healthBarWidth * ratio), 6, 0xd75240, 1)
       .setOrigin(0, 0.5);
-    root.add([figure, barBack, healthBar]);
+    const statusText = this.add.text(0, radius + 11, "", {
+      fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "13px", color: "#fff5c9", fontStyle: "bold",
+      stroke: "#263b32", strokeThickness: 4,
+    }).setOrigin(0.5, 0);
+    root.add([aura, figure, barBack, healthBar, statusText]);
     this.enemyLayer.add(root);
-    return { root, figure, body, baseSize: size, imageBody, healthBar, healthBarWidth, seed, boss: enemy.boss } satisfies EnemyVisual;
+    return { root, figure, body, baseSize: size, imageBody, healthBar, statusText, aura, healthBarWidth, seed, boss: enemy.boss } satisfies EnemyVisual;
   }
 
   private syncEnemies(previous?: MatchSnapshot | null) {
@@ -1373,10 +1503,10 @@ export class BattleScene extends Phaser.Scene {
       if (!visual) {
         const priorEnemy = side.previous?.enemies.find((candidate) => candidate.id === enemy.id);
         const start = priorEnemy ? this.enemyVisualPoint(priorEnemy, side.mirror, previous) : target;
-        visual = this.createEnemyVisual(enemy, side.mirror, start.x, start.y);
+        visual = this.createEnemyVisual(enemy, side.player.slot, side.mirror, start.x, start.y);
         this.enemyVisuals.set(key, visual);
       }
-      const scaleMultiplier = enemy.scaleMultiplier ?? 1;
+      const scaleMultiplier = (enemy.scaleMultiplier ?? 1) * (enemy.battleGiantApplied ? 2 : 1);
       if (visual.imageBody) {
         (visual.body as Phaser.GameObjects.Image).setDisplaySize(
           visual.baseSize * scaleMultiplier,
@@ -1387,6 +1517,15 @@ export class BattleScene extends Phaser.Scene {
       }
       const ratio = Math.max(0, Math.min(1, enemy.hp / enemy.maxHp));
       visual.healthBar.setDisplaySize(Math.max(0.01, visual.healthBarWidth * ratio), 6);
+      const statuses = [
+        (enemy.battleInvulnerableMs ?? 0) > 0 ? `免${Math.ceil((enemy.battleInvulnerableMs ?? 0) / 1000)}s` : "",
+        (enemy.battleHasteMs ?? 0) > 0 ? `疾${Math.ceil((enemy.battleHasteMs ?? 0) / 1000)}s` : "",
+        enemy.battleGiantApplied ? "巨" : "",
+        (enemy.battleRallyMs ?? 0) > 0 ? `振${Math.ceil((enemy.battleRallyMs ?? 0) / 1000)}s` : "",
+      ].filter(Boolean);
+      visual.statusText.setText(statuses.join(" · "));
+      const hasBuff = statuses.length > 0;
+      visual.aura.setFillStyle(0xf5c65d, hasBuff ? 0.08 : 0).setStrokeStyle(3, 0xf5c65d, hasBuff ? 0.82 : 0);
       this.tweens.killTweensOf(visual.root);
       const distance = Phaser.Math.Distance.Between(visual.root.x, visual.root.y, target.x, target.y);
       if (distance > CELL * 2.5) visual.root.setPosition(target.x, target.y);

@@ -2,7 +2,7 @@
 
 ## 合同元数据
 
-- 版本：1.3.0
+- 版本：1.4.0
 - 提供方：01 规则与数值基线
 - 消费方：02 权威战斗内核、03 战场交互、04 美术表现、06 实时联机、07 自动化测试
 - 当前 TypeScript 来源：`packages/shared/src/config.ts`
@@ -45,4 +45,4 @@ Boss 完整技能、黄忠箭雨逐帧空间结算、推土车距离、摸金奖
 ## 未决问题
 
 - 仍为 `pending-original-verification` 的字段不得出现在“100% 原版复刻”发布声明中。
-- 独立联网权威服务必须验证客户端、服务端使用同一 `rulesetVersion=1.0.9` 与 `schemaVersion=1.3.0`。
+- 独立联网权威服务必须验证客户端、服务端使用同一 `rulesetVersion=1.0.9` 与 `schemaVersion=1.4.0`。

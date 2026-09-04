@@ -1,6 +1,6 @@
 import {
-  GAME_CONFIG, PROPS, cellCode, cellCoords, cellIndex,
-  type ActivePropId, type GameCommand, type MatchSnapshot, type PlayerSlot,
+  GAME_CONFIG, PROPS, cellCode, cellCoords, cellIndex, enemyPathPoint,
+  type ActivePropId, type BattleBuffKind, type GameCommand, type MatchSnapshot, type PlayerSlot,
 } from "@adou/shared";
 
 export const BATTLE_INPUT = {
@@ -58,6 +58,12 @@ export type ActivePropDropPayload =
   | Readonly<{ propId: ActivePropId; targetEnemyId: string }>
   | Readonly<{ propId: ActivePropId; targetCell: number }>
   | Readonly<{ propId: ActivePropId; reserveId: string }>;
+
+export type BattleBuffDropPayload = Readonly<{
+  buffInstanceId: string;
+  buffKind: BattleBuffKind;
+  targetEnemyId: string;
+}>;
 
 export function createPointerGesture(pointerId: number, start: Point, threshold: number): PointerGesture {
   return { pointerId, start, current: start, threshold, dragging: false };
@@ -180,4 +186,33 @@ export function activePropDropTargetAt(
 
 export function commandForActivePropDrop(payload: ActivePropDropPayload): GameCommand {
   return { type: "USE_PROP", ...payload };
+}
+
+/** 命中玩家视角上半场、正在进攻对手的怪物；最终合法性仍由权威模拟校验。 */
+export function battleBuffDropTargetAt(
+  snapshot: MatchSnapshot,
+  viewerSlot: PlayerSlot,
+  buffInstanceId: string,
+  buffKind: BattleBuffKind,
+  point: Point,
+): BattleBuffDropPayload | null {
+  const opponent = snapshot.players[viewerSlot === 0 ? 1 : 0];
+  let best: { id: string; distance: number } | null = null;
+  for (const enemy of opponent.enemies) {
+    if (enemy.hp <= 0 || enemy.progress >= 1) continue;
+    const canonical = enemyPathPoint(snapshot.mapIndex, enemy);
+    const displayed = {
+      x: (GAME_CONFIG.columns - 1 - canonical.x + 0.5) * GAME_CONFIG.cellSize,
+      y: GAME_CONFIG.mapTop + (GAME_CONFIG.rows - 1 - canonical.y + 0.5) * GAME_CONFIG.cellSize,
+    };
+    const distance = Math.hypot(displayed.x - point.x, displayed.y - point.y);
+    const scale = (enemy.scaleMultiplier ?? 1) * (enemy.battleGiantApplied ? 2 : 1);
+    if (distance > BATTLE_INPUT.tokenHitRadius * Math.max(1, scale) || (best && best.distance <= distance)) continue;
+    best = { id: enemy.id, distance };
+  }
+  return best ? { buffInstanceId, buffKind, targetEnemyId: best.id } : null;
+}
+
+export function commandForBattleBuffDrop(payload: BattleBuffDropPayload): GameCommand {
+  return { type: "USE_BATTLE_BUFF", buffInstanceId: payload.buffInstanceId, targetEnemyId: payload.targetEnemyId };
 }

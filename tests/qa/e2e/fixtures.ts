@@ -25,7 +25,20 @@ export function acceptanceSnapshot(): MatchSnapshot {
   return snapshot;
 }
 
-export async function mockAuthenticatedAccount(page: Page, snapshot = acceptanceSnapshot()) {
+type MockCloudProgress = {
+  version: 1;
+  savedAt: number;
+  activeMode: "practice" | "online" | null;
+  practiceSnapshot?: MatchSnapshot;
+  propLoadout?: { active: number[]; passive: Array<{ id: number; level: number }> };
+  economy?: Record<string, unknown>;
+};
+
+export async function mockAuthenticatedAccount(
+  page: Page,
+  snapshot = acceptanceSnapshot(),
+  options: { progress?: Partial<MockCloudProgress>; failProgressWrites?: number } = {},
+) {
   const createdAt = "2026-01-01T00:00:00.000Z";
   const user = {
     id: QA_USER_ID, aud: "authenticated", role: "authenticated", email: "qa@example.invalid",
@@ -37,7 +50,11 @@ export async function mockAuthenticatedAccount(page: Page, snapshot = acceptance
     expires_in: 31_536_000, expires_at: 4_102_444_800, user,
   };
   let progressRevision = 0;
-  let storedProgress = { version: 1 as const, savedAt: 1, activeMode: "practice" as const, practiceSnapshot: snapshot };
+  let storedProgress: MockCloudProgress = {
+    version: 1, savedAt: 1, activeMode: "practice", practiceSnapshot: snapshot,
+    ...options.progress,
+  };
+  let progressWrites = 0;
   await page.addInitScript(({ key, value }) => localStorage.setItem(key, JSON.stringify(value)), {
     key: AUTH_STORAGE_KEY, value: session,
   });
@@ -55,6 +72,22 @@ export async function mockAuthenticatedAccount(page: Page, snapshot = acceptance
           created_at: createdAt, updated_at: createdAt,
         }),
       });
+      return;
+    }
+    if (url.pathname.startsWith("/rest/v1/zhaoyun_adou_profiles") && request.method() === "POST") {
+      progressWrites += 1;
+      if (progressWrites <= (options.failProgressWrites ?? 0)) {
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ code: "PGRST000", message: "simulated interrupted save" }),
+        });
+        return;
+      }
+      const payload = request.postDataJSON() as { progress?: MockCloudProgress };
+      if (payload.progress) storedProgress = payload.progress;
+      progressRevision += 1;
+      await route.fulfill({ status: 201, contentType: "application/json", body: "[]" });
       return;
     }
     if (url.pathname === "/rest/v1/rpc/zhaoyun_adou_save_progress" && request.method() === "POST") {
@@ -86,6 +119,10 @@ export async function mockAuthenticatedAccount(page: Page, snapshot = acceptance
     }
     await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
   });
+  return {
+    readStoredProgress: () => structuredClone(storedProgress),
+    progressWriteCount: () => progressWrites,
+  };
 }
 
 export async function openRestoredBattle(page: Page) {

@@ -1,6 +1,6 @@
 /** 原作规则版本；与网络协议版本分开演进。 */
 export const RULESET_VERSION = "1.0.9" as const;
-export const RULES_CONFIG_SCHEMA_VERSION = "1.3.0" as const;
+export const RULES_CONFIG_SCHEMA_VERSION = "1.4.0" as const;
 
 export type RuleVerificationStatus =
   | "package-recorded"
@@ -132,6 +132,11 @@ export const RULE_PROVENANCE = {
     evidenceRefs: ["PROPS-MD#4"],
     note: "原作广告入口在本项目改为直接获得；属于明确产品映射，不冒充原包规则。",
   },
+  battleBuffDrops: {
+    status: "project-adaptation",
+    evidenceRefs: ["docs/contracts/battle-buff.md"],
+    note: "普通敌兵 8% 掉落四种等概率局内 BUFF，是产品新增互动机制，不属于原包 1.0.9。",
+  },
   authoritativeTickRate: {
     status: "project-adaptation",
     evidenceRefs: ["RULES-MD#8", "SPEC-DOCX#9.5"],
@@ -140,7 +145,7 @@ export const RULE_PROVENANCE = {
 } as const satisfies Record<string, RuleProvenanceEntry>;
 
 export const GAME_CONFIG = {
-  protocolVersion: "0.4.0",
+  protocolVersion: "0.5.0",
   columns: 8,
   rows: 10,
   designWidth: 640,
@@ -288,6 +293,31 @@ export const GENERAL_EXPERIENCE = {
   },
   implementedAttribution: "direct-killing-blow-only",
   verification: "pending-original-verification",
+} as const;
+
+export type BattleBuffKind = "invulnerable" | "haste" | "giant" | "rally";
+
+export interface BattleBuffConfig {
+  kind: BattleBuffKind;
+  name: string;
+  glyph: string;
+  intro: string;
+  color: string;
+  durationMs: number | null;
+}
+
+/** 产品新增的局内互动 BUFF；顺序也是确定性等概率抽取顺序。 */
+export const BATTLE_BUFFS = [
+  { kind: "invulnerable", name: "金刚护体", glyph: "免", intro: "使目标怪物 5 秒内免疫任何伤害。", color: "#f5c65d", durationMs: 5_000 },
+  { kind: "haste", name: "疾行", glyph: "疾", intro: "使目标怪物移动速度翻倍，持续 10 秒。", color: "#56cfe1", durationMs: 10_000 },
+  { kind: "giant", name: "巨灵", glyph: "巨", intro: "使目标怪物放大 2 倍，当前生命和生命上限变为原来的 2.5 倍，持续至离场。", color: "#ef8354", durationMs: null },
+  { kind: "rally", name: "振奋", glyph: "振", intro: "半径 2 格内全体怪物移动速度和生命均 +20%，持续 6 秒。", color: "#9bde7e", durationMs: 6_000 },
+] as const satisfies readonly BattleBuffConfig[];
+
+export const BATTLE_BUFF_DROP = {
+  chance: 0.08,
+  eligible: "normal-enemy-defeat",
+  selection: "uniform",
 } as const;
 /** @deprecated 旧消费者兼容别名；等同武将成长，普通兵不得再使用。 */
 export const LEVEL_ATTACK = GENERAL_LEVEL_ATTACK;
@@ -788,6 +818,10 @@ export const RULES_CONFIG_1_0_9 = {
     acquisition: PROP_ACQUISITION_RULES,
     rarityNames: PROP_RARITY_NAMES,
     rarityColors: PROP_RARITY_COLORS,
+  },
+  battleBuffs: {
+    catalog: BATTLE_BUFFS,
+    drop: BATTLE_BUFF_DROP,
   },
   waves: {
     rows: WAVES,
