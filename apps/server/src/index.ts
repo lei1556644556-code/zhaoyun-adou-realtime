@@ -48,6 +48,7 @@ const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY?.trim();
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
 const originList = (process.env.CLIENT_ORIGIN ?? "").split(",").map((value) => value.trim()).filter(Boolean);
 const socketPath = process.env.SOCKET_PATH?.trim() || "/socket.io";
+const host = process.env.HOST?.trim() || "127.0.0.1";
 
 if (requireAuth && (!supabaseUrl || !publishableKey)) {
   throw new Error("Production authority requires SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY");
@@ -407,9 +408,9 @@ process.once("SIGTERM", () => { void shutdown("SIGTERM"); });
 process.once("SIGINT", () => { void shutdown("SIGINT"); });
 
 const port = Number(process.env.PORT ?? 3001);
-httpServer.listen(port, "0.0.0.0", () => {
+httpServer.listen(port, host, () => {
   console.log(JSON.stringify({
-    event: "server_started", port, protocol: GAME_CONFIG.protocolVersion,
+    event: "server_started", host, port, protocol: GAME_CONFIG.protocolVersion,
     auth: requireAuth, persistence: Boolean(adminClient),
   }));
 });

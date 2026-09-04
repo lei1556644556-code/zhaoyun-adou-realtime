@@ -6,6 +6,8 @@
 
 生产模式拒绝以下缺失配置：精确 `CLIENT_ORIGIN`、Supabase URL/publishable key、仅服务端持有的 service-role key。浏览器永远不能获得 service-role key。
 
+直接部署在反向代理同机时保持默认 `HOST=127.0.0.1`、`PORT=3001`，不向公网暴露 Node 监听端口；只有容器平台需要跨网络命名空间接入时才显式设置 `HOST=0.0.0.0`。
+
 ## 本地验证
 
 ```bash

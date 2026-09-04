@@ -67,6 +67,8 @@ UI 必须分别展示三个状态，不能再把 WebSocket 订阅成功等同于
 4. Supabase `zhaoyun_adou_matches` 保存 24 小时检查点；恢复令牌只保存 SHA-256。
 5. 常驻服务部署完成并通过双浏览器验收后，写入 GitHub `PRODUCTION_SERVER_URL` 再发布 Pages。
 
+权威服务的监听合同为 `HOST` + `PORT`：直接部署在 Nginx 同机时默认 `127.0.0.1:3001`，仅由反向代理访问；容器平台需要跨网络命名空间接入时必须显式设置 `HOST=0.0.0.0`。Socket.IO 路径由 `SOCKET_PATH` 配置，Nginx 路由必须保持该路径和升级头，不得改写或占用其他应用的 WebSocket 路径。
+
 ## 发布闸门
 
 以下全部通过才允许把真人对战标为正式可用：
