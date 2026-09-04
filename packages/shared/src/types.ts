@@ -513,6 +513,18 @@ export interface CommandEnvelope {
   command: GameCommand;
 }
 
+/** 服务端完成校验和排序后，向房间内双方广播的轻量命令。 */
+export interface AppliedCommandPayload {
+  slot: PlayerSlot;
+  commandId: string;
+  clientSeq: number;
+  command: GameCommand;
+  serverTick: number;
+  serverStateVersionBefore: number;
+  serverStateVersion: number;
+  serverEventSequenceBefore: number;
+}
+
 export type CommandErrorCode =
   | "ERR_INVALID_ENVELOPE"
   | "ERR_COMMAND_ID_CONFLICT"

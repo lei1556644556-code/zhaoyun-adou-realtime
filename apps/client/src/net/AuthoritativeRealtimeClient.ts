@@ -1,8 +1,11 @@
 import { io, type Socket } from "socket.io-client";
 import {
   GAME_CONFIG, MATCH_SNAPSHOT_VERSION, RULESET_VERSION, RULES_CONFIG_SCHEMA_VERSION,
-  type CommandEnvelope, type GameCommand, type MatchSnapshot, type PlayerSlot,
+  cloneSnapshot,
+  type AppliedCommandPayload, type CommandEnvelope, type GameCommand, type MatchSnapshot, type PlayerSlot,
 } from "@adou/shared";
+import { replayAuthoritativeCommand } from "./replayAuthoritativeCommand";
+import { stepMatchBatch } from "./stepMatchBatch";
 
 type JoinedPayload = { ok: boolean; roomId?: string; slot?: PlayerSlot; token?: string; message?: string };
 type AckPayload = JoinedPayload & { stateVersion?: number; code?: string };
@@ -16,6 +19,11 @@ export class AuthoritativeRealtimeClient extends EventTarget {
   private closed = false;
   private listenersBound = false;
   private reconnectPending = false;
+  private snapshot: MatchSnapshot | null = null;
+  private tickTimer = 0;
+  private lastTickAt = 0;
+  private tickRemainder = 0;
+  private resyncInFlight = false;
   slot: PlayerSlot = 0;
   roomId = "";
   token = "";
@@ -68,6 +76,7 @@ export class AuthoritativeRealtimeClient extends EventTarget {
       });
       socket.on("disconnect", () => {
         if (!this.closed && this.roomId && this.token) this.reconnectPending = true;
+        this.stopLocalSimulation();
         this.emit("network", { connected: false });
       });
       socket.on("connect_error", (error) => {
@@ -76,10 +85,9 @@ export class AuthoritativeRealtimeClient extends EventTarget {
       });
       socket.on("room:status", (payload) => this.emit("room", payload));
       socket.on("match:start", (payload) => this.emit("start", payload));
-      socket.on("match:snapshot", (snapshot: MatchSnapshot) => {
-        this.stateVersion = snapshot.stateVersion;
-        this.emit("snapshot", snapshot);
-      });
+      socket.on("match:snapshot", (snapshot: MatchSnapshot) => this.acceptCheckpoint(snapshot));
+      socket.on("match:checkpoint", (snapshot: MatchSnapshot) => this.acceptCheckpoint(snapshot));
+      socket.on("match:command-applied", (payload: AppliedCommandPayload) => this.applyAuthoritativeCommand(payload));
     }
     if (socket.connected) return socket;
     socket.connect();
@@ -152,6 +160,71 @@ export class AuthoritativeRealtimeClient extends EventTarget {
     return this.remember(await this.request("room:resume", { roomId, token }), name);
   }
 
+  private publishSnapshot() {
+    if (!this.snapshot) return;
+    this.stateVersion = this.snapshot.stateVersion;
+    this.emit("snapshot", cloneSnapshot(this.snapshot));
+  }
+
+  private acceptCheckpoint(snapshot: MatchSnapshot) {
+    this.snapshot = cloneSnapshot(snapshot);
+    this.seq = Math.max(this.seq, this.snapshot.lastClientSeq[this.slot]);
+    this.lastTickAt = performance.now();
+    this.tickRemainder = 0;
+    this.publishSnapshot();
+    this.startLocalSimulation();
+  }
+
+  private startLocalSimulation() {
+    if (!this.snapshot || this.tickTimer || !this.socket?.connected) return;
+    const tickMs = 1000 / GAME_CONFIG.tickHz;
+    this.tickTimer = window.setInterval(() => {
+      if (!this.snapshot || this.snapshot.phase === "finished" || !this.socket?.connected) {
+        this.stopLocalSimulation();
+        return;
+      }
+      const now = performance.now();
+      const elapsed = Math.min(500, now - this.lastTickAt);
+      this.lastTickAt = now;
+      this.tickRemainder += elapsed;
+      const steps = Math.floor(this.tickRemainder / tickMs);
+      if (steps < 1) return;
+      this.tickRemainder -= steps * tickMs;
+      stepMatchBatch(this.snapshot, steps, tickMs);
+      this.publishSnapshot();
+    }, tickMs);
+  }
+
+  private stopLocalSimulation() {
+    window.clearInterval(this.tickTimer);
+    this.tickTimer = 0;
+    this.tickRemainder = 0;
+  }
+
+  private applyAuthoritativeCommand(payload: AppliedCommandPayload) {
+    if (!this.snapshot) {
+      this.requestResync();
+      return;
+    }
+    if (payload.clientSeq <= this.snapshot.lastClientSeq[payload.slot]) return;
+    const replay = replayAuthoritativeCommand(this.snapshot, payload);
+    if (!replay) {
+      this.requestResync();
+      return;
+    }
+    this.snapshot = replay;
+    this.publishSnapshot();
+  }
+
+  private requestResync() {
+    if (this.resyncInFlight || !this.socket?.connected) return;
+    this.resyncInFlight = true;
+    this.socket.timeout(4_000).emit("match:resync", {}, (error: Error | null, response: AckPayload) => {
+      this.resyncInFlight = false;
+      if (error || !response.ok) this.emit("notice", { message: "对局校验未通过，正在等待服务器重新同步" });
+    });
+  }
+
   async ready() {
     return this.request("room:ready", {});
   }
@@ -174,7 +247,6 @@ export class AuthoritativeRealtimeClient extends EventTarget {
           this.pendingCommands.delete(commandId);
           if (error) this.emit("notice", { message: "操作发送超时，请检查网络" });
           else if (!response.ok) this.emit("notice", { message: response.message ?? "操作被权威服务器拒绝" });
-          else if (response.stateVersion !== undefined) this.stateVersion = response.stateVersion;
         });
       } catch (error) {
         this.emit("notice", { message: error instanceof Error ? error.message : "操作发送失败" });
@@ -192,6 +264,7 @@ export class AuthoritativeRealtimeClient extends EventTarget {
   close() {
     this.closed = true;
     this.reconnectPending = false;
+    this.stopLocalSimulation();
     for (const timer of this.pendingCommands.values()) window.clearTimeout(timer);
     this.pendingCommands.clear();
     this.socket?.disconnect();

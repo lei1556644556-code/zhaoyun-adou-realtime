@@ -3,7 +3,10 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { io, type Socket } from "socket.io-client";
-import { GAME_CONFIG, type MatchSnapshot } from "@adou/shared";
+import {
+  GAME_CONFIG, cloneSnapshot, executeCommand,
+  type AppliedCommandPayload, type MatchSnapshot,
+} from "@adou/shared";
 import { repositoryRoot } from "../helpers/contracts";
 
 let serverProcess: ChildProcess | undefined;
@@ -44,9 +47,14 @@ function emitAck<T>(socket: Socket, event: string, payload: unknown) {
   });
 }
 
-function waitForEvent<T>(socket: Socket, event: string, predicate: (value: T) => boolean = () => true) {
+function waitForEvent<T>(
+  socket: Socket,
+  event: string,
+  predicate: (value: T) => boolean = () => true,
+  timeoutMs = 4_000,
+) {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => { socket.off(event, listener); reject(new Error(`${event} timeout`)); }, 4_000);
+    const timer = setTimeout(() => { socket.off(event, listener); reject(new Error(`${event} timeout`)); }, timeoutMs);
     const listener = (value: T) => {
       if (!predicate(value)) return;
       clearTimeout(timer); socket.off(event, listener); resolve(value);
@@ -155,25 +163,43 @@ describe("two-client authoritative room transport", () => {
       expect(firstGuestState.players).toEqual(firstHostState.players);
       expect(firstGuestState.players.map((player) => player.introRound)).toEqual([0, 5]);
 
-      let latestGuestState = firstGuestState;
-      guest.on("match:snapshot", (snapshot: MatchSnapshot) => { latestGuestState = snapshot; });
-      const recruited = waitForEvent<MatchSnapshot>(guest, "match:snapshot", (snapshot) => snapshot.players[1].recruitCount === 1);
+      let unexpectedFullSnapshots = 0;
+      guest.on("match:snapshot", () => { unexpectedFullSnapshots += 1; });
+      const hostApplied = waitForEvent<AppliedCommandPayload>(host, "match:command-applied");
+      const guestApplied = waitForEvent<AppliedCommandPayload>(guest, "match:command-applied");
       const envelope = {
         commandId: "qa-command-1", clientSeq: 1, expectedStateVersion: firstGuestState.stateVersion,
         command: { type: "RECRUIT" as const },
       };
       const commandResult = await emitAck<{ ok: boolean }>(guest, "match:command", envelope);
       expect(commandResult.ok).toBe(true);
-      const recruitedState = await recruited;
-      expect(recruitedState.acceptedCommands).toEqual({});
-      expect(recruitedState.combatEvents).toEqual([]);
-      expect(recruitedState.players[1].buns).toBe(GAME_CONFIG.startBuns - GAME_CONFIG.recruitBase);
-      expect(recruitedState.players[1].reserve).toHaveLength(GAME_CONFIG.reserveSize);
+      const [hostCommand, guestCommand] = await Promise.all([hostApplied, guestApplied]);
+      expect(guestCommand).toEqual(hostCommand);
+      expect(guestCommand).toMatchObject({
+        slot: 1, commandId: envelope.commandId, clientSeq: 1, command: envelope.command,
+      });
 
+      const locallyReplayed = cloneSnapshot(firstGuestState);
+      expect(executeCommand(locallyReplayed, 1, {
+        ...envelope, expectedStateVersion: locallyReplayed.stateVersion,
+      }).ok).toBe(true);
+      expect(locallyReplayed.players[1].buns).toBe(GAME_CONFIG.startBuns - GAME_CONFIG.recruitBase);
+      expect(locallyReplayed.players[1].reserve).toHaveLength(GAME_CONFIG.reserveSize);
+      expect(unexpectedFullSnapshots).toBe(0);
+
+      let duplicateBroadcasts = 0;
+      guest.on("match:command-applied", () => { duplicateBroadcasts += 1; });
       const duplicate = await emitAck<{ ok: boolean; duplicate: boolean }>(guest, "match:command", envelope);
       expect(duplicate).toMatchObject({ ok: true, duplicate: true });
       await new Promise((resolve) => setTimeout(resolve, 150));
-      expect(latestGuestState.players[1].recruitCount).toBe(1);
+      expect(duplicateBroadcasts).toBe(0);
+
+      const corrected = waitForEvent<MatchSnapshot>(guest, "match:snapshot");
+      expect(await emitAck(guest, "match:resync", {})).toMatchObject({ ok: true });
+      const correctedState = await corrected;
+      expect(correctedState.acceptedCommands).toEqual({});
+      expect(correctedState.combatEvents).toEqual([]);
+      expect(correctedState.players[1].recruitCount).toBe(1);
 
       const disconnected = waitForEvent<{ players: Array<{ slot: number; connected: boolean }> }>(
         host, "room:status", (status) => status.players.some((player) => player.slot === 1 && !player.connected),
@@ -194,4 +220,33 @@ describe("two-client authoritative room transport", () => {
       sockets.forEach((socket) => socket.disconnect());
     }
   });
+
+  it("advances without 10 Hz full snapshots and emits a sparse correction checkpoint", async () => {
+    const host = connect();
+    const guest = connect();
+    const sockets = [host, guest];
+    try {
+      await Promise.all(sockets.map((socket) => waitForEvent(socket, "connect")));
+      const joined = await emitAck<{ ok: boolean; roomId: string }>(host, "room:create", { name: "甲" });
+      await emitAck(guest, "room:join", { roomId: joined.roomId, name: "乙" });
+      const initialHost = waitForEvent<MatchSnapshot>(host, "match:snapshot");
+      const initialGuest = waitForEvent<MatchSnapshot>(guest, "match:snapshot");
+      await emitAck(host, "room:ready", {});
+      await emitAck(guest, "room:ready", {});
+      await Promise.all([initialHost, initialGuest]);
+
+      let fullSnapshotCount = 0;
+      host.on("match:snapshot", () => { fullSnapshotCount += 1; });
+      const startedAt = Date.now();
+      const checkpoint = await waitForEvent<MatchSnapshot>(host, "match:checkpoint", () => true, 6_000);
+      const elapsed = Date.now() - startedAt;
+
+      expect(checkpoint.tick).toBeGreaterThan(0);
+      expect(elapsed).toBeGreaterThanOrEqual(2_300);
+      expect(elapsed).toBeLessThanOrEqual(5_500);
+      expect(fullSnapshotCount).toBe(0);
+    } finally {
+      sockets.forEach((socket) => socket.disconnect());
+    }
+  }, 8_000);
 });

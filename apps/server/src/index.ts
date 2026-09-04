@@ -6,9 +6,9 @@ import { createClient } from "@supabase/supabase-js";
 import express from "express";
 import { Server, type Socket } from "socket.io";
 import {
-  GAME_CONFIG, MATCH_SNAPSHOT_VERSION, RULESET_VERSION, RULES_CONFIG_SCHEMA_VERSION,
+  GAME_CONFIG, MATCH_SNAPSHOT_VERSION, REALTIME_SYNC_CONFIG, RULESET_VERSION, RULES_CONFIG_SCHEMA_VERSION,
   cloneSnapshot, createMatch, executeCommand, stepMatch,
-  type CommandEnvelope, type MatchSnapshot, type PlayerSlot,
+  type AppliedCommandPayload, type CommandEnvelope, type MatchSnapshot, type PlayerSlot,
 } from "@adou/shared";
 
 type Ack = (payload: Record<string, unknown>) => void;
@@ -29,6 +29,7 @@ interface Room {
   createdAt: number;
   updatedAt: number;
   lastCheckpointAt: number;
+  lastWireCheckpointAt: number;
   persistInFlight: Promise<void> | null;
   persistRequested: boolean;
 }
@@ -73,6 +74,7 @@ const httpServer = createServer(app);
 const io = new Server(httpServer, {
   path: socketPath,
   cors: { origin: originList.length > 0 ? originList : true, credentials: false },
+  perMessageDeflate: { threshold: REALTIME_SYNC_CONFIG.compressionThresholdBytes },
 });
 const rooms = new Map<string, Room>();
 let quickRoomId: string | null = null;
@@ -108,7 +110,7 @@ function newRoom(code: string): Room {
   const now = Date.now();
   return {
     id: code, seats: [], snapshot: null, createdAt: now, updatedAt: now,
-    lastCheckpointAt: 0, persistInFlight: null, persistRequested: false,
+    lastCheckpointAt: 0, lastWireCheckpointAt: 0, persistInFlight: null, persistRequested: false,
   };
 }
 
@@ -151,8 +153,8 @@ function serializeRoom(room: Room): StoredRoomRow {
 /**
  * Clients render authoritative state but never need the server's idempotency
  * ledger or the deprecated duplicate attack-event view. Keeping those fields
- * out of the 10 Hz wire payload prevents command history and combat effects
- * from multiplying bandwidth as a match progresses.
+ * out of wire checkpoints prevents command history and combat effects from
+ * multiplying bandwidth as a match progresses.
  */
 function snapshotWithoutTransientHistory(snapshot: MatchSnapshot) {
   const wire = cloneSnapshot(snapshot);
@@ -162,6 +164,13 @@ function snapshotWithoutTransientHistory(snapshot: MatchSnapshot) {
 }
 
 const snapshotForClient = snapshotWithoutTransientHistory;
+
+function checkpointPhaseOffset(roomId: string) {
+  const spreadWindow = Math.max(1, Math.floor(REALTIME_SYNC_CONFIG.checkpointIntervalMs / 2));
+  let hash = 0;
+  for (const character of roomId) hash = ((hash * 31) + character.charCodeAt(0)) >>> 0;
+  return hash % spreadWindow;
+}
 
 function persistRoom(room: Room) {
   if (!adminClient) return Promise.resolve();
@@ -195,12 +204,15 @@ async function loadRoom(roomId: string) {
     .eq("room_id", normalized).gt("expires_at", new Date().toISOString()).maybeSingle<StoredRoomRow>();
   if (error) throw new Error(`Match restore failed: ${error.message}`);
   if (!data) return undefined;
+  const restoredAt = Date.now();
   const room: Room = {
     id: data.room_id,
     seats: data.seats.map((seat) => ({ ...seat, ready: Boolean(seat.ready), socketId: null })),
     snapshot: data.snapshot ? cloneSnapshot(data.snapshot) : null,
     createdAt: Date.parse(data.created_at), updatedAt: Date.parse(data.updated_at),
-    lastCheckpointAt: Date.now(), persistInFlight: null, persistRequested: false,
+    lastCheckpointAt: restoredAt,
+    lastWireCheckpointAt: restoredAt - checkpointPhaseOffset(data.room_id),
+    persistInFlight: null, persistRequested: false,
   };
   rooms.set(room.id, room);
   return room;
@@ -220,9 +232,12 @@ function startIfReady(room: Room) {
   const seed = randomBytes(4).readUInt32LE(0);
   room.snapshot = createMatch(room.id, seed, 0, [room.seats[0]!.introRound, room.seats[1]!.introRound]);
   room.updatedAt = Date.now();
+  // First correction still arrives within the configured interval, while a
+  // stable per-room phase prevents simultaneous rooms from producing a burst.
+  room.lastWireCheckpointAt = room.updatedAt - checkpointPhaseOffset(room.id);
   quickRoomId = quickRoomId === room.id ? null : quickRoomId;
   io.to(room.id).emit("match:start", { roomId: room.id, seed });
-  io.to(room.id).emit("match:snapshot", snapshotForClient(room.snapshot));
+  io.to(room.id).compress(true).emit("match:snapshot", snapshotForClient(room.snapshot));
   emitStatus(room);
 }
 
@@ -356,7 +371,7 @@ io.on("connection", (socket) => {
       socket.join(room.id); socket.data.roomId = room.id; socket.data.slot = seat.slot;
       ack?.({ ok: true, roomId: room.id, slot: seat.slot, token });
       emitStatus(room);
-      if (room.snapshot) socket.emit("match:snapshot", snapshotForClient(room.snapshot));
+      if (room.snapshot) socket.compress(true).emit("match:snapshot", snapshotForClient(room.snapshot));
       await persistRoom(room);
     } catch (error) { ack?.({ ok: false, code: "SERVER_ERROR", message: error instanceof Error ? error.message : "恢复房间失败" }); }
   });
@@ -384,15 +399,27 @@ io.on("connection", (socket) => {
       const seat = room?.seats.find((candidate) => candidate.slot === socket.data.slot && candidate.userId === socket.data.userId);
       if (!room?.snapshot || !seat) return ack?.({ ok: false, code: "ERR_ROOM_STATE", message: "尚未进入战斗" });
       const accepted = room.snapshot.acceptedCommands[envelope.commandId];
-      const result = executeCommand(room.snapshot, seat.slot, {
+      const authoritativeEnvelope = {
         ...envelope,
         expectedStateVersion: accepted?.expectedStateVersion ?? room.snapshot.stateVersion,
-      });
+      };
+      const serverStateVersionBefore = room.snapshot.stateVersion;
+      const serverEventSequenceBefore = room.snapshot.eventSequence;
+      const result = executeCommand(room.snapshot, seat.slot, authoritativeEnvelope);
       ack?.(result as unknown as Record<string, unknown>);
-      if (result.ok) {
+      if (result.ok && !result.duplicate) {
         room.updatedAt = Date.now();
-        io.to(room.id).emit("match:snapshot", snapshotForClient(room.snapshot));
-        void persistRoom(room).catch(() => undefined);
+        const applied: AppliedCommandPayload = {
+          slot: seat.slot,
+          commandId: authoritativeEnvelope.commandId,
+          clientSeq: authoritativeEnvelope.clientSeq,
+          command: authoritativeEnvelope.command,
+          serverTick: room.snapshot.tick,
+          serverStateVersionBefore,
+          serverStateVersion: result.stateVersion,
+          serverEventSequenceBefore,
+        };
+        io.to(room.id).emit("match:command-applied", applied);
       }
     } catch (error) {
       ack?.({
@@ -401,6 +428,14 @@ io.on("connection", (socket) => {
         message: error instanceof Error ? error.message : "服务器暂时无法保存操作，请重试",
       });
     }
+  });
+
+  socket.on("match:resync", (_payload: Record<string, never> = {}, ack?: Ack) => {
+    const room = rooms.get(String(socket.data.roomId));
+    const seat = room?.seats.find((candidate) => candidate.slot === socket.data.slot && candidate.userId === socket.data.userId);
+    if (!room?.snapshot || !seat) return ack?.({ ok: false, code: "ERR_ROOM_STATE", message: "尚未进入战斗" });
+    socket.compress(true).emit("match:snapshot", snapshotForClient(room.snapshot));
+    ack?.({ ok: true, stateVersion: room.snapshot.stateVersion });
   });
 
   socket.on("disconnect", () => {
@@ -422,11 +457,16 @@ setInterval(() => {
     if (room.snapshot && room.snapshot.phase !== "finished") {
       stepMatch(room.snapshot, tickMs);
       room.updatedAt = now;
-      // Tick snapshots are replaceable state frames. If a connection is
-      // congested, dropping an obsolete intermediate frame is preferable to
-      // building an ever-growing reliable send queue behind the newest state.
-      io.to(room.id).volatile.emit("match:snapshot", snapshotForClient(room.snapshot));
-      if (!room.persistInFlight && now - room.lastCheckpointAt >= 1_000) void persistRoom(room).catch(() => undefined);
+      // Clients run the same deterministic 10Hz simulation locally. The server
+      // only sends a sparse compressed correction checkpoint, not every Tick.
+      if (now - room.lastWireCheckpointAt >= REALTIME_SYNC_CONFIG.checkpointIntervalMs) {
+        room.lastWireCheckpointAt = now;
+        io.to(room.id).compress(true).emit("match:checkpoint", snapshotForClient(room.snapshot));
+      }
+      if (!room.persistInFlight && now - room.lastCheckpointAt >= REALTIME_SYNC_CONFIG.persistenceIntervalMs) {
+        void persistRoom(room).catch(() => undefined);
+      }
+      if (room.snapshot.winner !== null) void persistRoom(room).catch(() => undefined);
     }
     const noConnectedPlayers = room.seats.every((seat) => !seat.socketId);
     if (noConnectedPlayers && now - room.updatedAt > 10 * 60_000) rooms.delete(room.id);

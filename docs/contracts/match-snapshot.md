@@ -2,7 +2,7 @@
 
 ## 合同元数据
 
-- 版本：1.0.1
+- 版本：1.1.0
 - 提供方：02 权威战斗内核
 - 消费方：03 战场交互、05 云存档、06 实时联机、07 自动化测试
 - TypeScript 权威定义：`packages/shared/src/types.ts`
@@ -40,6 +40,14 @@
 4. `simulationTimeMs` / `serverTime` 只在模拟步累加。
 5. `cloneSnapshot` 生成没有共享可变引用的等价副本。
 6. `normalizeMatchSnapshot`、`cloneSnapshot` 和演算入口在读取时统一补齐版本及 1.0 新字段；这项兼容只补元数据，不猜测缺失的规则状态。
+
+## 真人对战传输
+
+- 客户端和服务端都以固定 10Hz 执行同一份 `packages/shared` 确定性模拟；客户端负责连续画面和即时本地状态，服务端只承担命令排序、合法性校验和最终裁决。
+- 服务端通过 `match:command-applied` 广播已接受的轻量命令，不再按 Tick 广播完整快照。
+- 服务端每 5 秒通过 `match:checkpoint` 下发压缩后的纠正快照；开局、断线恢复和客户端主动请求校正时仍使用 `match:snapshot` 下发完整状态。
+- 客户端检测到命令无法在本地重放时必须请求 `match:resync`，不得继续猜测权威状态。
+- Socket.IO WebSocket 帧启用压缩；检查点是恢复边界，命令广播必须保持可靠和有序。
 
 ## 兼容策略
 

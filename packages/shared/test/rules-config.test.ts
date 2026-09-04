@@ -103,7 +103,7 @@ describe("1.0.9 versioned rules config", () => {
 
   it("locks every current battle constant, including package-recorded cadence values", () => {
     expect(GAME_CONFIG).toEqual({
-      protocolVersion: "0.5.0",
+      protocolVersion: "0.6.0",
       columns: 8,
       rows: 10,
       designWidth: 640,

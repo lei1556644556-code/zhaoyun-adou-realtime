@@ -150,7 +150,7 @@ export const RULE_PROVENANCE = {
 } as const satisfies Record<string, RuleProvenanceEntry>;
 
 export const GAME_CONFIG = {
-  protocolVersion: "0.5.0",
+  protocolVersion: "0.6.0",
   columns: 8,
   rows: 10,
   designWidth: 640,
@@ -170,6 +170,17 @@ export const GAME_CONFIG = {
   spawnMs: 1_500,
   interwaveMs: 5_000,
   tickHz: 10,
+} as const;
+
+/**
+ * 真人对战在客户端持续演算，服务端只广播命令并定期下发纠正检查点。
+ * 5 秒检查点把全量状态带宽降到原 10Hz 广播的约 1/50，同时保留断线恢复能力。
+ */
+export const REALTIME_SYNC_CONFIG = {
+  checkpointIntervalMs: 5_000,
+  persistenceIntervalMs: 10_000,
+  compressionThresholdBytes: 512,
+  commandCatchupMaxTicks: 20,
 } as const;
 
 /** 1.0.9 安装包征兵池；每次征兵独立抽取五次。 */
