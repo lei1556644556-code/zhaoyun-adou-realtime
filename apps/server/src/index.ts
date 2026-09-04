@@ -414,10 +414,9 @@ io.on("connection", (socket) => {
           commandId: authoritativeEnvelope.commandId,
           clientSeq: authoritativeEnvelope.clientSeq,
           command: authoritativeEnvelope.command,
-          serverTick: room.snapshot.tick,
-          serverStateVersionBefore,
-          serverStateVersion: result.stateVersion,
-          serverEventSequenceBefore,
+          tick: room.snapshot.tick,
+          stateVersionBefore: serverStateVersionBefore,
+          eventSequenceBefore: serverEventSequenceBefore,
         };
         io.to(room.id).emit("match:command-applied", applied);
       }

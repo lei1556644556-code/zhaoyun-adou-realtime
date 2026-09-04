@@ -27,7 +27,6 @@ export class AuthoritativeRealtimeClient extends EventTarget {
   slot: PlayerSlot = 0;
   roomId = "";
   token = "";
-  stateVersion = 0;
 
   constructor(
     private readonly storageKey: string,
@@ -162,7 +161,6 @@ export class AuthoritativeRealtimeClient extends EventTarget {
 
   private publishSnapshot() {
     if (!this.snapshot) return;
-    this.stateVersion = this.snapshot.stateVersion;
     this.emit("snapshot", cloneSnapshot(this.snapshot));
   }
 
@@ -235,7 +233,7 @@ export class AuthoritativeRealtimeClient extends EventTarget {
         const socket = await this.connect();
         const commandId = crypto.randomUUID();
         const envelope: CommandEnvelope = {
-          commandId, clientSeq: ++this.seq, expectedStateVersion: this.stateVersion, command,
+          commandId, clientSeq: ++this.seq, expectedStateVersion: this.snapshot?.stateVersion ?? 0, command,
         };
         const timer = window.setTimeout(() => {
           if (!this.pendingCommands.delete(commandId)) return;

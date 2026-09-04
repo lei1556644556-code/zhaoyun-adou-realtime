@@ -28,10 +28,9 @@ describe("authoritative command replay", () => {
       commandId: "recruit-1",
       clientSeq: 1,
       command: { type: "RECRUIT" },
-      serverTick: server.tick,
-      serverStateVersionBefore,
-      serverStateVersion: result.stateVersion,
-      serverEventSequenceBefore,
+      tick: server.tick,
+      stateVersionBefore: serverStateVersionBefore,
+      eventSequenceBefore: serverEventSequenceBefore,
     };
     const replayed = replayAuthoritativeCommand(client, payload);
 
@@ -50,10 +49,9 @@ describe("authoritative command replay", () => {
       commandId: "late-command",
       clientSeq: 1,
       command: { type: "RECRUIT" },
-      serverTick: 1_000,
-      serverStateVersionBefore: 1_000,
-      serverStateVersion: 1_001,
-      serverEventSequenceBefore: 0,
+      tick: 1_000,
+      stateVersionBefore: 1_000,
+      eventSequenceBefore: 0,
     };
 
     expect(replayAuthoritativeCommand(client, payload)).toBeNull();

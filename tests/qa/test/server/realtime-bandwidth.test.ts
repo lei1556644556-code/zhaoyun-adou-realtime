@@ -68,10 +68,9 @@ describe("realtime bandwidth budget", () => {
       commandId: "2dd89795-599a-4c89-a993-2118b1ae17bb",
       clientSeq: 88,
       command: { type: "USE_BATTLE_BUFF", buffInstanceId: "buff-1-5", targetCell: 42 },
-      serverTick: 18_000,
-      serverStateVersionBefore: 18_087,
-      serverStateVersion: 18_088,
-      serverEventSequenceBefore: 5_400,
+      tick: 18_000,
+      stateVersionBefore: 18_087,
+      eventSequenceBefore: 5_400,
     };
     const commandBytes = Buffer.byteLength(JSON.stringify(["match:command-applied", command])) + 32;
 

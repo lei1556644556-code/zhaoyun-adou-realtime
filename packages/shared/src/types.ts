@@ -519,10 +519,9 @@ export interface AppliedCommandPayload {
   commandId: string;
   clientSeq: number;
   command: GameCommand;
-  serverTick: number;
-  serverStateVersionBefore: number;
-  serverStateVersion: number;
-  serverEventSequenceBefore: number;
+  tick: number;
+  stateVersionBefore: number;
+  eventSequenceBefore: number;
 }
 
 export type CommandErrorCode =

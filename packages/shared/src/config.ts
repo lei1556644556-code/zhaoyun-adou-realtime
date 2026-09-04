@@ -180,7 +180,6 @@ export const REALTIME_SYNC_CONFIG = {
   checkpointIntervalMs: 5_000,
   persistenceIntervalMs: 10_000,
   compressionThresholdBytes: 512,
-  commandCatchupMaxTicks: 20,
 } as const;
 
 /** 1.0.9 安装包征兵池；每次征兵独立抽取五次。 */
