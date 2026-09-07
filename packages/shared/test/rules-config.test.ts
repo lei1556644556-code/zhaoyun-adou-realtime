@@ -67,7 +67,7 @@ describe("1.0.9 versioned rules config", () => {
   });
   it("publishes one versioned entry point and honest evidence metadata", () => {
     expect(RULES_CONFIG_1_0_9.rulesetVersion).toBe("1.0.9");
-    expect(RULES_CONFIG_1_0_9.schemaVersion).toBe("1.6.0");
+    expect(RULES_CONFIG_1_0_9.schemaVersion).toBe("1.7.0");
     expect(RULES_CONFIG_1_0_9.evidence).toBe(RULE_EVIDENCE_SOURCES);
     expect(RULES_CONFIG_1_0_9.provenance).toBe(RULE_PROVENANCE);
     expect(RULE_EVIDENCE_SOURCES.originalPackage.artifactPath).toBeNull();
@@ -83,6 +83,7 @@ describe("1.0.9 versioned rules config", () => {
       mergePairs: "package-recorded",
       twoCellGeneralAndSplit: "pending-original-verification",
       soldierAndGeneralStats: "package-recorded",
+      openingRecruitSafety: "project-adaptation",
       generalExperience: "pending-original-verification",
       generalSkills: "package-recorded",
       attackCollision: "package-recorded",
@@ -141,6 +142,11 @@ describe("1.0.9 versioned rules config", () => {
     expect(EARLY_ACCOUNT_SHOVEL_WEIGHT / EARLY_ACCOUNT_TOKEN_POOL_WEIGHT).toBeCloseTo(13 / 110, 12);
     expect(RECRUITMENT_RULES.drawsPerRecruit).toBe(5);
     expect(RECRUITMENT_RULES.drawMode).toBe("persistent-pool; soldiers/shovel-with-replacement; general-names-without-replacement");
+    expect(RECRUITMENT_RULES.openingSafety).toEqual({
+      appliesToRecruitCount: 1,
+      forcedSlot: 4,
+      attackerKinds: ["刀", "弓", "枪", "骑"],
+    });
     expect(RECRUITMENT_RULES.earlyAccount).toMatchObject({
       eligibilityDailyMatches: 3,
       bonusFormula: "floor(baseShovelWeight/5)",

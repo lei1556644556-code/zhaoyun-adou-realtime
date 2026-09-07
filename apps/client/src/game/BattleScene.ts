@@ -1372,8 +1372,8 @@ export class BattleScene extends Phaser.Scene {
     add(this.add.text(514, 1182, "馒头", { fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "17px", color: "#736957" }).setOrigin(0.5));
     this.hudBunsText = add(this.add.text(514, 1210, String(mine.buns), { fontFamily: '"Arial", sans-serif', fontSize: "36px", color: "#85513b", fontStyle: "bold" }).setOrigin(0.5)) as Phaser.GameObjects.Text;
     add(this.add.text(320, 1312, mine.reserve.length
-      ? "棕路行军 · 白格布阵 · 绿地禁行；营地内也可移动/合成"
-      : "棕路行军 · 白格布阵 · 绿地须用铲子开垦；点击征兵获得五枚",
+      ? "白格布阵；营地也可移动/合成"
+      : "白格布阵，绿地用铲子；点击征兵获得五枚",
     { fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "17px", color: "#716d63", align: "center", wordWrap: { width: 590 } }).setOrigin(0.5, 0));
   }
 

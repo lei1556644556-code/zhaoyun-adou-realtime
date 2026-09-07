@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BATTLE_BUFFS, BOSS_CONFIGS, GAME_CONFIG, GENERAL_SKILLS, INTRO_ROUND_HP_MULTIPLIERS, MAP_LAYOUTS, NORMAL_ENEMY_SPEED_PX_PER_SEC,
-  PROPS, TOKEN_POOL, applyCommand, attackRangeIntersectsCell, bulldozerSupplyAvailable, cellCode, cellIndex, createMatch, createRng, executeCommand,
+  PROPS, SOLDIERS, TOKEN_POOL, applyCommand, attackRangeIntersectsCell, bulldozerSupplyAvailable, cellCode, cellIndex, createMatch, createRng, executeCommand,
   initialOpenCells, normalizeMatchSnapshot, pathLengthCells, pathPoint, stepMatch, type CommandEnvelope, type MatchSnapshot,
 } from "../src";
 
@@ -54,18 +54,21 @@ function generalSkillFixture(kind: string, attackCount: number, hp = 10_000) {
 }
 
 describe("1.0.9 authoritative simulation", () => {
-  it("migrates 1.4.0 and 1.5.0 saves to the additive 1.6.0 field-effect runtime without clearing play", () => {
+  it("migrates 1.4.0 through 1.6.0 saves to the 1.7.0 opening-safety rules without clearing play", () => {
     const previous = createMatch("PREVIOUS-SCHEMA", 109) as unknown as Record<string, unknown>;
     previous.rulesConfigSchemaVersion = "1.4.0";
     const migrated = normalizeMatchSnapshot(previous as unknown as MatchSnapshot);
-    expect(migrated.rulesConfigSchemaVersion).toBe("1.6.0");
+    expect(migrated.rulesConfigSchemaVersion).toBe("1.7.0");
     expect(migrated.players[0].pendingGeneralImpacts).toEqual([]);
     expect(migrated.players[0].zhaoPhantoms).toEqual([]);
     expect(migrated.players[0].battleFieldEffects).toEqual([]);
     expect(migrated.players[0].props?.bulldozerSupplyClaimed).toBe(false);
     const previous15 = createMatch("PREVIOUS-SCHEMA-15", 110) as unknown as Record<string, unknown>;
     previous15.rulesConfigSchemaVersion = "1.5.0";
-    expect(normalizeMatchSnapshot(previous15 as unknown as MatchSnapshot).rulesConfigSchemaVersion).toBe("1.6.0");
+    expect(normalizeMatchSnapshot(previous15 as unknown as MatchSnapshot).rulesConfigSchemaVersion).toBe("1.7.0");
+    const previous16 = createMatch("PREVIOUS-SCHEMA-16", 111) as unknown as Record<string, unknown>;
+    previous16.rulesConfigSchemaVersion = "1.6.0";
+    expect(normalizeMatchSnapshot(previous16 as unknown as MatchSnapshot).rulesConfigSchemaVersion).toBe("1.7.0");
   });
 
   it("uses the package-backed board and opening values", () => {
@@ -260,6 +263,22 @@ describe("1.0.9 authoritative simulation", () => {
         type: "units-merged", sourceId: "general-split-1-0", targetId: "left-yun", cells: [cells[0], cells[1]],
       }),
     ]);
+  });
+
+  it("guarantees an immediately attacking soldier in the first recruit", () => {
+    const match = createMatch("OPENING-SAFETY", 16);
+    expect(applyCommand(match, 0, { type: "RECRUIT" }).ok).toBe(true);
+    expect(match.players[0].reserve.slice(0, 4).map((item) => item.kind)).toEqual(["赵", "张", "刘", "飞"]);
+    expect(match.players[0].reserve.some((item) => item.kind in SOLDIERS)).toBe(true);
+    expect(match.players[0].reserve[4]?.kind).not.toBe("铲子");
+  });
+
+  it("keeps the original unrestricted pool after the opening recruit", () => {
+    const match = createMatch("LATER-RECRUIT", 16);
+    match.players[0].recruitCount = 1;
+    match.players[0].buns = 100;
+    expect(applyCommand(match, 0, { type: "RECRUIT" }).ok).toBe(true);
+    expect(match.players[0].reserve.map((item) => item.kind)).toEqual(["赵", "张", "刘", "飞", "铲子"]);
   });
 
   it("keeps adjacent sibling characters split after dragging one part to an empty cell", () => {

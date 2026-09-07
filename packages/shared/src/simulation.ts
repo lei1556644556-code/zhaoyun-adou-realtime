@@ -2,7 +2,7 @@ import {
   ACTIVE_PROP_IDS, BATTLE_BUFFS, BATTLE_BUFF_DROP, BOSS_CHANCES, BOSS_CONFIGS, BOSS_ENEMY_SPEED_PX_PER_SEC, BOSS_MILESTONES,
   DIFFICULTY_CURVES, DIFFICULTY_WEIGHTS, EARLY_ACCOUNT_SHOVEL_BONUS, GAME_CONFIG,
   GENERAL_EXPERIENCE, GENERAL_LEVEL_ATTACK, GENERAL_LEVEL_SPEED, GENERALS, GENERAL_SKILLS, HERO_PAIRS, INTRO_ROUND_HP_MULTIPLIERS,
-  MAP_LAYOUTS, NORMAL_ENEMY_SPEED_PX_PER_SEC, PASSIVE_PROP_IDS, PROPS, SOLDIER_LEVEL_ATTACK,
+  MAP_LAYOUTS, NORMAL_ENEMY_SPEED_PX_PER_SEC, OPENING_RECRUIT_NUMBER, PASSIVE_PROP_IDS, PROPS, SOLDIER_LEVEL_ATTACK,
   RULESET_VERSION, RULES_CONFIG_SCHEMA_VERSION, SOLDIER_LEVEL_SPEED, SOLDIERS, TOKEN_POOL, WAVES,
   cellCode, cellCoords, initialOpenCells,
 } from "./config";
@@ -60,6 +60,7 @@ export function normalizeMatchSnapshot(snapshot: MatchSnapshotInput): MatchSnaps
   }
   if (incoming.rulesConfigSchemaVersion !== undefined
     && incoming.rulesConfigSchemaVersion !== RULES_CONFIG_SCHEMA_VERSION
+    && incoming.rulesConfigSchemaVersion !== "1.6.0"
     && incoming.rulesConfigSchemaVersion !== "1.5.0"
     && incoming.rulesConfigSchemaVersion !== "1.4.0") {
     throw new RangeError(`不支持的规则配置版本：${String(incoming.rulesConfigSchemaVersion)}`);
@@ -68,7 +69,7 @@ export function normalizeMatchSnapshot(snapshot: MatchSnapshotInput): MatchSnaps
   normalized.version ??= MATCH_SNAPSHOT_VERSION;
   normalized.snapshotVersion ??= MATCH_SNAPSHOT_VERSION;
   normalized.rulesetVersion ??= RULESET_VERSION;
-  // 1.5/1.6 只增加可缺省的技能、场地效果和补给状态；旧对局可原地、安全升级。
+  // 1.5/1.6 只增加可缺省状态，1.7 仅调整之后的首轮征兵；旧对局可原地、安全升级。
   normalized.rulesConfigSchemaVersion = RULES_CONFIG_SCHEMA_VERSION;
   normalized.events ??= [];
   normalized.eventSequence ??= 0;
@@ -300,6 +301,15 @@ function drawRecruitKind(player: PlayerBattleState, rng: Rng) {
   return kind;
 }
 
+/** 产品适配：首轮最后一格按原普通兵权重保底，不额外消耗姓名字牌库。 */
+function drawOpeningAttacker(player: PlayerBattleState, rng: Rng) {
+  const pool = ensureRecruitPool(player, rng);
+  let kind = "刀";
+  do kind = pool[Math.floor(rng.next() * pool.length)] ?? "刀";
+  while (!(kind in SOLDIERS));
+  return kind;
+}
+
 function recruit(snapshot: MatchSnapshot, player: PlayerBattleState, rng: Rng): string | null {
   const recycled = recycleValue(player.reserve);
   const spent = player.recruitCost;
@@ -308,11 +318,15 @@ function recruit(snapshot: MatchSnapshot, player: PlayerBattleState, rng: Rng): 
   player.recruitCount += 1;
   player.recruitCost = GAME_CONFIG.recruitBase + player.recruitCount * GAME_CONFIG.recruitStep;
   const promotionChance = [0.05, 0.1, 0.15][Math.max(0, Math.min(2, passiveLevel(player, 22) - 1))] ?? 0;
-  player.reserve = Array.from({ length: GAME_CONFIG.reserveSize }, (_, slot) => {
-    const kind = drawRecruitKind(player, rng);
+  player.reserve = [];
+  for (let slot = 0; slot < GAME_CONFIG.reserveSize; slot += 1) {
+    const needsOpeningAttacker = player.recruitCount === OPENING_RECRUIT_NUMBER
+      && slot === GAME_CONFIG.reserveSize - 1
+      && !player.reserve.some((item) => item.kind in SOLDIERS);
+    const kind = needsOpeningAttacker ? drawOpeningAttacker(player, rng) : drawRecruitKind(player, rng);
     const level = kind in SOLDIERS && promotionChance > 0 && rng.next() < promotionChance ? 2 : 1;
-    return { id: `r-${player.slot}-${player.recruitCount}-${slot}-${Math.floor(rng.next() * 1e7)}`, kind, level, slot };
-  });
+    player.reserve.push({ id: `r-${player.slot}-${player.recruitCount}-${slot}-${Math.floor(rng.next() * 1e7)}`, kind, level, slot });
+  }
   player.lastEvent = recycled > 0
     ? `回收${recycled}馒头，征得五枚棋子`
     : `征兵五枚：${player.reserve.map((item) => item.kind).join("、")}`;

@@ -1,6 +1,6 @@
 /** 原作规则版本；与网络协议版本分开演进。 */
 export const RULESET_VERSION = "1.0.9" as const;
-export const RULES_CONFIG_SCHEMA_VERSION = "1.6.0" as const;
+export const RULES_CONFIG_SCHEMA_VERSION = "1.7.0" as const;
 
 export type RuleVerificationStatus =
   | "package-recorded"
@@ -71,6 +71,11 @@ export const RULE_PROVENANCE = {
     status: "package-recorded",
     evidenceRefs: ["SPEC-DOCX#table-11", "SPEC-DOCX#table-12", "ORIGINAL-1.0.9#Et"],
     note: "已核对 Et：普通兵 dp/gp 与武将 Yp/Op 是四条独立成长曲线，并记录武将攻击形态和索敌。",
+  },
+  openingRecruitSafety: {
+    status: "project-adaptation",
+    evidenceRefs: ["RULES-MD#2"],
+    note: "首轮前四枚未出现普通兵时，第五枚按普通兵原权重保底，避免开局无可攻击单位。",
   },
   generalExperience: {
     status: "pending-original-verification",
@@ -198,6 +203,7 @@ export const TOKEN_POOL_SHOVEL_WEIGHT = TOKEN_POOL.reduce(
 );
 export const EARLY_ACCOUNT_TOKEN_POOL_WEIGHT = TOKEN_POOL_BASE_WEIGHT + EARLY_ACCOUNT_SHOVEL_BONUS;
 export const EARLY_ACCOUNT_SHOVEL_WEIGHT = TOKEN_POOL_SHOVEL_WEIGHT + EARLY_ACCOUNT_SHOVEL_BONUS;
+export const OPENING_RECRUIT_NUMBER = 1;
 
 export const RECRUITMENT_RULES = {
   drawsPerRecruit: GAME_CONFIG.reserveSize,
@@ -210,6 +216,11 @@ export const RECRUITMENT_RULES = {
     shovelBonusWeight: EARLY_ACCOUNT_SHOVEL_BONUS,
     effectiveWeightTotal: EARLY_ACCOUNT_TOKEN_POOL_WEIGHT,
     effectiveShovelWeight: EARLY_ACCOUNT_SHOVEL_WEIGHT,
+  },
+  openingSafety: {
+    appliesToRecruitCount: OPENING_RECRUIT_NUMBER,
+    forcedSlot: GAME_CONFIG.reserveSize - 1,
+    attackerKinds: ["刀", "弓", "枪", "骑"],
   },
   reserve: {
     capacity: GAME_CONFIG.reserveSize,
