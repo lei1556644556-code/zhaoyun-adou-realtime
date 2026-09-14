@@ -34,9 +34,9 @@ GitHub Pages 只托管静态前端；Supabase Auth 与 Postgres 只负责账号�
 - 试玩页：http://localhost:5173
 - 房间服务：http://localhost:3001
 - 健康检查：http://localhost:3001/health
-- 实时运维后台：http://localhost:5174（本地默认令牌 `dev-admin`；生产构建随房间服务托管在 `/admin/`）
+- 实时运维后台：http://localhost:5174（本地默认令牌 `dev-admin`）；公网后台：https://api.astocklab.cn/admin/（使用服务器端单独配置的运维令牌）
 
-本地开发在未配置 `VITE_SERVER_URL` 时保留 Supabase Realtime 兼容通道；生产构建强制要求独立权威服务地址，不会回退为浏览器房主。不要直接双击 `apps/client/index.html`，浏览器的 ES Module 必须通过 HTTP 服务运行。
+本地开发默认连接 `http://127.0.0.1:3001` 的独立权威服务，因此游戏房间会出现在实时运维后台；生产构建同样强制要求独立权威服务地址。不要直接双击 `apps/client/index.html`，浏览器的 ES Module 必须通过 HTTP 服务运行。
 
 命令行方式（Node.js 24、pnpm 11）：
 
