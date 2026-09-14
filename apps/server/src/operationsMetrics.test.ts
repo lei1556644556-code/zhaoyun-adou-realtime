@@ -46,6 +46,9 @@ describe("OperationsMetrics", () => {
     expect(snapshot.disconnectedSeats).toBe(3);
     expect(snapshot.onlineUsers).toBe(2);
     expect(snapshot.roomDetails.map((item) => item.roomId)).toHaveLength(4);
+    expect(snapshot.health.hostTotalBytes).toBeGreaterThan(0);
+    expect(snapshot.health.hostFreeBytes).toBeGreaterThanOrEqual(0);
+    expect(snapshot.health.hostFreeBytes).toBeLessThanOrEqual(snapshot.health.hostTotalBytes ?? 0);
   });
 
   it("computes rolling rates from monotonic counters", () => {

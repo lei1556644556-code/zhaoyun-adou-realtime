@@ -73,6 +73,8 @@ export interface OperationsServerHealth {
   eventLoopDelayMs: number;
   rssBytes: number;
   heapUsedBytes: number;
+  hostTotalBytes?: number;
+  hostFreeBytes?: number;
   authenticationRequired: boolean;
   persistenceEnabled: boolean;
   adminStreamClients: number;

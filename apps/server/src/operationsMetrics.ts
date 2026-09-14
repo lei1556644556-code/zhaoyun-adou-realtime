@@ -5,6 +5,7 @@ import type {
   OperationsRoomSummary,
   OperationsTotals,
 } from "@adou/shared";
+import { freemem, totalmem } from "node:os";
 
 const HISTORY_WINDOW_MS = 60 * 60_000;
 const RATE_WINDOW_MS = 60_000;
@@ -147,6 +148,8 @@ export class OperationsMetrics {
     }
 
     const memory = process.memoryUsage();
+    const hostTotalBytes = totalmem();
+    const hostFreeBytes = freemem();
     const seatedOnlinePlayers = state.rooms.reduce((sum, room) => sum + room.connectedPlayers, 0);
     const disconnectedSeats = state.rooms.reduce((sum, room) => sum + room.playerCount - room.connectedPlayers, 0);
     const degraded = this.smoothedEventLoopDelayMs >= 250
@@ -168,6 +171,8 @@ export class OperationsMetrics {
         eventLoopDelayMs: this.smoothedEventLoopDelayMs,
         rssBytes: memory.rss,
         heapUsedBytes: memory.heapUsed,
+        hostTotalBytes,
+        hostFreeBytes,
         authenticationRequired: state.authenticationRequired,
         persistenceEnabled: state.persistenceEnabled,
         adminStreamClients: this.adminStreamClients,

@@ -53,10 +53,16 @@ function Login({ message, onLogin }: { message: string; onLogin: (value: string)
 function HealthPanel({ metrics }: { metrics: OperationsMetricsSnapshot }) {
   const lag = metrics.health.eventLoopDelayMs;
   const lagTone: "good" | "warn" | "bad" = lag >= 250 ? "bad" : lag >= 100 ? "warn" : "good";
+  const hostTotalBytes = metrics.health.hostTotalBytes ?? 0;
+  const hostFreeBytes = Math.min(hostTotalBytes, Math.max(0, metrics.health.hostFreeBytes ?? 0));
+  const hostUsedBytes = Math.max(0, hostTotalBytes - hostFreeBytes);
+  const hostUsagePercent = hostTotalBytes > 0 ? (hostUsedBytes / hostTotalBytes) * 100 : 0;
+  const hostMemoryTone: "good" | "warn" | "bad" = hostUsagePercent >= 95 ? "bad" : hostUsagePercent >= 85 ? "warn" : "good";
   const rows = [
     { label: "运行时长", value: formatDuration(metrics.health.uptimeMs), tone: "good" as const },
     { label: "事件循环延迟", value: `${lag.toFixed(1)} ms`, tone: lagTone },
-    { label: "内存", value: `${formatBytes(metrics.health.heapUsedBytes)} / ${formatBytes(metrics.health.rssBytes)}`, tone: "good" as const },
+    { label: "游戏进程", value: `${formatBytes(metrics.health.rssBytes)}（JS 堆 ${formatBytes(metrics.health.heapUsedBytes)}）`, tone: "good" as const },
+    { label: "服务器内存", value: hostTotalBytes > 0 ? `${formatBytes(hostUsedBytes)} / ${formatBytes(hostTotalBytes)}（${hostUsagePercent.toFixed(1)}%）` : "暂不可用", tone: hostMemoryTone },
     { label: "数据库持久化", value: metrics.health.persistenceEnabled ? "已启用" : "未配置", tone: metrics.health.persistenceEnabled ? "good" as const : "warn" as const },
     { label: "认证", value: metrics.health.authenticationRequired ? "已启用" : "开发模式", tone: metrics.health.authenticationRequired ? "good" as const : "warn" as const },
   ];
