@@ -34,6 +34,7 @@ GitHub Pages 只托管静态前端；Supabase Auth 与 Postgres 只负责账号�
 - 试玩页：http://localhost:5173
 - 房间服务：http://localhost:3001
 - 健康检查：http://localhost:3001/health
+- 实时运维后台：http://localhost:5174（本地默认令牌 `dev-admin`；生产构建随房间服务托管在 `/admin/`）
 
 本地开发在未配置 `VITE_SERVER_URL` 时保留 Supabase Realtime 兼容通道；生产构建强制要求独立权威服务地址，不会回退为浏览器房主。不要直接双击 `apps/client/index.html`，浏览器的 ES Module 必须通过 HTTP 服务运行。
 
@@ -82,7 +83,8 @@ VITE_SERVER_URL=https://你的常驻权威服务.example
 
 ```text
 apps/client        Phaser 战场、响应式大厅与人机模式
-apps/server        可选的独立 Node 房间服务实现
+apps/server        独立 Node 权威房间服务与运维指标接口
+apps/admin         受令牌保护的实时运维后台
 packages/shared    地图、数值、协议、战斗模拟和自动测试
 supabase            玩家账号档案、RLS 与云存档迁移
 docs               复刻基线与美术对应说明

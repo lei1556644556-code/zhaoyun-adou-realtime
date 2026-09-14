@@ -7,10 +7,10 @@
     "node": ">=24 <25"
   },
   "scripts": {
-    "dev": "pnpm -r --parallel --filter @adou/server --filter @adou/client dev",
-    "build": "pnpm --filter @adou/client build && pnpm --filter @adou/server check",
-    "build:preview": "pnpm --filter @adou/client build:preview && pnpm --filter @adou/server check",
-    "build:production": "pnpm --filter @adou/client build:production && pnpm --filter @adou/server check",
+    "dev": "pnpm -r --parallel --filter @adou/server --filter @adou/client --filter @adou/admin dev",
+    "build": "pnpm --filter @adou/client build && pnpm --filter @adou/admin build && pnpm --filter @adou/server check",
+    "build:preview": "pnpm --filter @adou/client build:preview && pnpm --filter @adou/admin build && pnpm --filter @adou/server check",
+    "build:production": "pnpm --filter @adou/client build:production && pnpm --filter @adou/admin build && pnpm --filter @adou/server check",
     "preview": "pnpm --filter @adou/client preview",
     "test": "pnpm -r --if-present test",
     "test:contracts": "pnpm --filter @adou/qa test:contracts",

@@ -8,8 +8,11 @@ import { Server, type Socket } from "socket.io";
 import {
   GAME_CONFIG, MATCH_SNAPSHOT_VERSION, REALTIME_SYNC_CONFIG, RULESET_VERSION, RULES_CONFIG_SCHEMA_VERSION,
   cloneSnapshot, createMatch, executeCommand, stepMatch,
-  type AppliedCommandPayload, type CommandEnvelope, type MatchSnapshot, type PlayerSlot,
+  type AppliedCommandPayload, type CommandEnvelope, type MatchSnapshot,
+  type OperationsMetricsSnapshot, type OperationsRoomSummary, type PlayerSlot,
 } from "@adou/shared";
+import { registerAdminDashboard } from "./adminDashboard";
+import { OperationsMetrics, OPERATIONS_SAMPLE_INTERVAL_MS } from "./operationsMetrics";
 
 type Ack = (payload: Record<string, unknown>) => void;
 interface Seat {
@@ -51,6 +54,7 @@ const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
 const originList = (process.env.CLIENT_ORIGIN ?? "").split(",").map((value) => value.trim()).filter(Boolean);
 const socketPath = process.env.SOCKET_PATH?.trim() || "/socket.io";
 const host = process.env.HOST?.trim() || "127.0.0.1";
+const adminDashboardToken = process.env.ADMIN_DASHBOARD_TOKEN?.trim() || (isProduction ? "" : "dev-admin");
 
 if (requireAuth && (!supabaseUrl || !publishableKey)) {
   throw new Error("Production authority requires SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY");
@@ -79,6 +83,61 @@ const io = new Server(httpServer, {
 const rooms = new Map<string, Room>();
 let quickRoomId: string | null = null;
 let quickSeatQueue: Promise<void> = Promise.resolve();
+const operations = new OperationsMetrics();
+
+function operationsRoom(room: Room, now: number): OperationsRoomSummary {
+  const snapshot = room.snapshot;
+  const state = !snapshot
+    ? room.seats.length < 2 ? "waiting" : "ready"
+    : snapshot.phase === "finished" ? "finished" : "battle";
+  const players = room.seats.map(({ slot, name, ready, socketId }) => ({
+    slot,
+    name,
+    ready,
+    connected: Boolean(socketId),
+  }));
+  return {
+    roomId: room.id,
+    state,
+    players,
+    playerCount: players.length,
+    connectedPlayers: players.filter((player) => player.connected).length,
+    readyPlayers: players.filter((player) => player.ready).length,
+    wave: snapshot ? Math.max(...snapshot.players.map((player) => player.wave)) : null,
+    ageMs: Math.max(0, now - room.createdAt),
+    simulationTimeMs: snapshot?.simulationTimeMs ?? null,
+    createdAt: new Date(room.createdAt).toISOString(),
+    updatedAt: new Date(room.updatedAt).toISOString(),
+  };
+}
+
+function operationsSnapshot(): OperationsMetricsSnapshot {
+  const now = Date.now();
+  const onlineUsers = new Set(
+    [...io.sockets.sockets.values()].map((socket) => String(socket.data.userId ?? socket.id)),
+  ).size;
+  return operations.snapshot({
+    now,
+    onlineUsers,
+    socketConnections: io.sockets.sockets.size,
+    rooms: [...rooms.values()].map((room) => operationsRoom(room, now)),
+    authenticationRequired: requireAuth,
+    persistenceEnabled: Boolean(adminClient),
+    protocolVersion: GAME_CONFIG.protocolVersion,
+    rulesetVersion: RULESET_VERSION,
+  });
+}
+
+const adminStaticDir = path.resolve(process.cwd(), process.env.ADMIN_STATIC_DIR ?? "../admin/dist");
+const adminDashboardAvailable = registerAdminDashboard({
+  app,
+  monitor: operations,
+  token: adminDashboardToken,
+  staticDir: adminStaticDir,
+  snapshot: operationsSnapshot,
+});
+const operationsSampleTimer = setInterval(() => { operationsSnapshot(); }, OPERATIONS_SAMPLE_INTERVAL_MS);
+operationsSampleTimer.unref();
 
 app.get("/health", (_request, response) => {
   response.json({
@@ -89,6 +148,8 @@ app.get("/health", (_request, response) => {
     authority: "server",
     authentication: requireAuth,
     persistence: Boolean(adminClient),
+    adminDashboard: adminDashboardAvailable,
+    adminMetrics: Boolean(adminDashboardToken),
   });
 });
 
@@ -130,6 +191,7 @@ async function roomCode() {
 async function createRoom() {
   const room = newRoom(await roomCode());
   rooms.set(room.id, room);
+  operations.increment("roomsCreated");
   return room;
 }
 
@@ -182,11 +244,13 @@ function persistRoom(room: Room) {
       const row = serializeRoom(room);
       const { error } = await adminClient.from(MATCH_TABLE).upsert(row, { onConflict: "room_id" });
       if (error) throw new Error(`Match checkpoint failed: ${error.message}`);
+      operations.increment("persistenceWrites");
       room.lastCheckpointAt = Date.now();
     }
   })();
   room.persistInFlight = operation;
   void operation.catch((error: unknown) => {
+    operations.increment("persistenceFailures");
     console.error(JSON.stringify({ event: "checkpoint_failed", roomId: room.id, message: error instanceof Error ? error.message : String(error) }));
   }).finally(() => {
     room.persistInFlight = null;
@@ -219,11 +283,13 @@ async function loadRoom(roomId: string) {
 }
 
 function emitStatus(room: Room) {
-  io.to(room.id).emit("room:status", {
+  const payload = {
     roomId: room.id,
     players: room.seats.map(({ slot, name, ready, socketId }) => ({ slot, name, ready, connected: Boolean(socketId) })),
     started: Boolean(room.snapshot),
-  });
+  };
+  operations.recordOutbound("room:status", payload, io.sockets.adapter.rooms.get(room.id)?.size ?? 0);
+  io.to(room.id).emit("room:status", payload);
 }
 
 function startIfReady(room: Room) {
@@ -236,8 +302,14 @@ function startIfReady(room: Room) {
   // stable per-room phase prevents simultaneous rooms from producing a burst.
   room.lastWireCheckpointAt = room.updatedAt - checkpointPhaseOffset(room.id);
   quickRoomId = quickRoomId === room.id ? null : quickRoomId;
-  io.to(room.id).emit("match:start", { roomId: room.id, seed });
-  io.to(room.id).compress(true).emit("match:snapshot", snapshotForClient(room.snapshot));
+  operations.increment("matchesStarted");
+  const recipients = io.sockets.adapter.rooms.get(room.id)?.size ?? 0;
+  const startPayload = { roomId: room.id, seed };
+  const snapshotPayload = snapshotForClient(room.snapshot);
+  operations.recordOutbound("match:start", startPayload, recipients);
+  operations.recordOutbound("match:snapshot", snapshotPayload, recipients);
+  io.to(room.id).emit("match:start", startPayload);
+  io.to(room.id).compress(true).emit("match:snapshot", snapshotPayload);
   emitStatus(room);
 }
 
@@ -293,7 +365,10 @@ function compatibleHandshake(socket: Socket) {
 
 io.use(async (socket, next) => {
   try {
-    if (!compatibleHandshake(socket)) return next(new Error("客户端规则或协议版本不兼容，请刷新页面"));
+    if (!compatibleHandshake(socket)) {
+      operations.increment("authenticationRejected");
+      return next(new Error("客户端规则或协议版本不兼容，请刷新页面"));
+    }
     if (!requireAuth) {
       socket.data.userId = `guest:${socket.id}`;
       socket.data.displayName = "测试玩家";
@@ -302,16 +377,25 @@ io.use(async (socket, next) => {
       return next();
     }
     const accessToken = String(socket.handshake.auth.accessToken ?? "");
-    if (!accessToken || !authClient || !supabaseUrl || !publishableKey) return next(new Error("缺少登录凭证"));
+    if (!accessToken || !authClient || !supabaseUrl || !publishableKey) {
+      operations.increment("authenticationRejected");
+      return next(new Error("缺少登录凭证"));
+    }
     const { data, error } = await authClient.auth.getUser(accessToken);
-    if (error || !data.user) return next(new Error("登录凭证无效或已过期"));
+    if (error || !data.user) {
+      operations.increment("authenticationRejected");
+      return next(new Error("登录凭证无效或已过期"));
+    }
     const scoped = createClient(supabaseUrl, publishableKey, {
       global: { headers: { Authorization: `Bearer ${accessToken}` } },
       auth: { persistSession: false, autoRefreshToken: false },
     });
     const { data: profile, error: profileError } = await scoped.from("zhaoyun_adou_profiles")
       .select("display_name,progress").eq("user_id", data.user.id).maybeSingle();
-    if (profileError) return next(new Error("无法读取账号对局进度"));
+    if (profileError) {
+      operations.increment("authenticationRejected");
+      return next(new Error("无法读取账号对局进度"));
+    }
     const progress = profile?.progress as { economy?: { totalMatches?: number } } | null;
     socket.data.userId = data.user.id;
     socket.data.displayName = profile?.display_name ?? data.user.user_metadata.username ?? "玩家";
@@ -319,11 +403,13 @@ io.use(async (socket, next) => {
     socket.data.authenticated = true;
     return next();
   } catch (error) {
+    operations.increment("authenticationRejected");
     return next(error instanceof Error ? error : new Error("账号验证失败"));
   }
 });
 
 io.on("connection", (socket) => {
+  operations.increment("connectionsAccepted");
   socket.on("room:create", async ({ name, introRound }: { name?: string; introRound?: number } = {}, ack?: Ack) => {
     try {
       const room = await createRoom();
@@ -331,7 +417,10 @@ io.on("connection", (socket) => {
       if ("error" in joined) return ack?.({ ok: false, code: joined.error, message: "无法创建房间" });
       await persistRoom(room);
       ack?.({ ok: true, roomId: room.id, slot: joined.seat.slot, token: joined.token });
-    } catch (error) { ack?.({ ok: false, code: "SERVER_ERROR", message: error instanceof Error ? error.message : "创建房间失败" }); }
+    } catch (error) {
+      operations.increment("serverErrors");
+      ack?.({ ok: false, code: "SERVER_ERROR", message: error instanceof Error ? error.message : "创建房间失败" });
+    }
   });
 
   socket.on("room:join", async ({ roomId, name, introRound }: { roomId?: string; name?: string; introRound?: number } = {}, ack?: Ack) => {
@@ -346,7 +435,10 @@ io.on("connection", (socket) => {
       });
       await persistRoom(room);
       ack?.({ ok: true, roomId: room.id, slot: joined.seat.slot, token: joined.token });
-    } catch (error) { ack?.({ ok: false, code: "SERVER_ERROR", message: error instanceof Error ? error.message : "加入房间失败" }); }
+    } catch (error) {
+      operations.increment("serverErrors");
+      ack?.({ ok: false, code: "SERVER_ERROR", message: error instanceof Error ? error.message : "加入房间失败" });
+    }
   });
 
   socket.on("room:quick", async ({ name, introRound }: { name?: string; introRound?: number } = {}, ack?: Ack) => {
@@ -355,7 +447,10 @@ io.on("connection", (socket) => {
       if ("error" in joined) return ack?.({ ok: false, code: joined.error, message: "随机匹配失败" });
       await persistRoom(room);
       ack?.({ ok: true, roomId: room.id, slot: joined.seat.slot, token: joined.token });
-    } catch (error) { ack?.({ ok: false, code: "SERVER_ERROR", message: error instanceof Error ? error.message : "随机匹配失败" }); }
+    } catch (error) {
+      operations.increment("serverErrors");
+      ack?.({ ok: false, code: "SERVER_ERROR", message: error instanceof Error ? error.message : "随机匹配失败" });
+    }
   });
 
   socket.on("room:resume", async ({ roomId, token }: { roomId?: string; token?: string } = {}, ack?: Ack) => {
@@ -373,7 +468,10 @@ io.on("connection", (socket) => {
       emitStatus(room);
       if (room.snapshot) socket.compress(true).emit("match:snapshot", snapshotForClient(room.snapshot));
       await persistRoom(room);
-    } catch (error) { ack?.({ ok: false, code: "SERVER_ERROR", message: error instanceof Error ? error.message : "恢复房间失败" }); }
+    } catch (error) {
+      operations.increment("serverErrors");
+      ack?.({ ok: false, code: "SERVER_ERROR", message: error instanceof Error ? error.message : "恢复房间失败" });
+    }
   });
 
   socket.on("room:ready", async (_payload: Record<string, never> = {}, ack?: Ack) => {
@@ -389,15 +487,21 @@ io.on("connection", (socket) => {
       await persistRoom(room);
       ack?.({ ok: true, ready: true, started: Boolean(room.snapshot) });
     } catch (error) {
+      operations.increment("serverErrors");
       ack?.({ ok: false, code: "SERVER_ERROR", message: error instanceof Error ? error.message : "准备状态提交失败" });
     }
   });
 
   socket.on("match:command", async (envelope: CommandEnvelope, ack?: Ack) => {
+    let commandRecorded = false;
     try {
       const room = rooms.get(String(socket.data.roomId));
       const seat = room?.seats.find((candidate) => candidate.slot === socket.data.slot && candidate.userId === socket.data.userId);
-      if (!room?.snapshot || !seat) return ack?.({ ok: false, code: "ERR_ROOM_STATE", message: "尚未进入战斗" });
+      if (!room?.snapshot || !seat) {
+        operations.recordCommand(false);
+        commandRecorded = true;
+        return ack?.({ ok: false, code: "ERR_ROOM_STATE", message: "尚未进入战斗" });
+      }
       const accepted = room.snapshot.acceptedCommands[envelope.commandId];
       const authoritativeEnvelope = {
         ...envelope,
@@ -406,6 +510,8 @@ io.on("connection", (socket) => {
       const serverStateVersionBefore = room.snapshot.stateVersion;
       const serverEventSequenceBefore = room.snapshot.eventSequence;
       const result = executeCommand(room.snapshot, seat.slot, authoritativeEnvelope);
+      operations.recordCommand(result.ok);
+      commandRecorded = true;
       ack?.(result as unknown as Record<string, unknown>);
       if (result.ok && !result.duplicate) {
         room.updatedAt = Date.now();
@@ -418,9 +524,13 @@ io.on("connection", (socket) => {
           stateVersionBefore: serverStateVersionBefore,
           eventSequenceBefore: serverEventSequenceBefore,
         };
+        const recipients = io.sockets.adapter.rooms.get(room.id)?.size ?? 0;
+        operations.recordOutbound("match:command-applied", applied, recipients);
         io.to(room.id).emit("match:command-applied", applied);
       }
     } catch (error) {
+      if (!commandRecorded) operations.recordCommand(false);
+      operations.increment("serverErrors");
       ack?.({
         ok: false,
         code: "ERR_PERSISTENCE",
@@ -430,14 +540,18 @@ io.on("connection", (socket) => {
   });
 
   socket.on("match:resync", (_payload: Record<string, never> = {}, ack?: Ack) => {
+    operations.increment("resyncRequests");
     const room = rooms.get(String(socket.data.roomId));
     const seat = room?.seats.find((candidate) => candidate.slot === socket.data.slot && candidate.userId === socket.data.userId);
     if (!room?.snapshot || !seat) return ack?.({ ok: false, code: "ERR_ROOM_STATE", message: "尚未进入战斗" });
-    socket.compress(true).emit("match:snapshot", snapshotForClient(room.snapshot));
+    const payload = snapshotForClient(room.snapshot);
+    operations.recordOutbound("match:snapshot", payload, 1);
+    socket.compress(true).emit("match:snapshot", payload);
     ack?.({ ok: true, stateVersion: room.snapshot.stateVersion });
   });
 
   socket.on("disconnect", () => {
+    operations.increment("disconnects");
     const room = rooms.get(String(socket.data.roomId));
     const seat = room?.seats.find((candidate) => candidate.slot === socket.data.slot && candidate.userId === socket.data.userId);
     if (!room || !seat || seat.socketId !== socket.id) return;
@@ -450,17 +564,26 @@ io.on("connection", (socket) => {
 });
 
 const tickMs = 1000 / GAME_CONFIG.tickHz;
+let expectedTickAt = performance.now() + tickMs;
 setInterval(() => {
+  const tickStartedAt = performance.now();
+  operations.observeEventLoopDelay(tickStartedAt - expectedTickAt);
+  expectedTickAt = tickStartedAt + tickMs;
   const now = Date.now();
   for (const room of rooms.values()) {
     if (room.snapshot && room.snapshot.phase !== "finished") {
+      const wasFinished = room.snapshot.winner !== null;
       stepMatch(room.snapshot, tickMs);
+      if (!wasFinished && room.snapshot.winner !== null) operations.increment("matchesFinished");
       room.updatedAt = now;
       // Clients run the same deterministic 10Hz simulation locally. The server
       // only sends a sparse compressed correction checkpoint, not every Tick.
       if (now - room.lastWireCheckpointAt >= REALTIME_SYNC_CONFIG.checkpointIntervalMs) {
         room.lastWireCheckpointAt = now;
-        io.to(room.id).compress(true).emit("match:checkpoint", snapshotForClient(room.snapshot));
+        const payload = snapshotForClient(room.snapshot);
+        const recipients = io.sockets.adapter.rooms.get(room.id)?.size ?? 0;
+        operations.recordOutbound("match:checkpoint", payload, recipients);
+        io.to(room.id).compress(true).emit("match:checkpoint", payload);
       }
       if (!room.persistInFlight && now - room.lastCheckpointAt >= REALTIME_SYNC_CONFIG.persistenceIntervalMs) {
         void persistRoom(room).catch(() => undefined);
@@ -468,12 +591,16 @@ setInterval(() => {
       if (room.snapshot.winner !== null) void persistRoom(room).catch(() => undefined);
     }
     const noConnectedPlayers = room.seats.every((seat) => !seat.socketId);
-    if (noConnectedPlayers && now - room.updatedAt > 10 * 60_000) rooms.delete(room.id);
+    if (noConnectedPlayers && now - room.updatedAt > 10 * 60_000) {
+      rooms.delete(room.id);
+      operations.increment("roomsRemoved");
+    }
   }
 }, tickMs);
 
 async function shutdown(signal: string) {
   console.log(JSON.stringify({ event: "shutdown", signal, rooms: rooms.size }));
+  clearInterval(operationsSampleTimer);
   await Promise.all([...rooms.values()].map((room) => persistRoom(room).catch(() => undefined)));
   io.close(() => httpServer.close(() => process.exit(0)));
   setTimeout(() => process.exit(1), 8_000).unref();

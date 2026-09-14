@@ -4,7 +4,7 @@
 
 `apps/server` 是真人对战的唯一权威端：客户端只提交 `GameCommand`，服务端调用 `packages/shared` 推进 10Hz 确定性模拟并广播快照。Supabase 只负责账号令牌校验、读取账号累计局数和保存房间检查点；GitHub Pages 只托管静态文件。
 
-生产模式拒绝以下缺失配置：精确 `CLIENT_ORIGIN`、Supabase URL/publishable key、仅服务端持有的 service-role key。浏览器永远不能获得 service-role key。
+生产模式拒绝以下缺失配置：精确 `CLIENT_ORIGIN`、Supabase URL/publishable key、仅服务端持有的 service-role key。浏览器永远不能获得 service-role key。实时运维后台还需要单独配置高强度 `ADMIN_DASHBOARD_TOKEN`；该令牌不得放入客户端构建变量、日志或分享链接。
 
 直接部署在反向代理同机时保持默认 `HOST=127.0.0.1`、`PORT=3001`，不向公网暴露 Node 监听端口；只有容器平台需要跨网络命名空间接入时才显式设置 `HOST=0.0.0.0`。
 
@@ -18,6 +18,12 @@ pnpm --filter @adou/qa test:integration
 ```
 
 本地无 Supabase 凭证时，`REQUIRE_AUTH=false` 允许集成测试使用临时访客身份；不得把该值用于生产。
+
+`pnpm dev` 同时启动管理端开发服务器；完整构建后的后台由房间服务同源托管在 `/admin/`。本地未设置 `ADMIN_DASHBOARD_TOKEN` 时使用开发令牌 `dev-admin`，生产环境没有默认值。后台令牌只保存在当前浏览器标签页的 `sessionStorage`，指标通过 `Authorization: Bearer ...` 访问：
+
+```bash
+curl --fail -H "Authorization: Bearer <ADMIN_DASHBOARD_TOKEN>" http://localhost:3001/api/admin/metrics
+```
 
 ## Supabase
 
@@ -34,11 +40,12 @@ supabase/migrations/20260903150000_authoritative_matches.sql
 
 仓库根目录的 `render.yaml` 使用付费 `0.5c-512mb` Web Service，Dockerfile 为 `Dockerfile.server`。免费实例空闲会休眠，不符合实时房间“常驻”要求。
 
-Render 首次创建时填写三个 `sync:false` 变量：
+Render 首次创建时填写四个 `sync:false` 变量：
 
 - `SUPABASE_URL`
 - `SUPABASE_PUBLISHABLE_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
+- `ADMIN_DASHBOARD_TOKEN`
 
 其余生产值已在 Blueprint 中声明。部署成功后确认：
 
@@ -51,6 +58,8 @@ curl --fail https://<service>.onrender.com/health
 ## 运行与恢复
 
 - Render 健康探针：`GET /health`。
+- 运维后台：`GET /admin/`；实时接口为 `GET /api/admin/metrics/stream`，反向代理必须允许长连接并关闭缓冲。
+- 面板里的“估算下行流量”按服务端序列化的业务事件字节数乘以接收人数计算，用来比较版本和房间压力；它不是主机网卡、TLS 或压缩后的运营商账单流量。
 - `SIGTERM/SIGINT`：停止前排队保存所有内存房间，最长等待平台的 30 秒关闭窗口。
 - 无连接房间在内存保留 10 分钟，数据库检查点保留 24 小时；内存释放后仍可凭同账号和恢复令牌重新装载。
 - 服务端只运行单实例。若未来横向扩容，必须先增加跨实例房间租约/消息总线，不可直接把同一房间分散到两个模拟进程。
