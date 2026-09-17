@@ -1,0 +1,446 @@
+[
+  {
+    "key": "hero-zhao-yun",
+    "file": "zhao-yun-web-v1.png",
+    "sourceHash": "80d4172eed739bd36330558810ab986564901ca14f4ad05890dd9b9d165003bf",
+    "bounds": [
+      31,
+      59,
+      1237,
+      1191
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "hero-zhang-fei",
+    "file": "heroes-main-web-v2.png",
+    "sourceHash": "d8c5075cf5edef4837bc52e46e6e04f32a1ceb41d4b24327873b674ac8d0a45c",
+    "bounds": [
+      32,
+      111,
+      537,
+      640
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "hero-guan-yu",
+    "file": "heroes-main-web-v2.png",
+    "sourceHash": "d8c5075cf5edef4837bc52e46e6e04f32a1ceb41d4b24327873b674ac8d0a45c",
+    "bounds": [
+      91,
+      110,
+      592,
+      636
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "hero-ma-chao",
+    "file": "heroes-main-web-v2.png",
+    "sourceHash": "d8c5075cf5edef4837bc52e46e6e04f32a1ceb41d4b24327873b674ac8d0a45c",
+    "bounds": [
+      39,
+      14,
+      583,
+      519
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "hero-huang-zhong",
+    "file": "heroes-main-web-v2.png",
+    "sourceHash": "d8c5075cf5edef4837bc52e46e6e04f32a1ceb41d4b24327873b674ac8d0a45c",
+    "bounds": [
+      94,
+      30,
+      608,
+      521
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "hero-guan-ping",
+    "file": "heroes-secondary-web-v2.png",
+    "sourceHash": "a257ab8b41eac6cfab65caa65f2c1a73536b3ac731744286ac658e564e078dfa",
+    "bounds": [
+      87,
+      116,
+      537,
+      563
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "hero-guan-xing",
+    "file": "heroes-secondary-web-v2.png",
+    "sourceHash": "a257ab8b41eac6cfab65caa65f2c1a73536b3ac731744286ac658e564e078dfa",
+    "bounds": [
+      160,
+      146,
+      555,
+      574
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "hero-zhang-bao",
+    "file": "heroes-secondary-web-v2.png",
+    "sourceHash": "a257ab8b41eac6cfab65caa65f2c1a73536b3ac731744286ac658e564e078dfa",
+    "bounds": [
+      74,
+      95,
+      603,
+      541
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "hero-zhang-yi",
+    "file": "heroes-secondary-web-v2.png",
+    "sourceHash": "a257ab8b41eac6cfab65caa65f2c1a73536b3ac731744286ac658e564e078dfa",
+    "bounds": [
+      111,
+      97,
+      590,
+      553
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "hero-huang-gai",
+    "file": "heroes-support-web-v1.png",
+    "sourceHash": "185755ce0df6c7916ffc44b113e8ab857f65a744d5366f4ede50ee8ddb9cabd8",
+    "bounds": [
+      25,
+      53,
+      578,
+      572
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "hero-liu-bei",
+    "file": "heroes-support-web-v1.png",
+    "sourceHash": "185755ce0df6c7916ffc44b113e8ab857f65a744d5366f4ede50ee8ddb9cabd8",
+    "bounds": [
+      100,
+      49,
+      607,
+      569
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "hero-huang-zu",
+    "file": "heroes-support-web-v1.png",
+    "sourceHash": "185755ce0df6c7916ffc44b113e8ab857f65a744d5366f4ede50ee8ddb9cabd8",
+    "bounds": [
+      39,
+      67,
+      557,
+      576
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "ui-adou",
+    "file": "heroes-support-web-v1.png",
+    "sourceHash": "185755ce0df6c7916ffc44b113e8ab857f65a744d5366f4ede50ee8ddb9cabd8",
+    "bounds": [
+      186,
+      75,
+      615,
+      568
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "troop-blade",
+    "file": "troops-web-v1.png",
+    "sourceHash": "3b824f92f3079f76d271ca1ef5dd3d19551130581c4838b828b739c61b301a8b",
+    "bounds": [
+      124,
+      99,
+      502,
+      557
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "troop-bow",
+    "file": "troops-web-v1.png",
+    "sourceHash": "3b824f92f3079f76d271ca1ef5dd3d19551130581c4838b828b739c61b301a8b",
+    "bounds": [
+      163,
+      47,
+      599,
+      560
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "troop-spear",
+    "file": "troops-web-v1.png",
+    "sourceHash": "3b824f92f3079f76d271ca1ef5dd3d19551130581c4838b828b739c61b301a8b",
+    "bounds": [
+      56,
+      83,
+      621,
+      551
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "troop-cavalry",
+    "file": "troops-web-v1.png",
+    "sourceHash": "3b824f92f3079f76d271ca1ef5dd3d19551130581c4838b828b739c61b301a8b",
+    "bounds": [
+      108,
+      34,
+      600,
+      572
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "enemy-rebel",
+    "file": "enemies-web-v1.png",
+    "sourceHash": "7d2b1571c8cc788ceabd371ddac30c75ecd2070d7f8e31a112b740ec051e8a7c",
+    "bounds": [
+      131,
+      127,
+      515,
+      590
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "enemy-brute",
+    "file": "enemies-web-v1.png",
+    "sourceHash": "7d2b1571c8cc788ceabd371ddac30c75ecd2070d7f8e31a112b740ec051e8a7c",
+    "bounds": [
+      58,
+      75,
+      600,
+      602
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "enemy-scout",
+    "file": "enemies-web-v1.png",
+    "sourceHash": "7d2b1571c8cc788ceabd371ddac30c75ecd2070d7f8e31a112b740ec051e8a7c",
+    "bounds": [
+      66,
+      118,
+      608,
+      576
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "enemy-captain",
+    "file": "enemies-web-v1.png",
+    "sourceHash": "7d2b1571c8cc788ceabd371ddac30c75ecd2070d7f8e31a112b740ec051e8a7c",
+    "bounds": [
+      33,
+      41,
+      596,
+      582
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "ui-fort",
+    "file": "structures-web-v1.png",
+    "sourceHash": "62323e91fbf08342530afcb6ead9fa0ac04716ae87ac19302f74c7fb11fdc748",
+    "bounds": [
+      72,
+      44,
+      546,
+      574
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "ui-camp",
+    "file": "structures-web-v1.png",
+    "sourceHash": "62323e91fbf08342530afcb6ead9fa0ac04716ae87ac19302f74c7fb11fdc748",
+    "bounds": [
+      80,
+      40,
+      608,
+      561
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "enemy-boss-horned",
+    "file": "structures-web-v1.png",
+    "sourceHash": "62323e91fbf08342530afcb6ead9fa0ac04716ae87ac19302f74c7fb11fdc748",
+    "bounds": [
+      39,
+      31,
+      599,
+      589
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "enemy-boss-banner",
+    "file": "structures-web-v1.png",
+    "sourceHash": "62323e91fbf08342530afcb6ead9fa0ac04716ae87ac19302f74c7fb11fdc748",
+    "bounds": [
+      45,
+      18,
+      614,
+      581
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "tile-grass",
+    "file": "terrain-web-v1.png",
+    "sourceHash": "44bcb4b0f6d798b36376e5b4afe5ee244bd7a224648fa4887404a84e8efa0a28",
+    "trueAlpha": false
+  },
+  {
+    "key": "tile-road",
+    "file": "terrain-web-v1.png",
+    "sourceHash": "44bcb4b0f6d798b36376e5b4afe5ee244bd7a224648fa4887404a84e8efa0a28",
+    "trueAlpha": false
+  },
+  {
+    "key": "tile-deployment",
+    "file": "terrain-web-v1.png",
+    "sourceHash": "44bcb4b0f6d798b36376e5b4afe5ee244bd7a224648fa4887404a84e8efa0a28",
+    "trueAlpha": false
+  },
+  {
+    "key": "tile-paper",
+    "file": "terrain-web-v1.png",
+    "sourceHash": "44bcb4b0f6d798b36376e5b4afe5ee244bd7a224648fa4887404a84e8efa0a28",
+    "trueAlpha": false
+  },
+  {
+    "key": "buff-invulnerable",
+    "file": "buffs-web-v1.png",
+    "sourceHash": "5528fd6608c853d74466869055cf5a7d9301b3553dd98a66dccc38c0252ae5c0",
+    "bounds": [
+      60,
+      83,
+      481,
+      487
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "buff-haste",
+    "file": "buffs-web-v1.png",
+    "sourceHash": "5528fd6608c853d74466869055cf5a7d9301b3553dd98a66dccc38c0252ae5c0",
+    "bounds": [
+      67,
+      77,
+      455,
+      481
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "buff-giant",
+    "file": "buffs-web-v1.png",
+    "sourceHash": "5528fd6608c853d74466869055cf5a7d9301b3553dd98a66dccc38c0252ae5c0",
+    "bounds": [
+      47,
+      80,
+      450,
+      476
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "buff-rally",
+    "file": "buffs-web-v1.png",
+    "sourceHash": "5528fd6608c853d74466869055cf5a7d9301b3553dd98a66dccc38c0252ae5c0",
+    "bounds": [
+      71,
+      66,
+      466,
+      464
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "buff-smoke",
+    "file": "buffs-web-v1.png",
+    "sourceHash": "5528fd6608c853d74466869055cf5a7d9301b3553dd98a66dccc38c0252ae5c0",
+    "bounds": [
+      82,
+      56,
+      467,
+      442
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "buff-decoy",
+    "file": "buffs-web-v1.png",
+    "sourceHash": "5528fd6608c853d74466869055cf5a7d9301b3553dd98a66dccc38c0252ae5c0",
+    "bounds": [
+      71,
+      32,
+      442,
+      446
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "fx-art-thrust",
+    "file": "effects-web-v2.png",
+    "sourceHash": "4180e91f0ba545b3cd0ea74172cc89b68036d826bb5ddfa7592419ecbcc9ee5f",
+    "bounds": [
+      126,
+      251,
+      529,
+      425
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "fx-art-crescent",
+    "file": "effects-web-v2.png",
+    "sourceHash": "4180e91f0ba545b3cd0ea74172cc89b68036d826bb5ddfa7592419ecbcc9ee5f",
+    "bounds": [
+      143,
+      163,
+      500,
+      497
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "fx-art-shockwave",
+    "file": "effects-web-v2.png",
+    "sourceHash": "4180e91f0ba545b3cd0ea74172cc89b68036d826bb5ddfa7592419ecbcc9ee5f",
+    "bounds": [
+      144,
+      148,
+      488,
+      477
+    ],
+    "trueAlpha": true
+  },
+  {
+    "key": "fx-art-impact",
+    "file": "effects-web-v2.png",
+    "sourceHash": "4180e91f0ba545b3cd0ea74172cc89b68036d826bb5ddfa7592419ecbcc9ee5f",
+    "bounds": [
+      152,
+      142,
+      485,
+      486
+    ],
+    "trueAlpha": true
+  }
+]

@@ -2,8 +2,9 @@ import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 const outputDirectory = path.resolve(process.cwd(), process.argv[2] ?? "dist");
-// 1.6.0 增加烟幕/木桩的权威场地表现；相对 1.5.0 仅给予约 0.3% 的净增长空间。
-const limits = { ".js": 1_665_000, ".css": 30_000 };
+// 2026-09 art pass: distinct ultimates + bounded FX lifecycle + compact asset keys.
+// <0.91% JS headroom; art has its own unchanged 1,843,376-byte manifest ceiling.
+const limits = { ".js": 1_680_000, ".css": 31_000 };
 const files = [];
 
 async function walk(directory) {

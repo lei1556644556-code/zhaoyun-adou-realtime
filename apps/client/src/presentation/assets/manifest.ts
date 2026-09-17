@@ -1,3 +1,4 @@
+import production from "./production.json";
 export type AssetLoadScope = "boot" | "lobby" | "battle" | "lazy";
 export type AssetCategory = "background" | "tile" | "ui" | "troop" | "hero" | "enemy" | "key-art" | "effect" | "audio";
 
@@ -39,7 +40,8 @@ const raster = <Key extends string>(
   alpha: boolean,
   purpose: string,
   iconModeOnly = false,
-): AssetEntry<Key, RasterAssetSource> => ({ key, category, scope, iconModeOnly, source: { kind: "raster", path, width, height, bytes, alpha }, purpose });
+): AssetEntry<Key, RasterAssetSource> => ({ key, category, scope, iconModeOnly,
+  source: { kind: "raster", path, width, height, bytes, alpha, ...(production as Record<string, Omit<RasterAssetSource, "kind">>)[key] }, purpose });
 
 const planned = <Key extends string>(
   key: Key,
@@ -61,9 +63,9 @@ export const ASSET_MANIFEST = {
     "key-art-zhao-yun": raster("key-art-zhao-yun", "key-art", "lazy", "assets/characters/zhao-yun.webp", 844, 900, 241170, true, "Large Zhao Yun promotional cutout"),
     "key-art-rebel-infantry": raster("key-art-rebel-infantry", "key-art", "lazy", "assets/characters/rebel-infantry.webp", 292, 320, 35354, true, "Large rebel infantry promotional cutout"),
 
-    "tile-road": raster("tile-road", "tile", "battle", "assets/tiles/road.webp", 256, 256, 18110, false, "Marching road tile"),
-    "tile-grass": raster("tile-grass", "tile", "battle", "assets/tiles/grass.webp", 256, 256, 14682, false, "Blocked grass tile"),
-    "tile-deployment": raster("tile-deployment", "tile", "battle", "assets/tiles/deployment.webp", 256, 256, 8190, false, "Deployment tile"),
+    "tile-road": raster("tile-road", "tile", "battle", "assets/tiles/road.webp", 256, 256, 18110, false, "Painted ochre marching road"),
+    "tile-grass": raster("tile-grass", "tile", "battle", "assets/tiles/grass.webp", 256, 256, 14682, false, "Painted grass and embedded pebbles"),
+    "tile-deployment": raster("tile-deployment", "tile", "battle", "assets/tiles/deployment.webp", 256, 256, 8190, false, "Ivory stone with cloud inlay"),
     "tile-paper": raster("tile-paper", "tile", "battle", "assets/tiles/paper.webp", 256, 256, 5920, false, "Reserve slot tile"),
 
     "ui-fort": raster("ui-fort", "ui", "battle", "assets/ui/fort.webp", 256, 256, 31166, true, "Fort marker"),
@@ -97,6 +99,17 @@ export const ASSET_MANIFEST = {
     "enemy-captain": raster("enemy-captain", "enemy", "battle", "assets/enemies/captain.webp", 256, 256, 22830, true, "Captain enemy portrait"),
     "enemy-boss-horned": raster("enemy-boss-horned", "enemy", "battle", "assets/enemies/boss-horned.webp", 256, 256, 27856, true, "Horned boss portrait"),
     "enemy-boss-banner": raster("enemy-boss-banner", "enemy", "battle", "assets/enemies/boss-banner.webp", 256, 256, 28418, true, "Banner boss portrait"),
+
+    "buff-invulnerable": raster("buff-invulnerable", "ui", "battle", "assets/v2/buff-invulnerable.webp", 256, 256, 0, true, "Invulnerability buff icon"),
+    "buff-haste": raster("buff-haste", "ui", "battle", "assets/v2/buff-haste.webp", 256, 256, 0, true, "Haste buff icon"),
+    "buff-giant": raster("buff-giant", "ui", "battle", "assets/v2/buff-giant.webp", 256, 256, 0, true, "Giant buff icon"),
+    "buff-rally": raster("buff-rally", "ui", "battle", "assets/v2/buff-rally.webp", 256, 256, 0, true, "Rally buff icon"),
+    "buff-smoke": raster("buff-smoke", "ui", "battle", "assets/v2/buff-smoke.webp", 256, 256, 0, true, "Smoke buff icon"),
+    "buff-decoy": raster("buff-decoy", "ui", "battle", "assets/v2/buff-decoy.webp", 256, 256, 0, true, "Decoy buff icon"),
+    "fx-art-thrust": raster("fx-art-thrust", "effect", "battle", "assets/v2/fx-art-thrust.webp", 192, 192, 0, true, "Painted silver-blue spear energy"),
+    "fx-art-crescent": raster("fx-art-crescent", "effect", "battle", "assets/v2/fx-art-crescent.webp", 192, 192, 0, true, "Painted jade crescent"),
+    "fx-art-shockwave": raster("fx-art-shockwave", "effect", "battle", "assets/v2/fx-art-shockwave.webp", 192, 192, 0, true, "Painted violet shock ring"),
+    "fx-art-impact": raster("fx-art-impact", "effect", "battle", "assets/v2/fx-art-impact.webp", 192, 192, 0, true, "Painted golden hit spark"),
 
     "fx-attack-slash": planned("fx-attack-slash", "effect", "webp-atlas", "procedural crescent stroke", "Blade action atlas"),
     "fx-attack-arrow": planned("fx-attack-arrow", "effect", "webp-atlas", "procedural arrow geometry", "Arrow projectile atlas"),

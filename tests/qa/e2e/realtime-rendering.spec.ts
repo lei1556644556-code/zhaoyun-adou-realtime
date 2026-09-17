@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { MAP_LAYOUTS, cellIndex } from "@adou/shared";
 import { acceptanceSnapshot, designPoint, mockAuthenticatedAccount, openRestoredBattle, QA_USER_ID } from "./fixtures";
 
-test("keeps wave 4 combat smooth and accepts a drag while 10Hz snapshots continue", async ({ page }) => {
+test("keeps wave 4 combat smooth and accepts a drag while 10Hz snapshots continue", async ({ page }, testInfo) => {
   const snapshot = acceptanceSnapshot();
   snapshot.phase = "battle";
   const route = MAP_LAYOUTS[snapshot.mapIndex]!.path;
@@ -60,6 +60,8 @@ test("keeps wave 4 combat smooth and accepts a drag while 10Hz snapshots continu
   // compositor on Windows. Player-facing headed Chromium must sustain 45fps;
   // headless CI retains a lower regression floor for the same loaded scene.
   const minimumFrameRate = process.env.QA_HEADED_PERF === "1" ? 45 : 12;
+  console.log(`render/perf ${testInfo.project.name}: ${frameRate.toFixed(1)} fps, 32 enemies, 10Hz snapshots`);
+  await testInfo.attach("frame-rate", { body: JSON.stringify({ fps: frameRate, minimumFrameRate, enemies: 32, snapshotHz: 10 }), contentType: "application/json" });
   expect(frameRate, "wave 4 combat should remain responsive while attack effects are active").toBeGreaterThanOrEqual(minimumFrameRate);
   await expect.poll(() => page.evaluate((userId) => {
     const raw = localStorage.getItem(`adou-practice-save-v1:${userId}`);

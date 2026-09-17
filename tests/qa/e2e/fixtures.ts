@@ -1,8 +1,10 @@
 import { expect, type Page } from "@playwright/test";
 import { createMatch, cellIndex, type MatchSnapshot } from "@adou/shared";
 
-const SUPABASE_ORIGIN = "https://dkaabuxszrbnnrajnoaa.supabase.co";
-const AUTH_STORAGE_KEY = "sb-dkaabuxszrbnnrajnoaa-auth-token";
+// Preview builds deliberately use a non-routable backend. Keep the mocked
+// origin and auth storage key aligned without injecting live configuration.
+const SUPABASE_ORIGIN = new URL(process.env.QA_SUPABASE_ORIGIN || "https://dkaabuxszrbnnrajnoaa.supabase.co").origin;
+const AUTH_STORAGE_KEY = `sb-${new URL(SUPABASE_ORIGIN).hostname.split(".")[0]}-auth-token`;
 export const QA_USER_ID = "qa-user";
 
 export function acceptanceSnapshot(): MatchSnapshot {

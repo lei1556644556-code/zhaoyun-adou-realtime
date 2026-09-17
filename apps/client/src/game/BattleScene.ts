@@ -4,7 +4,8 @@ import {
   enemyPathPoint, pathPoint,
   type ActivePropId, type BattleBuffKind, type BattleEvent, type CombatEffectEvent, type EnemyState, type HeroRarity, type MatchSnapshot, type PlayerBattleState, type PlayerSlot,
 } from "@adou/shared";
-import { allImageAssets, HERO_ASSET_KEYS, IMAGE_ASSETS, TROOP_ASSET_KEYS } from "./assets";
+import { allImageAssets, enemyImageAsset, HERO_ASSET_KEYS, IMAGE_ASSETS, TROOP_ASSET_KEYS } from "./assets";
+import { battleAttackStyle, EffectEventWindow, ultimateShape } from "../presentation/battleArt";
 import {
   BATTLE_INPUT, BATTLE_LAYOUT, activePropDropTargetAt, battleBuffDropTargetAt, battleDropTargetAt, createPointerGesture, isTapGesture, updatePointerGesture,
   resolveBattleInspection, worldDragThreshold,
@@ -67,7 +68,7 @@ export class BattleScene extends Phaser.Scene {
   private propTargetGraphics!: Phaser.GameObjects.Graphics;
   private effectsLayer!: Phaser.GameObjects.Container;
   private dragLayer!: Phaser.GameObjects.Container;
-  private playedEffectIds = new Set<string>();
+  private playedEffectIds = new EffectEventWindow();
   /** 从按下到释放由同一场景级状态机接管，避免 10Hz 快照替换按下时的对象。 */
   private activePointer: ActivePointer | null = null;
   private isDragging = false;
@@ -82,6 +83,8 @@ export class BattleScene extends Phaser.Scene {
   private enemyVisuals = new Map<string, EnemyVisual>();
   private hudLastEventText: Phaser.GameObjects.Text | null = null;
   private hudBunsText: Phaser.GameObjects.Text | null = null;
+  private ultimateBanner: Phaser.GameObjects.Container | null = null;
+  private readonly motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
   private pieceDisplayMode: PieceDisplayMode = localStorage.getItem(PIECE_DISPLAY_MODE_KEY) === "text" ? "text" : "image";
 
   constructor() { super("battle"); }
@@ -145,12 +148,14 @@ export class BattleScene extends Phaser.Scene {
       this.onPropDragCancel();
       this.onBattleBuffDragCancel();
       this.clearEnemyVisuals();
+      this.ultimateBanner = null;
+      this.playedEffectIds.clear();
     });
   }
 
   update(time: number) {
     for (const visual of this.enemyVisuals.values()) {
-      const step = Math.sin(time * 0.006 + visual.seed);
+      const step = this.motionPreference.matches ? 0 : Math.sin(time * 0.006 + visual.seed);
       visual.figure.y = step * (visual.boss ? 2.2 : 3.2);
       visual.figure.rotation = step * (visual.boss ? 0.018 : 0.035);
     }
@@ -227,6 +232,16 @@ export class BattleScene extends Phaser.Scene {
     this.draggingPartIndex = action.drag.sourceType === "generalPart" ? action.drag.partIndex : null;
     this.stateLayer.remove(action.object, false);
     this.dragLayer.add(action.object);
+    if (action.drag.sourceType === "generalPart" && this.pieceDisplayMode === "image") {
+      // The small corner label becomes a full readable character while splitting.
+      action.object.removeAll(true);
+      action.object.add([
+        this.add.circle(0, 0, 34, 0x355b4c, .98).setStrokeStyle(3, 0xf0d58d),
+        this.add.text(0, 0, String(action.object.getData("kind")), {
+          fontFamily: '"KaiTi", serif', fontSize: "43px", color: "#fff0c3", fontStyle: "bold",
+        }).setOrigin(.5),
+      ]);
+    }
     action.object.setScale(1.08).setRotation(0);
     this.game.canvas.classList.add("is-dragging");
     this.game.events.emit("battle:interaction-state", { phase: "dragging", sourceType: action.drag.sourceType, id: action.drag.id });
@@ -535,12 +550,6 @@ export class BattleScene extends Phaser.Scene {
       const x = (i * 97) % WIDTH; const y = (i * 53) % HEIGHT;
       paper.fillCircle(x, y, 2 + (i % 4));
     }
-    this.add.text(24, 18, "巨鹿战场", {
-      fontFamily: '"STKaiti", "KaiTi", "Microsoft YaHei", serif', fontSize: "24px", color: "#4d5a4e", fontStyle: "bold",
-    });
-    this.add.text(WIDTH - 24, 24, "1.0.9 规则基线", {
-      fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "15px", color: "#788178",
-    }).setOrigin(1, 0);
   }
 
   private onSnapshot(snapshot: MatchSnapshot, slot: PlayerSlot) {
@@ -712,19 +721,32 @@ export class BattleScene extends Phaser.Scene {
         : cellIndex(GAME_CONFIG.columns - 1 - x, GAME_CONFIG.rows - 1 - y);
       const opened = type === 1 || (type === 2 && (side === 0 ? mine : opponent).unlockedCells.includes(canonical));
       const asset = type === 0 ? IMAGE_ASSETS.tiles.road : opened ? IMAGE_ASSETS.tiles.deployment : IMAGE_ASSETS.tiles.grass;
-      const tile = this.add.image(px + CELL / 2, py + CELL / 2, asset.key).setDisplaySize(CELL - 2, CELL - 2);
+      // Sample ground in world coordinates, avoiding an identical pebble pattern
+      // restarting at every cell. Deployment slabs remain individual target cells.
+      const tile = opened
+        ? this.add.image(px + CELL / 2, py + CELL / 2, asset.key).setDisplaySize(CELL, CELL)
+        : this.add.tileSprite(px + CELL / 2, py + CELL / 2, CELL, CELL, asset.key)
+          .setTilePosition(px, py - MAP_TOP);
       if (side === 1) tile.setTint(type === 0 ? 0xd5e5df : 0xdcebea);
       this.tileLayer.add(tile);
       if (type === 0) {
-        grid.lineStyle(2, 0x6c4a34, 0.34).strokeRoundedRect(px + 3, py + 3, CELL - 6, CELL - 6, 10);
+        // Keep the road visually continuous. Only banks have strong outlines.
+        const isRoad = (nx: number, ny: number) => nx >= 0 && ny >= 0 && nx < GAME_CONFIG.columns && ny < GAME_CONFIG.rows
+          && cellCode(this.snapshot!.mapIndex, cellIndex(nx, ny))[0] === "0";
+        grid.lineStyle(1, 0xffe9b7, 0.1).strokeRect(px, py, CELL, CELL);
+        grid.lineStyle(3, 0x4e5741, 0.64);
+        if (!isRoad(x - 1, y)) grid.lineBetween(px + 1, py, px + 1, py + CELL);
+        if (!isRoad(x + 1, y)) grid.lineBetween(px + CELL - 1, py, px + CELL - 1, py + CELL);
+        if (!isRoad(x, y - 1)) grid.lineBetween(px, py + 1, px + CELL, py + 1);
+        if (!isRoad(x, y + 1)) grid.lineBetween(px, py + CELL - 1, px + CELL, py + CELL - 1);
       } else if (opened) {
-        grid.lineStyle(3, side === 0 ? 0x42675b : 0x55777a, 0.78).strokeRoundedRect(px + 5, py + 5, CELL - 10, CELL - 10, 7);
-        grid.lineStyle(1, 0xfff9df, 0.8).strokeRoundedRect(px + 9, py + 9, CELL - 18, CELL - 18, 5);
+        grid.lineStyle(2, side === 0 ? 0xf4e9c9 : 0xc8e4df, 0.65).strokeRoundedRect(px + 5, py + 5, CELL - 10, CELL - 10, 5);
       } else {
-        grid.lineStyle(1, 0x294f42, 0.3).strokeRect(px + 1, py + 1, CELL - 2, CELL - 2);
+        grid.lineStyle(1, 0x294f42, 0.18).strokeRect(px + 1, py + 1, CELL - 2, CELL - 2);
       }
     }
-    grid.lineStyle(4, 0xfff2c8, 0.9).lineBetween(0, MAP_TOP + 400, WIDTH, MAP_TOP + 400);
+    grid.lineStyle(5, 0x213c34, 0.65).lineBetween(0, MAP_TOP + 400, WIDTH, MAP_TOP + 400);
+    grid.lineStyle(1, 0xffe4ac, 0.85).lineBetween(0, MAP_TOP + 400, WIDTH, MAP_TOP + 400);
     grid.lineStyle(2, 0x233e35, 0.5).lineBetween(0, MAP_TOP, WIDTH, MAP_TOP);
     grid.lineBetween(0, MAP_TOP + 800, WIDTH, MAP_TOP + 800);
     this.tileLayer.add(grid);
@@ -733,19 +755,32 @@ export class BattleScene extends Phaser.Scene {
   private drawHud(mine: PlayerBattleState, opponent: PlayerBattleState) {
     if (!this.snapshot) return;
     const add = (object: Phaser.GameObjects.GameObject) => { this.stateLayer.add(object); return object; };
-    add(this.add.rectangle(320, 99, 640, 158, 0xf8f4e8, 0.94).setStrokeStyle(2, 0x9d947c, 0.25));
-    add(this.add.circle(70, 103, 40, 0x435e57, 1).setStrokeStyle(4, 0xd5ba78, 1));
-    add(this.add.text(70, 101, "敌", { fontFamily: '"KaiTi", serif', fontSize: "38px", color: "#fff1cf", fontStyle: "bold" }).setOrigin(0.5));
-    add(this.add.text(126, 73, "对手", { fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "19px", color: "#5f675f" }));
-    add(this.add.text(126, 105, `阿斗  ${"♥".repeat(opponent.hp)}${"♡".repeat(Math.max(0, opponent.maxHp - opponent.hp))}`, {
-      fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "23px", color: "#bb4b43", fontStyle: "bold",
+    add(this.add.rectangle(320, 100, 640, 200, 0x203d35, 1));
+    const trim = this.add.graphics();
+    trim.lineStyle(1, 0xd4b878, 0.55).lineBetween(22, 47, 618, 47).lineBetween(22, 150, 618, 150);
+    trim.lineStyle(3, 0xd4b878, 0.85).lineBetween(0, 197, 640, 197);
+    add(trim);
+    add(this.add.text(24, 15, `${MAP_LAYOUTS[this.snapshot.mapIndex]?.name ?? "巨鹿"} · 战场`, {
+      fontFamily: '"KaiTi", serif', fontSize: "24px", color: "#efdfb5", fontStyle: "bold",
     }));
+    add(this.add.text(616, 22, "守护阿斗 · 列阵迎敌", {
+      fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "15px", color: "#afc5b6",
+    }).setOrigin(1, 0));
+    add(this.add.text(26, 66, "敌方阿斗", { fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "18px", color: "#c0cdbd" }));
+    add(this.add.text(26, 91, `${opponent.hp} / ${opponent.maxHp}`, {
+      fontFamily: '"Arial", sans-serif', fontSize: "28px", color: "#f2c9aa", fontStyle: "bold",
+    }));
+    add(this.add.rectangle(26, 132, 176, 6, 0x112a24).setOrigin(0, 0.5));
+    add(this.add.rectangle(26, 132, 176 * Phaser.Math.Clamp(opponent.hp / Math.max(1, opponent.maxHp), 0, 1), 6, 0xd89572).setOrigin(0, 0.5));
     const seconds = mine.phase === "preparing" ? Math.max(0, Math.ceil(mine.prepareMs / 1000)) : mine.wave;
-    add(this.add.circle(320, 102, 57, 0x42665a, 1).setStrokeStyle(5, 0xe0c486, 1));
-    add(this.add.text(320, 82, mine.phase === "preparing" ? "备战" : "波次", { fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "17px", color: "#dce8dd" }).setOrigin(0.5));
-    add(this.add.text(320, 113, String(seconds), { fontFamily: '"Arial", sans-serif', fontSize: "35px", color: "#fff3c7", fontStyle: "bold" }).setOrigin(0.5));
-    add(this.add.text(574, 71, `第 ${mine.wave} / ${GAME_CONFIG.maxWaves} 波`, { fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "19px", color: "#59665e", fontStyle: "bold" }).setOrigin(1, 0));
-    add(this.add.text(574, 108, MAP_LAYOUTS[this.snapshot.mapIndex]?.name ?? "巨鹿", { fontFamily: '"KaiTi", serif', fontSize: "27px", color: "#7d4935", fontStyle: "bold" }).setOrigin(1, 0));
+    add(this.add.circle(320, 100, 44, 0x2e5144, 1).setStrokeStyle(2, 0xd9b975, 1));
+    add(this.add.text(320, 80, mine.phase === "preparing" ? "备战" : "波次", { fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "15px", color: "#c5d4bc" }).setOrigin(0.5));
+    add(this.add.text(320, 111, String(seconds), { fontFamily: '"Arial", sans-serif', fontSize: "35px", color: "#fff3c7", fontStyle: "bold" }).setOrigin(0.5));
+    add(this.add.text(612, 69, `第 ${mine.wave} / ${GAME_CONFIG.maxWaves} 波`, { fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "21px", color: "#efdfb5", fontStyle: "bold" }).setOrigin(1, 0));
+    add(this.add.text(612, 112, mine.phase === "battle" ? "交战中" : mine.phase === "preparing" ? "整军备战" : mine.phase === "finished" ? "战局结束" : "等待布阵", { fontFamily: '"KaiTi", serif', fontSize: "24px", color: "#c4d5bd", fontStyle: "bold" }).setOrigin(1, 0));
+    add(this.add.text(320, 174, "棕路行军     白格布阵     草地可铲", {
+      fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "16px", color: "#b6c5ae",
+    }).setOrigin(0.5));
     add(this.add.rectangle(116, 1023, 210, 38, 0x813f38, 0.97).setStrokeStyle(2, 0xe8c67c, 1));
     add(this.add.text(116, 1023, `我方阿斗  ♥ ${mine.hp} / ${mine.maxHp}`, {
       fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "20px", color: "#fff3ce", fontStyle: "bold",
@@ -953,24 +988,26 @@ export class BattleScene extends Phaser.Scene {
     });
     if (!reducedMotion) {
       this.tweens.add({ targets: rays, rotation: Math.PI / 5, duration: 1200, ease: "Sine.easeInOut" });
-      this.cameras.main.flash(170, gold ? 255 : 196, gold ? 224 : 165, gold ? 134 : 255, false);
-      this.cameras.main.shake(150, 0.0022);
     }
   }
 
   private playBattleEvents(events: BattleEvent[]) {
-    for (const event of events.slice(0, 28)) {
-      if (this.playedEffectIds.has(event.id)) continue;
-      this.playedEffectIds.add(event.id);
-      if (event.type === "attack") this.playAttackEffect(event);
+    let ordinaryAttacks = 0;
+    for (const event of events) {
+      if (!this.playedEffectIds.accept(event.id)) continue;
+      // Cosmetic admission only: authoritative damage/state always comes from the snapshot.
+      // Mark skipped events consumed so busy snapshots cannot build a delayed FX backlog.
+      if (event.type === "attack") {
+        if (ordinaryAttacks++ >= 10 || this.effectsLayer.length > 96) continue;
+        this.playAttackEffect(event);
+      }
       else if (event.type === "arrow-rain-impact") this.playArrowRainImpact(event);
       else if (event.type === "general-skill") this.playGeneralSkillEvent(event);
       else if (event.type === "boss-skill" && event.phase !== "resolved") this.playBossSkill(event);
       else if (event.type === "battle-buff-dropped" || event.type === "battle-buff-used") this.playBattleBuffEvent(event);
       else if (event.type === "battle-field-effect-hit") this.playBattleFieldEffectHit(event);
-      else if (event.type === "bulldozer" && event.phase === "push") this.cameras.main.shake(90, 0.0018);
+      else if (event.type === "bulldozer" && event.phase === "push" && !this.motionPreference.matches) this.cameras.main.shake(90, 0.0018);
     }
-    if (this.playedEffectIds.size > 600) this.playedEffectIds.clear();
   }
 
   private playArrowRainImpact(event: Extract<BattleEvent, { type: "arrow-rain-impact" }>) {
@@ -989,15 +1026,14 @@ export class BattleScene extends Phaser.Scene {
 
   private playBossSkill(event: Extract<BattleEvent, { type: "boss-skill" }>) {
     const intercepted = event.phase === "intercepted";
-    const banner = this.add.container(WIDTH / 2, MAP_TOP + 400).setDepth(95).setAlpha(0);
-    const plate = this.add.rectangle(0, 0, 430, 92, intercepted ? 0x2f624e : 0x711f25, 0.94)
-      .setStrokeStyle(4, intercepted ? 0xb8f1ba : 0xffd177, 1);
+    const banner = this.add.container(WIDTH / 2, 174).setDepth(95).setAlpha(0);
+    const plate = this.add.rectangle(0, 0, 596, 42, intercepted ? 0x2f624e : 0x711f25, 0.98)
+      .setStrokeStyle(1, intercepted ? 0xb8f1ba : 0xffd177, 1);
     const text = this.add.text(0, 0, intercepted ? `降妖符·反噬 ${event.skillName}` : `Boss发动·${event.skillName}`, {
-      fontFamily: '"STKaiti", "KaiTi", serif', fontSize: "34px", color: "#fff1bd", fontStyle: "bold",
+      fontFamily: '"STKaiti", "KaiTi", serif', fontSize: "25px", color: "#fff1bd", fontStyle: "bold",
     }).setOrigin(0.5);
     banner.add([plate, text]); this.effectsLayer.add(banner);
     this.tweens.add({ targets: banner, alpha: 1, scale: 1.06, duration: 180, yoyo: true, hold: 520, onComplete: () => banner.destroy() });
-    if (!intercepted) this.cameras.main.shake(130, 0.0024);
   }
 
   private playAttackEffect(event: CombatEffectEvent) {
@@ -1017,7 +1053,6 @@ export class BattleScene extends Phaser.Scene {
     const style = this.attackStyle(event.unitKind);
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const angle = Phaser.Math.Angle.Between(source.x, source.y, target.x, target.y);
-    this.playAttackWake(source, target, event, style, reducedMotion);
     const sourceFlash = this.add.circle(source.x, source.y, event.special ? 22 : 14, style.color, 0.28).setStrokeStyle(4, style.accent, 0.92);
     this.effectsLayer.add(sourceFlash);
     this.tweens.add({ targets: sourceFlash, scale: 1.8, alpha: 0, duration: reducedMotion ? 80 : 220, onComplete: () => sourceFlash.destroy() });
@@ -1076,6 +1111,7 @@ export class BattleScene extends Phaser.Scene {
       duration: reducedMotion ? 70 : style.duration, ease: "Quad.easeIn",
       onComplete: () => {
         projectile.destroy();
+        this.playAttackWake(source, target, event, style, reducedMotion);
         this.playImpactEffect(target.x, target.y, event, style, angle, reducedMotion);
       },
     });
@@ -1087,13 +1123,13 @@ export class BattleScene extends Phaser.Scene {
     const color = Number.parseInt(config.color.slice(1), 16);
     if (event.type === "battle-buff-dropped") {
       if (event.slot !== this.slot) return;
-      const banner = this.add.container(110, 1190).setAlpha(0).setDepth(96);
-      const plate = this.add.rectangle(0, 0, 184, 58, 0x29483d, 0.94).setStrokeStyle(3, color, 1);
+      const banner = this.add.container(110, 174).setAlpha(0).setDepth(96);
+      const plate = this.add.rectangle(0, 0, 184, 40, 0x29483d, 0.98).setStrokeStyle(1, color, 1);
       const label = this.add.text(0, 0, `掉落 · ${config.name}`, {
         fontFamily: '"STKaiti", "KaiTi", serif', fontSize: "23px", color: "#fff4cf", fontStyle: "bold",
       }).setOrigin(0.5);
       banner.add([plate, label]); this.effectsLayer.add(banner);
-      this.tweens.add({ targets: banner, alpha: 1, y: 1148, duration: 180, yoyo: true, hold: 850, onComplete: () => banner.destroy() });
+      this.tweens.add({ targets: banner, alpha: 1, duration: 180, yoyo: true, hold: 850, onComplete: () => banner.destroy() });
       return;
     }
     const visual = event.targetEnemyId ? this.enemyVisuals.get(`${event.targetSlot}:${event.targetEnemyId}`) : undefined;
@@ -1109,7 +1145,7 @@ export class BattleScene extends Phaser.Scene {
     this.effectsLayer.add([ring, label]);
     this.tweens.add({ targets: ring, scale: event.buffKind === "giant" ? 4.5 : 3, alpha: 0, duration: 520, onComplete: () => ring.destroy() });
     this.tweens.add({ targets: label, y: y - 82, alpha: 0, duration: 700, onComplete: () => label.destroy() });
-    if (event.buffKind === "giant") this.cameras.main.shake(180, 0.003);
+    if (event.buffKind === "giant" && !this.motionPreference.matches) this.cameras.main.shake(180, 0.003);
   }
 
   private playBattleFieldEffectHit(event: Extract<BattleEvent, { type: "battle-field-effect-hit" }>) {
@@ -1137,7 +1173,7 @@ export class BattleScene extends Phaser.Scene {
     reducedMotion: boolean,
   ) {
     const wake = this.add.graphics();
-    wake.lineStyle(event.special ? 8 : 3, style.accent, event.special ? 0.72 : 0.38);
+    wake.lineStyle(event.special ? 4 : 1.5, style.accent, event.special ? 0.4 : 0.18);
     wake.beginPath().moveTo(source.x, source.y).lineTo(target.x, target.y).strokePath();
     wake.setBlendMode(Phaser.BlendModes.ADD);
     this.effectsLayer.add(wake);
@@ -1178,25 +1214,29 @@ export class BattleScene extends Phaser.Scene {
     style: ReturnType<BattleScene["attackStyle"]>,
     reducedMotion: boolean,
   ) {
-    const bannerY = source.y < MAP_TOP + GAME_CONFIG.rows * CELL / 2 ? MAP_TOP + 265 : MAP_TOP + 535;
+    // A single replaceable ticker leaves every board cell and the barracks visible.
+    if (this.ultimateBanner) {
+      this.tweens.killTweensOf(this.ultimateBanner);
+      this.ultimateBanner.destroy();
+    }
+    const bannerY = 174;
     const banner = this.add.container(WIDTH / 2, bannerY).setDepth(98).setAlpha(0).setScale(0.9);
-    const plate = this.add.rectangle(0, 0, 440, 76, 0x2b3431, 0.94).setStrokeStyle(3, style.accent, 1);
-    const edge = this.add.rectangle(0, 0, 418, 56, style.color, 0.2).setStrokeStyle(1, 0xffffff, 0.32);
-    const title = this.add.text(0, -10, `${kind} · ${skillName}`, {
-      fontFamily: '"STKaiti", "KaiTi", serif', fontSize: "31px", color: "#fff3bd", fontStyle: "bold",
-      stroke: "#38231c", strokeThickness: 5,
+    this.ultimateBanner = banner;
+    const plate = this.add.rectangle(0, 0, 596, 42, 0x203d35, 1);
+    const edge = this.add.rectangle(-284, 0, 4, 24, style.accent, 1);
+    const title = this.add.text(0, 0, `绝技  ·  ${kind}  ${skillName}`, {
+      fontFamily: '"STKaiti", "KaiTi", serif', fontSize: "25px", color: "#fff3bd", fontStyle: "bold",
     }).setOrigin(0.5);
-    const subtitle = this.add.text(0, 21, "绝技发动", {
-      fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "11px", color: "#e6c879", fontStyle: "bold",
-      letterSpacing: 5,
-    }).setOrigin(0.5);
-    banner.add([plate, edge, title, subtitle]);
+    banner.add([plate, edge, title]);
     this.effectsLayer.add(banner);
     this.tweens.add({
       targets: banner, alpha: 1, scale: 1, duration: reducedMotion ? 70 : 180, ease: "Back.easeOut",
       onComplete: () => this.tweens.add({
-        targets: banner, alpha: 0, y: bannerY - 12, delay: reducedMotion ? 80 : 420,
-        duration: reducedMotion ? 80 : 240, onComplete: () => banner.destroy(),
+        targets: banner, alpha: 0, delay: reducedMotion ? 200 : 650,
+        duration: reducedMotion ? 80 : 240, onComplete: () => {
+          if (this.ultimateBanner === banner) this.ultimateBanner = null;
+          banner.destroy();
+        },
       }),
     });
 
@@ -1208,26 +1248,40 @@ export class BattleScene extends Phaser.Scene {
       duration: reducedMotion ? 100 : 520, ease: "Cubic.easeOut", onComplete: () => seal.destroy(),
     });
 
-    const burstCount = reducedMotion ? 4 : skillName.includes("箭雨") || skillName === "火箭烈" ? 12 : 8;
+    const shape = ultimateShape(kind, skillName);
+    const artworkKey = shape === "shockwave" ? "fx-art-shockwave" : shape === "crescent" ? "fx-art-crescent"
+      : shape === "thrust" ? "fx-art-thrust" : "fx-art-impact";
+    const artPoint = shape === "shockwave" ? source : target;
+    this.playPaintedEffect(artworkKey, artPoint.x, artPoint.y, shape === "shockwave" ? 228 : 168,
+      Phaser.Math.Angle.Between(source.x, source.y, target.x, target.y), reducedMotion);
+    const burstCount = reducedMotion ? 1 : shape === "volley" ? 7 : shape === "shockwave" ? 3 : 4;
     const angle = Phaser.Math.Angle.Between(source.x, source.y, target.x, target.y);
     for (let index = 0; index < burstCount; index += 1) {
-      const radial = skillName === "大喝";
-      const spread = (index - (burstCount - 1) / 2) * (radial ? 0.24 : 0.1);
-      const length = radial ? 65 + index * 4 : 44 + (index % 3) * 12;
-      const stroke = this.add.rectangle(source.x, source.y, length, index % 2 ? 5 : 8, index % 2 ? style.accent : style.color, 0.85)
-        .setOrigin(0, 0.5).setRotation(angle + spread).setBlendMode(Phaser.BlendModes.ADD);
+      const stroke = this.add.graphics();
+      const color = index % 2 ? style.color : style.accent;
+      if (shape === "shockwave") {
+        stroke.lineStyle(5 - index, color, .85).strokeCircle(0, 0, 25 + index * 17);
+        stroke.setPosition(source.x, source.y);
+      } else if (shape === "crescent") {
+        stroke.lineStyle(9 - index, color, .9).beginPath().arc(0, 0, 28 + index * 7, -1.25, 1.15).strokePath();
+        stroke.setPosition(target.x, target.y).setRotation(angle - .6);
+      } else {
+        const length = shape === "volley" ? 40 : shape === "charge" ? 46 : 82;
+        stroke.lineStyle(index % 2 ? 3 : 5, color, .85).lineBetween(-length, 0, 0, 0);
+        stroke.fillStyle(style.accent, .95).fillTriangle(8, 0, -9, -5, -9, 5);
+        stroke.setPosition(shape === "volley" ? target.x - 55 + index * 13 : source.x,
+          shape === "volley" ? target.y - 100 - (index % 3) * 15 : source.y);
+        stroke.setRotation(shape === "volley" ? 1.04 : angle + (index - 1.5) * .08);
+      }
       this.effectsLayer.add(stroke);
       this.tweens.add({
         targets: stroke,
-        x: target.x + Math.cos(angle + spread) * (index % 3) * 12,
-        y: target.y + Math.sin(angle + spread) * (index % 3) * 12,
-        alpha: 0, delay: reducedMotion ? 0 : index * 24, duration: reducedMotion ? 90 : 250 + index * 12,
-        ease: "Cubic.easeIn", onComplete: () => stroke.destroy(),
+        x: shape === "shockwave" ? source.x : target.x + (shape === "volley" ? (index - 3) * 13 : 0),
+        y: shape === "shockwave" ? source.y : target.y,
+        scale: reducedMotion ? 1 : shape === "shockwave" ? 2.4 : shape === "crescent" ? 1.55 : 1,
+        alpha: 0, delay: reducedMotion ? 0 : index * 55, duration: reducedMotion ? 120 : shape === "shockwave" ? 480 : 360,
+        ease: shape === "volley" ? "Quad.easeIn" : "Cubic.easeOut", onComplete: () => stroke.destroy(),
       });
-    }
-    if (!reducedMotion) {
-      this.cameras.main.flash(130, 255, 226, 145, false);
-      this.cameras.main.shake(150, 0.0032);
     }
   }
 
@@ -1239,6 +1293,7 @@ export class BattleScene extends Phaser.Scene {
     angle: number,
     reducedMotion: boolean,
   ) {
+    this.playPaintedEffect("fx-art-impact", x, y, event.special ? 112 : 60, angle, reducedMotion);
     const ring = this.add.circle(x, y, event.special ? 25 : 15, style.color, 0.18).setStrokeStyle(event.special ? 7 : 4, style.accent, 1);
     this.effectsLayer.add(ring);
     this.tweens.add({
@@ -1274,7 +1329,7 @@ export class BattleScene extends Phaser.Scene {
       }
     }
 
-    const particleCount = reducedMotion ? 3 : event.special ? 12 : Math.min(9, 5 + event.hitCount);
+    const particleCount = reducedMotion ? 0 : this.effectsLayer.length > 64 ? 0 : event.special ? 6 : 3;
     for (let index = 0; index < particleCount; index += 1) {
       const particleAngle = (Math.PI * 2 * index / particleCount) + (event.id.length % 5) * 0.13;
       const distance = (event.special ? 42 : 27) + (index % 3) * 7;
@@ -1298,14 +1353,22 @@ export class BattleScene extends Phaser.Scene {
       targets: damageText, y: y - (event.special ? 70 : 53), alpha: 0,
       duration: reducedMotion ? 180 : event.special ? 720 : 520, ease: "Cubic.easeOut", onComplete: () => damageText.destroy(),
     });
-    if (event.special && !reducedMotion) this.cameras.main.shake(110, 0.0025);
+  }
+
+  private playPaintedEffect(key: string, x: number, y: number, size: number, angle: number, reducedMotion: boolean) {
+    if (!this.textures.exists(key)) return;
+    const art = this.add.image(x, y, key).setDisplaySize(size, size).setRotation(angle)
+      .setAlpha(reducedMotion ? .48 : .85).setBlendMode(Phaser.BlendModes.ADD);
+    this.effectsLayer.add(art);
+    const scale = art.scaleX;
+    this.tweens.add({
+      targets: art, scale: scale * (reducedMotion ? 1 : 1.4), alpha: 0,
+      duration: reducedMotion ? 110 : 400, ease: "Cubic.easeOut", onComplete: () => art.destroy(),
+    });
   }
 
   private attackStyle(kind: string) {
-    if (["弓", "黄忠", "黄祖"].includes(kind)) return { variant: "arrow" as const, color: 0xc97a2b, accent: 0xffe49a, width: 3, duration: 210 };
-    if (["枪", "赵云", "张飞", "张苞"].includes(kind)) return { variant: "spear" as const, color: 0x397f93, accent: 0xcff7ff, width: 4, duration: 170 };
-    if (["骑", "马超", "张翼", "黄盖", "刘备"].includes(kind)) return { variant: "charge" as const, color: 0xc04b35, accent: 0xffc05f, width: 6, duration: 145 };
-    return { variant: "slash" as const, color: 0xb92f32, accent: 0xffe29a, width: 5, duration: 125 };
+    return battleAttackStyle(kind);
   }
 
   private effectCellPoint(cell: number, secondaryCell: number | undefined, mirror: boolean) {
@@ -1345,7 +1408,7 @@ export class BattleScene extends Phaser.Scene {
         add(this.add.rectangle((firstX + secondX) / 2, CAMP_Y + CAMP_CELL / 2, Math.abs(secondX - firstX) + 76, 76, rarityFill, 0.96)
           .setStrokeStyle(5, rarityColor, 1));
         const heroKey = this.pieceDisplayMode === "image" ? HERO_ASSET_KEYS[item.kind] : undefined;
-        if (heroKey) add(this.add.image((firstX + secondX) / 2, CAMP_Y + CAMP_CELL / 2 + 1, heroKey).setDisplaySize(92, 92).setAlpha(0.84));
+        if (heroKey) add(this.add.image((firstX + secondX) / 2, CAMP_Y + CAMP_CELL / 2 + 1, heroKey).setDisplaySize(92, 92));
         add(this.add.text((firstX + secondX) / 2, CAMP_Y + 13, rarity === "gold" ? "金" : "紫", {
           fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "15px", color: rarity === "gold" ? "#ffe49a" : "#efd9ff",
           fontStyle: "bold", stroke: "#372820", strokeThickness: 3,
@@ -1416,11 +1479,11 @@ export class BattleScene extends Phaser.Scene {
       const rarity = general.rarity;
       const rarityColor = rarity === "gold" ? 0xf2c75c : 0xb584ec;
       const rarityFill = rarity === "gold" ? 0x754b2d : 0x53396f;
-      this.stateLayer.add(this.add.rectangle(centerX, centerY, horizontal ? 156 : 76, horizontal ? 76 : 156, mirror ? 0x48666b : rarityFill, 0.96)
-        .setStrokeStyle(5, rarityColor, 1));
+      this.stateLayer.add(this.add.rectangle(centerX, centerY, horizontal ? 156 : 76, horizontal ? 76 : 156, mirror ? 0x48666b : rarityFill, this.pieceDisplayMode === "image" ? .32 : .96)
+        .setStrokeStyle(this.pieceDisplayMode === "image" ? 2 : 5, rarityColor, .9));
       const heroKey = this.pieceDisplayMode === "image" ? HERO_ASSET_KEYS[unit.kind] : undefined;
       if (heroKey) {
-        const portrait = this.add.image(centerX, centerY + 1, heroKey).setDisplaySize(94, 94).setAlpha(0.86);
+        const portrait = this.add.image(centerX, centerY, heroKey).setDisplaySize(98, 98);
         if (mirror) portrait.setTint(0xc9dfdf);
         this.stateLayer.add(portrait);
       }
@@ -1432,7 +1495,7 @@ export class BattleScene extends Phaser.Scene {
     ([0, 1] as const).forEach((partIndex) => {
       if (splitting && this.draggingPartIndex === partIndex) return;
       const point = points[partIndex];
-      const token = this.createToken(point.x, point.y, parts[partIndex], unit.level, mirror, true, general.rarity);
+      const token = this.createToken(point.x, point.y, parts[partIndex], unit.level, mirror, !splitting, general.rarity);
       const selection = { unitId: unit.id, ownerSlot: mirror ? (this.slot === 0 ? 1 : 0) : this.slot } satisfies BattleInspectSelection;
       if (draggable) this.enableDrag(token, "generalPart", unit.id, parts[partIndex], unit.level, partIndex, unit.kind, selection);
       else this.enableInspect(token, unit.kind, unit.level, selection);
@@ -1441,9 +1504,9 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private createToken(x: number, y: number, kind: string, level: number, opponent: boolean, generalPart = false, rarity?: HeroRarity, goldShovel = false) {
-    const seed = [...kind].reduce((sum, character) => sum + character.charCodeAt(0), 0);
-    const bob = this.snapshot && !this.isDragging ? Math.sin((this.snapshot.tick + seed) * 0.2) * 1.6 : 0;
-    const container = this.add.container(x, y + bob).setRotation(this.snapshot && !this.isDragging ? Math.sin((this.snapshot.tick + seed) * 0.13) * 0.018 : 0);
+    // Static units stay planted. Snapshot-driven bobbing looked like combat jitter.
+    const container = this.add.container(x, y);
+    const portraitPart = generalPart && this.pieceDisplayMode === "image";
     const isHero = Boolean(GENERALS[kind]) || generalPart;
     const isSoldier = Boolean(SOLDIERS[kind as keyof typeof SOLDIERS]);
     const artKey = this.pieceDisplayMode === "image"
@@ -1451,7 +1514,7 @@ export class BattleScene extends Phaser.Scene {
       : undefined;
     const rarityColor = rarity === "gold" ? 0xf3c45f : rarity === "purple" ? 0xb98aef : this.levelColor(level);
     const heroFill = rarity === "gold" ? 0x7c4530 : rarity === "purple" ? 0x593c72 : 0xa8513f;
-    if (level >= 2 && kind !== "铲子") {
+    if (level >= 2 && kind !== "铲子" && !portraitPart) {
       const outer = this.add.circle(0, 0, isHero ? 38 : 37, rarityColor, level >= 4 ? 0.13 : 0.06).setStrokeStyle(level >= 4 ? 5 : 3, rarityColor, 0.96);
       container.add(outer);
       if (level >= 3) for (let index = 0; index < 4; index += 1) {
@@ -1463,17 +1526,22 @@ export class BattleScene extends Phaser.Scene {
       goldShovel && kind === "铲子" ? 0x9b6a22 : opponent ? 0x4d6b6b : isHero ? heroFill : isSoldier ? 0x52765b : 0x78634d, 1)
       .setStrokeStyle(isHero ? 4.5 : goldShovel && kind === "铲子" ? 5 : 3.5,
         isHero ? rarityColor : goldShovel && kind === "铲子" ? 0xffdc69 : 0xf7edcd, 1);
+    if (portraitPart) disc.setAlpha(0);
+    else if (artKey) {
+      disc.setScale(1, .38).setPosition(0, 26).setAlpha(.62);
+      container.add(this.add.ellipse(0, 27, 60, 18, 0x162c26, .3));
+    }
     container.add(disc);
     if (goldShovel && kind === "铲子") container.add(this.add.circle(0, 0, 28, 0xffd65a, 0.18));
     if (artKey) {
-      const art = this.add.image(0, 2, artKey).setDisplaySize(isHero ? 70 : 66, isHero ? 70 : 66).setAlpha(0.96);
+      const art = this.add.image(0, -2, artKey).setDisplaySize(78, 78);
       if (goldShovel && kind === "铲子") art.setTint(0xffd36a);
       container.add(art);
     }
-    const compactLabel = Boolean(artKey);
-    if (compactLabel) container.add(this.add.circle(-24, -23, 17, opponent ? 0x38575a : 0x344c41, 0.98).setStrokeStyle(2.5, rarityColor, 0.95));
-    const fontSize = compactLabel ? 24 : kind.length > 1 ? 29 : generalPart ? 45 : 43;
-    const label = this.add.text(compactLabel ? -24 : 0, compactLabel ? -24 : -2, kind === "铲子" ? "铲" : kind, {
+    const compactLabel = Boolean(artKey) || portraitPart;
+    if (compactLabel) container.add(this.add.circle(-27, -26, 12, opponent ? 0x38575a : 0x344c41, .94).setStrokeStyle(1.5, rarityColor, .95));
+    const fontSize = compactLabel ? 18 : kind.length > 1 ? 29 : generalPart ? 45 : 43;
+    const label = this.add.text(compactLabel ? -27 : 0, compactLabel ? -27 : -2, kind === "铲子" ? "铲" : kind, {
       fontFamily: '"STKaiti", "KaiTi", "Microsoft YaHei", serif', fontSize: `${fontSize}px`, color: "#fff8dc", fontStyle: "bold",
       stroke: compactLabel ? "#263b32" : "#2b312d", strokeThickness: compactLabel ? 3 : 2,
     }).setOrigin(0.5);
@@ -1536,9 +1604,7 @@ export class BattleScene extends Phaser.Scene {
 
   private createEnemyVisual(enemy: EnemyState, ownerSlot: PlayerSlot, mirror: boolean, x: number, y: number) {
     const seed = [...enemy.id].reduce((total, character) => total + character.charCodeAt(0), 0);
-    const regularKeys = [IMAGE_ASSETS.enemies.rebel.key, IMAGE_ASSETS.enemies.brute.key, IMAGE_ASSETS.enemies.scout.key, IMAGE_ASSETS.enemies.captain.key];
-    const bossKeys = [IMAGE_ASSETS.enemies.bossHorned.key, IMAGE_ASSETS.enemies.bossBanner.key];
-    const imageKey = enemy.boss ? bossKeys[seed % bossKeys.length]! : regularKeys[seed % regularKeys.length]!;
+    const imageKey = enemyImageAsset(enemy).key;
     const size = enemy.boss ? 74 : 53;
     const radius = enemy.boss ? 31 : 23;
     const healthBarWidth = enemy.boss ? 54 : 38;
@@ -1563,6 +1629,7 @@ export class BattleScene extends Phaser.Scene {
           color: "#fff0c6", fontStyle: "bold", stroke: "#3b2522", strokeThickness: enemy.boss ? 5 : 3,
         }).setOrigin(0.5).setScale(scaleMultiplier);
     if (mirror) body.setTint(0xd4e5e3);
+    if (imageBody) frame.setScale(1, .35).setPosition(0, radius * .7).setAlpha(.35);
     figure.add([shadow, frame, body]);
     const barBack = this.add.rectangle(0, -radius - 9, healthBarWidth, 6, 0x482c28, 1);
     const ratio = Math.max(0, enemy.hp / enemy.maxHp);

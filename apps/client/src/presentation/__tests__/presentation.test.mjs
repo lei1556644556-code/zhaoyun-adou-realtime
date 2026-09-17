@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { test } from "vitest";
+import production from "../assets/production.json";
+import productionKeys from "../assets/production-keys.json";
+import { allImageAssets, enemyImageAsset, imageAssetPath } from "../../game/assets";
 import {
   ASSET_MANIFEST,
   ASSET_TOTAL_RASTER_BYTES,
@@ -17,13 +20,32 @@ const here = dirname(fileURLToPath(import.meta.url));
 const publicRoot = resolve(here, "../../../public");
 const context = { surface: "mobile", motion: "full", audioEnabled: true };
 
+test("production export is complete and runtime assets agree with inspection assets", () => {
+  assert.equal(Object.keys(production).length, 39);
+  assert.deepEqual([...productionKeys].sort(), Object.keys(production).sort());
+  const runtime = new Map(allImageAssets().map((asset) => [asset.key, asset.path]));
+  for (const [key, source] of Object.entries(production)) {
+    assert.equal(source.path, `assets/v2/${key}.webp`);
+    assert.equal(source.width, key.startsWith("buff-") || key.startsWith("fx-") ? 192 : 256);
+    assert.equal(source.height, source.width);
+    assert.equal(source.alpha, !key.startsWith("tile-"));
+    assert.ok(source.bytes > 0);
+    if (!key.startsWith("buff-")) assert.equal(runtime.get(key), source.path);
+  }
+  for (const boss of [true, false]) {
+    const asset = enemyImageAsset({ id: "consistent-inspector", boss });
+    assert.equal(runtime.get(asset.key), imageAssetPath(asset));
+  }
+});
+
 test("manifest has unique stable keys and all declared raster files exist", () => {
   const assets = Object.values(ASSET_MANIFEST.assets);
   assert.equal(new Set(assets.map((asset) => asset.key)).size, assets.length);
   const rasters = assets.filter((asset) => asset.source.kind === "raster");
-  assert.equal(rasters.length, 36);
+  assert.equal(rasters.length, 46);
   for (const asset of rasters) assert.ok(existsSync(resolve(publicRoot, asset.source.path)), asset.source.path);
-  assert.equal(ASSET_TOTAL_RASTER_BYTES, 1_843_376);
+  for (const asset of rasters) assert.equal(statSync(resolve(publicRoot, asset.source.path)).size, asset.source.bytes, asset.key);
+  assert.ok(ASSET_TOTAL_RASTER_BYTES < 1_843_376, "terrain polish must not increase the art download budget");
 });
 
 test("text mode skips portrait assets and remains a first-class fallback", () => {

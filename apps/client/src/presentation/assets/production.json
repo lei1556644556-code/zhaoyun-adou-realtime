@@ -1,0 +1,275 @@
+{
+  "hero-zhao-yun": {
+    "path": "assets/v2/hero-zhao-yun.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 22386,
+    "alpha": true
+  },
+  "hero-zhang-fei": {
+    "path": "assets/v2/hero-zhang-fei.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 24418,
+    "alpha": true
+  },
+  "hero-guan-yu": {
+    "path": "assets/v2/hero-guan-yu.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 24584,
+    "alpha": true
+  },
+  "hero-ma-chao": {
+    "path": "assets/v2/hero-ma-chao.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 26996,
+    "alpha": true
+  },
+  "hero-huang-zhong": {
+    "path": "assets/v2/hero-huang-zhong.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 27232,
+    "alpha": true
+  },
+  "hero-guan-ping": {
+    "path": "assets/v2/hero-guan-ping.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 22322,
+    "alpha": true
+  },
+  "hero-guan-xing": {
+    "path": "assets/v2/hero-guan-xing.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 23000,
+    "alpha": true
+  },
+  "hero-zhang-bao": {
+    "path": "assets/v2/hero-zhang-bao.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 18516,
+    "alpha": true
+  },
+  "hero-zhang-yi": {
+    "path": "assets/v2/hero-zhang-yi.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 22222,
+    "alpha": true
+  },
+  "hero-huang-gai": {
+    "path": "assets/v2/hero-huang-gai.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 23940,
+    "alpha": true
+  },
+  "hero-liu-bei": {
+    "path": "assets/v2/hero-liu-bei.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 22282,
+    "alpha": true
+  },
+  "hero-huang-zu": {
+    "path": "assets/v2/hero-huang-zu.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 24254,
+    "alpha": true
+  },
+  "ui-adou": {
+    "path": "assets/v2/ui-adou.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 23576,
+    "alpha": true
+  },
+  "troop-blade": {
+    "path": "assets/v2/troop-blade.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 16950,
+    "alpha": true
+  },
+  "troop-bow": {
+    "path": "assets/v2/troop-bow.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 18854,
+    "alpha": true
+  },
+  "troop-spear": {
+    "path": "assets/v2/troop-spear.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 15000,
+    "alpha": true
+  },
+  "troop-cavalry": {
+    "path": "assets/v2/troop-cavalry.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 19878,
+    "alpha": true
+  },
+  "enemy-rebel": {
+    "path": "assets/v2/enemy-rebel.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 20412,
+    "alpha": true
+  },
+  "enemy-brute": {
+    "path": "assets/v2/enemy-brute.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 20008,
+    "alpha": true
+  },
+  "enemy-scout": {
+    "path": "assets/v2/enemy-scout.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 19692,
+    "alpha": true
+  },
+  "enemy-captain": {
+    "path": "assets/v2/enemy-captain.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 20074,
+    "alpha": true
+  },
+  "ui-fort": {
+    "path": "assets/v2/ui-fort.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 19042,
+    "alpha": true
+  },
+  "ui-camp": {
+    "path": "assets/v2/ui-camp.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 20080,
+    "alpha": true
+  },
+  "enemy-boss-horned": {
+    "path": "assets/v2/enemy-boss-horned.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 23646,
+    "alpha": true
+  },
+  "enemy-boss-banner": {
+    "path": "assets/v2/enemy-boss-banner.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 26940,
+    "alpha": true
+  },
+  "tile-grass": {
+    "path": "assets/v2/tile-grass.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 20720,
+    "alpha": false
+  },
+  "tile-road": {
+    "path": "assets/v2/tile-road.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 14676,
+    "alpha": false
+  },
+  "tile-deployment": {
+    "path": "assets/v2/tile-deployment.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 4324,
+    "alpha": false
+  },
+  "tile-paper": {
+    "path": "assets/v2/tile-paper.webp",
+    "width": 256,
+    "height": 256,
+    "bytes": 3992,
+    "alpha": false
+  },
+  "buff-invulnerable": {
+    "path": "assets/v2/buff-invulnerable.webp",
+    "width": 192,
+    "height": 192,
+    "bytes": 17678,
+    "alpha": true
+  },
+  "buff-haste": {
+    "path": "assets/v2/buff-haste.webp",
+    "width": 192,
+    "height": 192,
+    "bytes": 19216,
+    "alpha": true
+  },
+  "buff-giant": {
+    "path": "assets/v2/buff-giant.webp",
+    "width": 192,
+    "height": 192,
+    "bytes": 17924,
+    "alpha": true
+  },
+  "buff-rally": {
+    "path": "assets/v2/buff-rally.webp",
+    "width": 192,
+    "height": 192,
+    "bytes": 19196,
+    "alpha": true
+  },
+  "buff-smoke": {
+    "path": "assets/v2/buff-smoke.webp",
+    "width": 192,
+    "height": 192,
+    "bytes": 13990,
+    "alpha": true
+  },
+  "buff-decoy": {
+    "path": "assets/v2/buff-decoy.webp",
+    "width": 192,
+    "height": 192,
+    "bytes": 15860,
+    "alpha": true
+  },
+  "fx-art-thrust": {
+    "path": "assets/v2/fx-art-thrust.webp",
+    "width": 192,
+    "height": 192,
+    "bytes": 8566,
+    "alpha": true
+  },
+  "fx-art-crescent": {
+    "path": "assets/v2/fx-art-crescent.webp",
+    "width": 192,
+    "height": 192,
+    "bytes": 14364,
+    "alpha": true
+  },
+  "fx-art-shockwave": {
+    "path": "assets/v2/fx-art-shockwave.webp",
+    "width": 192,
+    "height": 192,
+    "bytes": 18572,
+    "alpha": true
+  },
+  "fx-art-impact": {
+    "path": "assets/v2/fx-art-impact.webp",
+    "width": 192,
+    "height": 192,
+    "bytes": 14958,
+    "alpha": true
+  }
+}

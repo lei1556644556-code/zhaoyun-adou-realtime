@@ -1,4 +1,11 @@
+import productionKeys from "../presentation/assets/production-keys.json";
 export type ImageAsset = { readonly key: string; readonly path: string };
+export function productionAssetPath(key: string) {
+  return productionKeys.includes(key) ? `assets/v2/${key}.webp` : null;
+}
+export function imageAssetPath(asset: ImageAsset) {
+  return productionAssetPath(asset.key) ?? asset.path;
+}
 
 /** Stable gameplay-key -> renderer-asset mapping.
  * Gameplay data never depends on generated filenames or whether an image loaded.
@@ -50,6 +57,13 @@ export const IMAGE_ASSETS = {
   },
 } as const;
 
+export function enemyImageAsset(enemy: { id: string; boss: boolean }) {
+  const seed = [...enemy.id].reduce((sum, character) => sum + character.charCodeAt(0), 0);
+  const assets = enemy.boss ? [IMAGE_ASSETS.enemies.bossHorned, IMAGE_ASSETS.enemies.bossBanner]
+    : [IMAGE_ASSETS.enemies.rebel, IMAGE_ASSETS.enemies.brute, IMAGE_ASSETS.enemies.scout, IMAGE_ASSETS.enemies.captain];
+  return assets[seed % assets.length]!;
+}
+
 export const HERO_ASSET_KEYS: Readonly<Record<string, string>> = Object.fromEntries(
   Object.entries(IMAGE_ASSETS.heroes).map(([name, asset]) => [name, asset.key]),
 );
@@ -70,5 +84,8 @@ function collectAssets(value: unknown, output: ImageAsset[]) {
 export function allImageAssets() {
   const output: ImageAsset[] = [];
   collectAssets(IMAGE_ASSETS, output);
-  return output;
+  return [
+    ...output.map((asset) => ({ ...asset, path: imageAssetPath(asset) })),
+    ...productionKeys.filter((key) => key.startsWith("fx-art-")).map((key) => ({ key, path: productionAssetPath(key)! })),
+  ];
 }

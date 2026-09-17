@@ -6,7 +6,7 @@ import {
   bulldozerSupplyAvailable, shovelSupplyCount,
   type ActivePropId, type BattleBuffKind, type GameCommand, type MatchSnapshot, type PlayerSlot, type PropLoadout,
 } from "@adou/shared";
-import { IMAGE_ASSETS } from "./game/assets";
+import { IMAGE_ASSETS, enemyImageAsset, imageAssetPath, productionAssetPath } from "./game/assets";
 import { createGame } from "./game/BattleScene";
 import {
   BATTLE_INPUT, commandForActivePropDrop, commandForBattleBuffDrop, commandForBattleCampDrop, commandForBattleDrop,
@@ -141,8 +141,9 @@ app.innerHTML = `
           </dl>
           <div class="event-box"><span>当前事件</span><strong id="last-event">等待开局</strong></div>
           <div class="opponent-box"><span>对手</span><strong id="opponent-name">演武军士</strong><small id="opponent-status">等待布阵</small></div>
-          <div class="howto">
-            <b>操作方法</b>
+          <div class="terrain-legend" aria-label="地形说明"><span>行军道路</span><span>可布阵</span><span>可铲草地</span></div>
+          <details class="howto">
+            <summary>操作方法</summary>
             <ol>
               <li>点击“征兵”一次获得五枚棋子。</li>
               <li>棋子互拖可合成或换位。</li>
@@ -152,7 +153,7 @@ app.innerHTML = `
               <li>主动道具和局内BUFF拖到高亮目标；BUFF可左右翻页。</li>
               <li>棕路行军，白格布阵，绿地禁行。</li>
             </ol>
-          </div>
+          </details>
         </aside>
       </div>
       <section class="unit-inspector" id="unit-inspector" aria-labelledby="unit-inspector-name" hidden>
@@ -422,7 +423,8 @@ function renderBattleBuffs() {
     button.dataset.battleBuffKind = config.kind;
     button.style.setProperty("--buff-color", config.color);
     button.setAttribute("aria-label", `${config.name}，剩余${matching.length}个。点击查看说明，拖到${config.target === "cell" ? "对方格子" : "对方怪物"}使用。`);
-    button.innerHTML = `<i>${config.glyph}</i><b>${config.name}</b><em>×${matching.length}</em>`;
+    const artwork = productionAssetPath(`buff-${config.kind}`);
+    button.innerHTML = `<i>${artwork ? `<img src="${artwork}" alt="" draggable="false">` : config.glyph}</i><b>${config.name}</b><em>×${matching.length}</em>`;
     return [button];
   });
   bar.replaceChildren(...buttons);
@@ -605,9 +607,9 @@ function finishBattleBuffPointer(event: PointerEvent, cancelled = false) {
 }
 
 function unitArtPath(kind: string) {
-  if (kind in IMAGE_ASSETS.troops) return IMAGE_ASSETS.troops[kind as keyof typeof IMAGE_ASSETS.troops].path;
-  if (kind in IMAGE_ASSETS.heroes) return IMAGE_ASSETS.heroes[kind as keyof typeof IMAGE_ASSETS.heroes].path;
-  if (kind === "铲子") return IMAGE_ASSETS.ui.shovel.path;
+  if (kind in IMAGE_ASSETS.troops) return imageAssetPath(IMAGE_ASSETS.troops[kind as keyof typeof IMAGE_ASSETS.troops]);
+  if (kind in IMAGE_ASSETS.heroes) return imageAssetPath(IMAGE_ASSETS.heroes[kind as keyof typeof IMAGE_ASSETS.heroes]);
+  if (kind === "铲子") return imageAssetPath(IMAGE_ASSETS.ui.shovel);
   return null;
 }
 
@@ -625,9 +627,11 @@ function showBattleBuffInspector(kind: BattleBuffKind) {
   if (!config) return;
   inspectedTarget = null;
   const art = get<HTMLImageElement>("unit-inspector-art");
-  art.hidden = true;
+  const artwork = productionAssetPath(`buff-${kind}`);
+  art.hidden = !artwork;
+  if (artwork) art.src = artwork;
   const glyph = get("unit-inspector-glyph");
-  glyph.hidden = false;
+  glyph.hidden = Boolean(artwork);
   glyph.textContent = config.glyph;
   const rarity = get("unit-inspector-rarity");
   rarity.textContent = "本局掉落BUFF";
@@ -652,7 +656,7 @@ function showEnemyInspector(payload: { ownerSlot: PlayerSlot; enemyId: string })
   const config = enemy.bossType === undefined ? undefined : BOSS_CONFIGS[enemy.bossType];
   const art = get<HTMLImageElement>("unit-inspector-art");
   art.hidden = false;
-  art.src = enemy.boss ? IMAGE_ASSETS.enemies.bossHorned.path : IMAGE_ASSETS.enemies.rebel.path;
+  art.src = imageAssetPath(enemyImageAsset(enemy));
   get("unit-inspector-glyph").hidden = true;
   const rarity = get("unit-inspector-rarity");
   rarity.textContent = enemy.boss ? "关卡 BOSS" : "行军怪物";
