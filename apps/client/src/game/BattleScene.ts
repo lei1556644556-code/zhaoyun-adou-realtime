@@ -7,6 +7,7 @@ import {
 import { allImageAssets, enemyImageAsset, HERO_ASSET_KEYS, IMAGE_ASSETS, TROOP_ASSET_KEYS } from "./assets";
 import { battleAttackStyle, EffectEventWindow } from "../presentation/battleArt";
 import { CombatVfx, COMBAT_FX_KEYS } from "../presentation/combatVfx";
+import { ATTACK_STRIPS, preloadAttackMotion, createAttackMotion, playAttackMotion, playTokenAttack, addGlyphLimbs } from "../presentation/attackMotion";
 import { uiAssetPath } from "../presentation/uiArt";
 import {
   BATTLE_INPUT, BATTLE_LAYOUT, activePropDropTargetAt, battleBuffDropTargetAt, battleDropTargetAt, createPointerGesture, isTapGesture, updatePointerGesture,
@@ -88,18 +89,22 @@ export class BattleScene extends Phaser.Scene {
   private hudBunsText: Phaser.GameObjects.Text | null = null;
   private ultimateBanner: Phaser.GameObjects.Container | null = null;
   private combatVfx!: CombatVfx;
+  private attackBodies = new Map<string, Phaser.GameObjects.Sprite>();
+  private attackTokens = new Map<string, Phaser.GameObjects.Container[]>();
   private readonly motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
   private pieceDisplayMode: PieceDisplayMode = localStorage.getItem(PIECE_DISPLAY_MODE_KEY) === "text" ? "text" : "image";
 
   constructor() { super("battle"); }
 
   preload() {
+    preloadAttackMotion(this);
     for (const asset of allImageAssets()) this.load.image(asset.key, asset.path);
     for (const key of ["panel-dark", "panel-light", "recruit-red"]) this.load.image(`ui-${key}`, uiAssetPath(key));
     for (const key of COMBAT_FX_KEYS) this.load.image(key, uiAssetPath(key));
   }
 
   create() {
+    createAttackMotion(this);
     this.game.canvas.classList.remove("is-battle-ready");
     this.cameras.main.setBackgroundColor("#edf0df");
     this.drawBackdrop();
@@ -158,6 +163,7 @@ export class BattleScene extends Phaser.Scene {
       this.ultimateBanner = null;
       this.combatVfx.destroy();
       this.playedEffectIds.clear();
+      this.attackBodies.clear(); this.attackTokens.clear();
     });
   }
 
@@ -608,6 +614,8 @@ export class BattleScene extends Phaser.Scene {
     const opponent = this.snapshot.players[this.slot === 0 ? 1 : 0];
     const signature = this.staticStateSignature(mine, opponent);
     if (force || !this.staticRenderSignature || signature !== this.staticRenderSignature) {
+      this.attackBodies.clear();
+      this.attackTokens.clear();
       this.stateLayer.removeAll(true);
       this.drawMap();
       this.drawSelectedRange();
@@ -1068,7 +1076,21 @@ export class BattleScene extends Phaser.Scene {
       x: ((mirror ? GAME_CONFIG.columns - 1 - targetPath.x : targetPath.x) + 0.5) * CELL,
       y: MAP_TOP + ((mirror ? GAME_CONFIG.rows - 1 - targetPath.y : targetPath.y) + 0.5) * CELL,
     };
-    this.combatVfx.attack(event, source, target, this.motionPreference.matches);
+    const body = this.attackBodies.get(`${event.slot}:${event.unitId}`);
+    if (body) playAttackMotion(body, event.unitKind,
+      Math.abs(target.x-source.x)>16 ? target.x<source.x : body.flipX, this.motionPreference.matches);
+    if (event.skillName !== "七进七出") for (const figure of this.attackTokens.get(`${event.slot}:${event.unitId}`) ?? []) {
+      playTokenAttack(this, figure, event.unitKind, Math.atan2(target.y-source.y,target.x-source.x), this.motionPreference.matches);
+    }
+    this.combatVfx.attack(event, source, target, this.motionPreference.matches, () => {
+      const hitBody = this.enemyVisuals.get(`${event.slot}:${event.targetId}`)?.body;
+      if (!hitBody?.active || event.damage <= 0) return;
+      if (this.motionPreference.matches) hitBody.setTint(0xffdfb0);
+      else hitBody.setTintFill(0xfff4d4);
+      this.tweens.killTweensOf(hitBody);
+      this.tweens.add({ targets: hitBody, alpha: 1, duration: 65,
+        onComplete: () => { if (hitBody.active) hitBody.clearTint(); } });
+    });
   }
 
   private playBattleBuffEvent(event: Extract<BattleEvent, { type: "battle-buff-dropped" | "battle-buff-used" }>) {
@@ -1261,6 +1283,10 @@ export class BattleScene extends Phaser.Scene {
       const y = mirror ? GAME_CONFIG.rows - 1 - point.y : point.y;
       const x = mirror ? GAME_CONFIG.columns - 1 - point.x : point.x;
       const token = this.createToken((x + 0.5) * CELL, MAP_TOP + (y + 0.5) * CELL, unit.kind, unit.level, mirror, false, undefined, hasGoldShovels);
+      const body = token.getData("attackBody") as Phaser.GameObjects.Sprite | undefined;
+      if (body) this.attackBodies.set(`${player.slot}:${unit.id}`, body);
+      const figure = token.getData("attackFigure") as Phaser.GameObjects.Container | undefined;
+      if (figure) this.attackTokens.set(`${player.slot}:${unit.id}`, [figure]);
       const selection = { unitId: unit.id, ownerSlot: player.slot } satisfies BattleInspectSelection;
       if (draggable) this.enableDrag(token, "unit", unit.id, unit.kind, unit.level, undefined, unit.kind, selection);
       else this.enableInspect(token, unit.kind, unit.level, selection);
@@ -1306,6 +1332,11 @@ export class BattleScene extends Phaser.Scene {
       const point = points[partIndex];
       const token = this.createToken(point.x, point.y, parts[partIndex], unit.level, mirror, !splitting, general.rarity);
       const selection = { unitId: unit.id, ownerSlot: mirror ? (this.slot === 0 ? 1 : 0) : this.slot } satisfies BattleInspectSelection;
+      const figure = token.getData("attackFigure") as Phaser.GameObjects.Container | undefined;
+      if (figure) {
+        const key=`${selection.ownerSlot}:${unit.id}`;
+        this.attackTokens.set(key,[...(this.attackTokens.get(key)??[]),figure]);
+      }
       if (draggable) this.enableDrag(token, "generalPart", unit.id, parts[partIndex], unit.level, partIndex, unit.kind, selection);
       else this.enableInspect(token, unit.kind, unit.level, selection);
       this.stateLayer.add(token);
@@ -1313,8 +1344,13 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private createToken(x: number, y: number, kind: string, level: number, opponent: boolean, generalPart = false, rarity?: HeroRarity, goldShovel = false) {
-    // Static units stay planted. Snapshot-driven bobbing looked like combat jitter.
+    // Board root, disc and badge stay planted; only the letter performs the attack.
     const container = this.add.container(x, y);
+    const figure = this.pieceDisplayMode === "text" ? this.add.container(0,0) : container;
+    if (figure !== container) {
+      container.setData("attackFigure",figure);
+      figure.once("destroy",()=>this.tweens.killTweensOf(figure));
+    }
     const portraitPart = generalPart && this.pieceDisplayMode === "image";
     const isHero = Boolean(GENERALS[kind]) || generalPart;
     const isSoldier = Boolean(SOLDIERS[kind as keyof typeof SOLDIERS]);
@@ -1343,7 +1379,10 @@ export class BattleScene extends Phaser.Scene {
     container.add(disc);
     if (goldShovel && kind === "铲子") container.add(this.add.circle(0, 0, 28, 0xffd65a, 0.18));
     if (artKey) {
-      const art = this.add.image(0, -2, artKey).setDisplaySize(78, 78);
+      const strip = ATTACK_STRIPS[kind];
+      const art = strip ? this.add.sprite(0, -2, `attack-${strip}`, 0).setDisplaySize(156, 156)
+        : this.add.image(0, -2, artKey).setDisplaySize(78, 78);
+      if (strip) container.setData("attackBody", art);
       if (goldShovel && kind === "铲子") art.setTint(0xffd36a);
       container.add(art);
     }
@@ -1355,7 +1394,9 @@ export class BattleScene extends Phaser.Scene {
       stroke: compactLabel ? "#263b32" : "#2b312d", strokeThickness: compactLabel ? 3 : 2,
     }).setOrigin(0.5);
     if (goldShovel && kind === "铲子") label.setColor("#fff0a3").setStroke("#5d3510", 4);
-    container.add(label);
+    if (figure !== container && (isSoldier || generalPart)) addGlyphLimbs(this,figure);
+    figure.add(label);
+    if (figure !== container) container.add(figure);
     if (kind !== "铲子" && (isHero || isSoldier)) {
       const badge = this.add.circle(26, 25, 15, level >= 4 ? rarityColor : 0xb24738, 1).setStrokeStyle(2.5, 0xffefbc, 1);
       const levelText = this.add.text(26, 25, String(level), { fontFamily: '"Arial", sans-serif', fontSize: "18px", color: level >= 4 ? "#39291f" : "#ffffff", fontStyle: "bold" }).setOrigin(0.5);

@@ -1,0 +1,30 @@
+{
+  "blade": {
+    "path": "assets/motion/blade.webp",
+    "width": 2048,
+    "height": 512,
+    "frames": 4,
+    "bytes": 70352
+  },
+  "bow": {
+    "path": "assets/motion/bow.webp",
+    "width": 2048,
+    "height": 512,
+    "frames": 4,
+    "bytes": 79462
+  },
+  "spear": {
+    "path": "assets/motion/spear.webp",
+    "width": 2048,
+    "height": 512,
+    "frames": 4,
+    "bytes": 58276
+  },
+  "cavalry": {
+    "path": "assets/motion/cavalry.webp",
+    "width": 2048,
+    "height": 512,
+    "frames": 4,
+    "bytes": 83324
+  }
+}

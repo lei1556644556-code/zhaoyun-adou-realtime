@@ -2,6 +2,7 @@ import Phaser from "phaser";
 import { GAME_CONFIG, type CombatEffectEvent, type MatchSnapshot, type PlayerSlot } from "@adou/shared";
 import { HERO_ASSET_KEYS, TROOP_ASSET_KEYS } from "../game/assets";
 import { battleAttackStyle, ultimateShape } from "./battleArt";
+import { ATTACK_CONTACT_MS } from "./attackMotion";
 
 type Point = { x: number; y: number };
 type Style = ReturnType<typeof battleAttackStyle>;
@@ -14,8 +15,9 @@ export class CombatVfx {
   private readonly phantoms = new Map<string, Phaser.GameObjects.Image>();
   constructor(private readonly scene: Phaser.Scene, private readonly layer: Phaser.GameObjects.Container) {}
 
-  private group(point: Point) {
-    if (this.active >= 36) return null;
+  private group(point: Point, essential = false) {
+    // Reserve capacity for strikes; dust and numbers must not silence attacks.
+    if (this.active >= (essential ? 36 : 24)) return null;
     const root = this.scene.add.container(point.x, point.y);
     this.layer.add(root); this.active++; this.groups.add(root);
     root.once("destroy", () => { this.active--; this.groups.delete(root); });
@@ -37,7 +39,7 @@ export class CombatVfx {
     this.scene.tweens.add({ targets: root, alpha: 0, duration, delay, onComplete: () => root.destroy() });
   }
   private sparks(point: Point, style: Style, angle: number, heavy: boolean, reduced: boolean) {
-    const root = this.group(point); if (!root) return;
+    const root = this.group(point, true); if (!root) return;
     const g = this.scene.add.graphics().setRotation(angle);
     const count = reduced ? 2 : heavy ? 8 : 4;
     for (let i = 0; i < count; i++) {
@@ -47,8 +49,8 @@ export class CombatVfx {
     }
     g.fillStyle(0xffffff, .95).fillTriangle(-8, -2, 11, 0, -8, 2);
     root.add(g).setScale(.5);
-    this.scene.tweens.add({ targets: root, scale: reduced ? .85 : 1.4, duration: reduced ? 90 : 210, ease: "Cubic.Out" });
-    this.fade(root, reduced ? 220 : 240);
+    this.scene.tweens.add({ targets: root, scale: reduced ? .85 : 1.25, duration: 75, ease: "Cubic.Out" });
+    this.fade(root, reduced ? 110 : 145);
   }
   private dust(point: Point, scale = 1) {
     const root = this.group(point); if (!root) return;
@@ -74,8 +76,8 @@ export class CombatVfx {
     root.add(this.blade(style, size));
     root.setRotation(angle - .65).setScale(.65).setAlpha(.85);
     this.scene.tweens.add({ targets: root, rotation: angle + .5, scale: reduced ? .8 : 1.12,
-      duration: reduced ? 90 : 230, ease: "Cubic.Out" });
-    this.fade(root, reduced ? 100 : 250);
+      duration: reduced ? 90 : 105, ease: "Cubic.Out" });
+    this.fade(root, reduced ? 100 : 150);
   }
   private arrow(style: Style, fire: boolean) {
     if (fire) return this.paint("fx-fire", 88, 36);
@@ -101,15 +103,16 @@ export class CombatVfx {
     return key ? this.paint(key, size) : this.paint("fx-silver", size, size * .3);
   }
 
-  attack(event: CombatEffectEvent, source: Point, target: Point, reduced: boolean) {
+  attack(event: CombatEffectEvent, source: Point, target: Point, reduced: boolean, onContact?: () => void) {
     const style = battleAttackStyle(event.unitKind);
     const angle = Phaser.Math.Angle.Between(source.x, source.y, target.x, target.y);
     const heavy = event.special;
     const hit = () => {
+      onContact?.();
       this.sparks(target, style, angle, heavy, reduced);
       if (event.skillName === "晕眩") this.stun(target, reduced);
       if (style.variant === "slash") this.slash(target, style, angle, heavy ? 142 : 78, reduced);
-      if (style.variant === "charge" && !reduced) this.dust(target, event.unitKind === "黄盖" ? 1.3 : .8);
+      if (style.variant === "charge" && heavy && !reduced) this.dust(target, .7);
       if (event.skillName === "圣剑") {
         const sword = this.group(target);
         if (sword) { sword.add(this.paint("fx-holy", 72, 145)); sword.setAlpha(.8); this.fade(sword, reduced ? 100 : 300); }
@@ -129,7 +132,7 @@ export class CombatVfx {
     if (reduced) {
       // Reduced motion removes flourish, not essential attack feedback. A
       // short, single linear trace still explains why the target takes damage.
-      const root = this.group(source); if (!root) { hit(); return; }
+      const root = this.group(source, true); if (!root) { hit(); return; }
       root.add(style.variant === "arrow" ? this.arrow(style, event.unitKind === "黄忠")
         : style.variant === "spear" ? this.paint("fx-silver", 100, 48)
         : style.variant === "charge" ? this.chargeTrail(style) : this.blade(style, 70)).setRotation(angle);
@@ -150,24 +153,25 @@ export class CombatVfx {
     }
 
     // The silhouette and timing carry the identity, not just a recoloured ball.
-    const requestedStrikes = event.unitKind === "赵云" ? Math.min(5, Math.max(1, event.hitCount))
-      : event.unitKind === "刘备" || event.unitKind === "关兴" ? 2 : 1;
+    const requestedStrikes = Math.min(5, Math.max(1, event.hitCount));
     const strikes = Math.min(requestedStrikes, 36 - this.active);
+    if (!strikes) { hit(); return; }
     for (let i = 0; i < strikes; i++) {
-      const root = this.group(source); if (!root) break;
+      const root = this.group(source, true); if (!root) break;
       const offset = (i - (strikes - 1) / 2) * 7;
       root.x += Math.cos(angle + Math.PI / 2) * offset;
       root.y += Math.sin(angle + Math.PI / 2) * offset;
       if (style.variant === "arrow") root.add(this.arrow(style, event.unitKind === "黄忠")).setRotation(angle);
       else if (style.variant === "spear") root.add(this.paint("fx-silver", heavy ? 132 : 105, heavy ? 64 : 50).setTint(style.accent)).setRotation(angle);
       else if (style.variant === "slash") root.add(this.blade(style, 82)).setRotation(angle - .6);
-      else { root.add(this.chargeTrail(style)).setRotation(angle); this.dust(source, .7); }
-      const windup = style.variant === "slash" ? 65 : style.variant === "arrow" ? 45 : 25;
-      root.setScale(.65);
-      this.scene.tweens.add({ targets: root, scale: 1, delay: i * 32, duration: windup, onComplete: () => {
+      else root.add(this.chargeTrail(style)).setRotation(angle);
+      // A short contact beat followed by a fast cut/shot, never a slowly growing ball.
+      root.setScale(.9).setAlpha(0);
+      this.scene.tweens.add({ targets: root, alpha: 1, delay: i * 18, duration: ATTACK_CONTACT_MS, onComplete: () => {
         this.scene.tweens.add({ targets: root, x: target.x, y: target.y,
           rotation: style.variant === "slash" ? angle + .55 : root.rotation,
-          duration: style.duration, ease: style.variant === "arrow" ? "Linear" : "Cubic.In",
+          duration: Math.max(65, Math.min(150, Phaser.Math.Distance.Between(source.x, source.y, target.x, target.y) / 2.6)),
+          ease: "Linear",
           onComplete: () => { root.destroy(); if (i === strikes - 1) hit(); },
         });
       } });
@@ -178,11 +182,11 @@ export class CombatVfx {
     const root = this.group({ x: point.x, y: point.y - 18 }); if (!root) return;
     const amount = Math.max(0, Math.round(event.damage * 10) / 10);
     root.add(this.scene.add.text(0, 0, `−${amount}${event.hitCount > 1 ? ` · ${event.hitCount}命中` : ""}`, {
-      fontFamily: '"Microsoft YaHei",sans-serif', fontSize: event.special ? "25px" : "18px",
+      fontFamily: '"Microsoft YaHei",sans-serif', fontSize: event.special ? "22px" : "15px",
       fontStyle: "bold", color: event.special ? "#ffe5a0" : "#fff8e6", stroke: "#2b3139", strokeThickness: 4,
     }).setOrigin(.5));
-    this.scene.tweens.add({ targets: root, y: point.y - (reduced ? 24 : 57), duration: reduced ? 160 : 440, ease: "Cubic.Out" });
-    this.fade(root, reduced ? 160 : 360, reduced ? 0 : 80);
+    this.scene.tweens.add({ targets: root, y: point.y - (reduced ? 24 : 45), duration: reduced ? 160 : 260, ease: "Cubic.Out" });
+    this.fade(root, reduced ? 160 : 220, reduced ? 0 : 40);
   }
 
   cast(kind: string, skill: string, source: Point, target: Point, reduced: boolean) {

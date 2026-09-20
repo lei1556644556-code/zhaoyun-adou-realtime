@@ -97,3 +97,16 @@ it("cancels the old match's in-flight effects before the next match", () => {
   expect(h.roots.every(root=>root.destroyed)).toBe(true);expect(h.texts).toEqual([]);
   h.fx.attack(event("弓"),from,to,true);h.flush();expect(h.texts).toEqual(["−5"]);
 });
+it("contacts once after travel, with no fictional extra Liu Bei/ Guan Xing normal hits", () => {
+  for(const kind of ["刘备","关兴","刀","弓"]) {
+    const h=harness(), contact=vi.fn();h.fx.attack(event(kind),from,to,false,contact);
+    expect(h.roots).toHaveLength(1);expect(contact).not.toHaveBeenCalled();
+    h.flush();expect(contact).toHaveBeenCalledTimes(1);expect(h.texts).toEqual(["−5"]);
+  }
+});
+it("keeps bounded hit feedback available under attack bursts", () => {
+  const h=harness(),contact=vi.fn();
+  for(let i=0;i<80;i++) h.fx.attack(event("弓"),from,to,false,contact);
+  h.flush();expect(contact).toHaveBeenCalledTimes(80);
+  expect(h.roots.every(r=>r.destroyed)).toBe(true);
+});
