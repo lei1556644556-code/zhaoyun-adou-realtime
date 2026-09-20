@@ -22,7 +22,8 @@ it("gives the written character anticipation, strike and exact recovery without 
   tweens[0].onComplete();tweens[1].onComplete();
   expect(tweens[2]).toMatchObject({x:0,y:0,rotation:0,scaleX:1,scaleY:1,duration:110});
   playTokenAttack(scene,figure,"赵云",0,true);
-  expect(tweens).toHaveLength(3);expect(killTweensOf).toHaveBeenCalledTimes(2);
+  expect(tweens).toHaveLength(4);expect(killTweensOf).toHaveBeenCalledTimes(2);
+  expect(tweens[3]).toMatchObject({targets:figure,duration:55});
 });
 it("uses distinct glyph poses for blade, spear, bow and rider and mirrors the attack direction",()=>{
   const poses:any[]=[];
@@ -35,7 +36,7 @@ it("uses distinct glyph poses for blade, spear, bow and rider and mirrors the at
   poses[4].onComplete();expect(poses[5].x).toBe(-9);
   figure.active=false;poses[5].onComplete();expect(poses).toHaveLength(6);
 });
-it("articulates arms and legs independently then hides them, including reduced-motion interruption",()=>{
+it("reduced-motion preference never disables essential body, arm or leg attacks",()=>{
   const limbs=Array.from({length:4},()=>({setAlpha:vi.fn().mockReturnThis(),setRotation:vi.fn().mockReturnThis()}));
   const figure:any={active:true,getData:()=>limbs,setPosition:vi.fn().mockReturnThis(),setRotation:vi.fn().mockReturnThis(),setScale:vi.fn().mockReturnThis()};
   const poses:any[]=[],killTweensOf=vi.fn();
@@ -45,7 +46,9 @@ it("articulates arms and legs independently then hides them, including reduced-m
   poses[4].onComplete();poses[9].onComplete();
   expect(poses.slice(10,14).every(p=>p.alpha===0&&p.rotation===0)).toBe(true);
   playTokenAttack(scene,figure,"枪",0,true);
-  expect(poses).toHaveLength(15);expect(killTweensOf).toHaveBeenCalledTimes(10);
+  expect(poses).toHaveLength(20);expect(killTweensOf).toHaveBeenCalledTimes(10);
+  expect(poses.slice(15,19).map(p=>p.rotation)).toEqual([.75,-.8,-.3,.25]);
+  expect(poses[19]).toMatchObject({targets:figure,duration:55});
   for(const limb of limbs)expect(limb.setAlpha).toHaveBeenLastCalledWith(0);
 });
 it("uses a non-looping anticipation, contact, follow-through and exact idle sequence", () => {
@@ -62,5 +65,6 @@ it("restarts the current pose instead of queueing attacks and does not move the 
   expect(body.play.mock.calls).toEqual([["attack-blade",false],["attack-blade",false]]);
   expect([body.x,body.y]).toEqual([50,70]);
   playAttackMotion(body,"枪",true,true);body.active=false;playAttackMotion(body,"弓",true,false);
-  expect(body.play).toHaveBeenCalledTimes(2);
+  expect(body.play).toHaveBeenCalledTimes(3);
+  expect(body.play).toHaveBeenLastCalledWith("attack-spear",false);
 });

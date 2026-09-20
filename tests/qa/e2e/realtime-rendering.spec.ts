@@ -2,6 +2,10 @@ import { expect, test } from "@playwright/test";
 import { MAP_LAYOUTS, cellIndex } from "@adou/shared";
 import { acceptanceSnapshot, designPoint, mockAuthenticatedAccount, openRestoredBattle, QA_USER_ID } from "./fixtures";
 
+test.beforeEach(async({page})=>{
+  await page.emulateMedia({reducedMotion:process.env.QA_REDUCED_MOTION==="1" ? "reduce" : "no-preference"});
+});
+
 for(const mode of ["image","text"]) test(`${mode} keeps wave 4 combat smooth and accepts a drag while 10Hz snapshots continue`, async ({ page }, testInfo) => {
   await page.addInitScript(mode=>localStorage.setItem("adou-piece-display-mode-v1",mode),mode);
   const snapshot = acceptanceSnapshot();

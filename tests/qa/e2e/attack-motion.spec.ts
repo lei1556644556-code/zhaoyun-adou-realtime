@@ -3,6 +3,9 @@ import { cellIndex } from "@adou/shared";
 import { acceptanceSnapshot, designPoint, mockAuthenticatedAccount, openRestoredBattle, QA_USER_ID } from "./fixtures";
 
 test.use({video:"on"});
+test.beforeEach(async({page})=>{
+  await page.emulateMedia({reducedMotion:process.env.QA_REDUCED_MOTION==="1" ? "reduce" : "no-preference"});
+});
 for(const mode of ["image","text"]) for(const kind of ["刀","枪","弓","骑"]) test(`${mode} ${kind} performs a weapon pose and recovers during repeated attacks`,async({page},info)=>{
   const errors:string[]=[];page.on("pageerror",e=>errors.push(e.message));
   page.on("response",r=>{if(r.url().includes("/assets/")&&r.status()>=400)errors.push(r.url());});

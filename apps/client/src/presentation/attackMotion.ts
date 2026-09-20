@@ -21,11 +21,11 @@ export function createAttackMotion(scene: Phaser.Scene) {
   }
 }
 
-export function playAttackMotion(body: Phaser.GameObjects.Sprite, kind: string, left: boolean, reduced: boolean) {
+// Attack poses are essential feedback. Keep the legacy preference argument compatible.
+export function playAttackMotion(body: Phaser.GameObjects.Sprite, kind: string, left: boolean, _reduced?: boolean) {
   const name = ATTACK_STRIPS[kind];
   if (!name || !body.active) return;
   body.setFlipX(left);
-  if (reduced) return; // Essential weapon/impact trace remains in CombatVfx.
   body.play(`attack-${name}`, false);
 }
 
@@ -51,13 +51,12 @@ export function addGlyphLimbs(scene: Phaser.Scene, figure: Phaser.GameObjects.Co
 
 /** The written character acts; disc, badge, hit area and board position stay fixed. */
 export function playTokenAttack(scene: Phaser.Scene, figure: Phaser.GameObjects.Container,
-  kind: string, angle: number, reduced: boolean) {
+  kind: string, angle: number, _reduced?: boolean) {
   if (!figure.active) return;
   scene.tweens.killTweensOf(figure);
   figure.setPosition(0,0).setRotation(0).setScale(1);
   const limbs=(figure.getData("limbs") ?? []) as Phaser.GameObjects.Graphics[];
   for(const limb of limbs) {scene.tweens.killTweensOf(limb);limb.setAlpha(0).setRotation(0);}
-  if (reduced) return;
   const dx=Math.cos(angle),dy=Math.sin(angle);
   const motion=combatProfileFor(kind).motion;
   const [back,reach,turn,sx,sy]=GLYPH_POSES[motion];
