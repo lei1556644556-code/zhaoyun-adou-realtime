@@ -4,7 +4,8 @@ import path from "node:path";
 const outputDirectory = path.resolve(process.cwd(), process.argv[2] ?? "dist");
 // 2026-09 art pass: distinct ultimates + bounded FX lifecycle + compact asset keys.
 // <0.91% JS headroom; art has its own unchanged 1,843,376-byte manifest ceiling.
-const limits = { ".js": 1_680_000, ".css": 31_000 };
+// Full login/lobby/HUD/dialog theme: see docs/contracts/ui-production-2026-09-20.md.
+const limits = { ".js": 1_680_000, ".css": 48_000 };
 const files = [];
 
 async function walk(directory) {

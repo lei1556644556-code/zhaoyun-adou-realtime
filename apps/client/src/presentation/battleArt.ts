@@ -5,6 +5,7 @@ export function battleAttackStyle(kind: string) {
   const profile = combatProfileFor(kind);
   const variant = { cleave: "slash", loose: "arrow", thrust: "spear", charge: "charge" } as const;
   return {
+    profileId: profile.id,
     variant: variant[profile.motion],
     color: Number.parseInt(profile.primary.slice(1), 16),
     accent: Number.parseInt(profile.accent.slice(1), 16),
@@ -14,6 +15,11 @@ export function battleAttackStyle(kind: string) {
 
 export function ultimateShape(kind: string, skillName: string) {
   if (skillName === "大喝") return "shockwave";
+  if (skillName === "七进七出") return "phantom";
+  if (skillName === "圣剑") return "holy-sword";
+  if (skillName === "跳斩") return "leap";
+  if (skillName === "火箭烈") return "fire-rain";
+  if (skillName === "晕眩") return "stun";
   const variant = battleAttackStyle(kind).variant;
   return variant === "arrow" ? "volley" : variant === "slash" ? "crescent" : variant === "charge" ? "charge" : "thrust";
 }

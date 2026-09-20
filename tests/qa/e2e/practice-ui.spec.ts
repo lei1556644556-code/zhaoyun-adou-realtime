@@ -13,7 +13,7 @@ test("loads a meaningful battle without framework or responsive overflow", async
   });
   await openRestoredBattle(page);
 
-  await expect(page.locator("body")).toContainText("战局状态");
+  await expect(page.locator(".tactics-disclosure > summary")).toContainText("战场军情");
   await expect(page.locator("vite-error-overlay, #webpack-dev-server-client-overlay")).toHaveCount(0);
   const layout = await page.evaluate(() => ({
     viewport: document.documentElement.clientWidth,

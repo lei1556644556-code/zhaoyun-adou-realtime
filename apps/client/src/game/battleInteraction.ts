@@ -20,6 +20,13 @@ export const BATTLE_LAYOUT = {
 
 export type DragSource = "reserve" | "unit" | "generalPart";
 export type Point = Readonly<{ x: number; y: number }>;
+
+/** Prevent adjacent 42px circular targets from overlapping across cell edges. */
+export function boardTokenHitContains(circle: { x: number; y: number; radius: number }, x: number, y: number) {
+  const dx = x - circle.x, dy = y - circle.y, half = GAME_CONFIG.cellSize / 2;
+  return dx >= -half && dx < half && dy >= -half && dy < half
+    && dx * dx + dy * dy <= circle.radius * circle.radius;
+}
 export type BattleInspectSelection = Readonly<{ ownerSlot: PlayerSlot; unitId?: string; reserveId?: string }>;
 export type BattleInspectPayload = BattleInspectSelection & Readonly<{ kind: string; level: number }>;
 

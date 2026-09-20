@@ -22,4 +22,13 @@ describe("battle art, independent from rules", () => {
     expect(ultimateShape("赵云", "绝技")).toBe("thrust");
     expect(ultimateShape("马超", "绝技")).toBe("charge");
   });
+  it("maps actual named skills before the generic weapon fallback", () => {
+    expect(ultimateShape("赵云", "七进七出")).toBe("phantom");
+    expect(ultimateShape("刘备", "圣剑")).toBe("holy-sword");
+    expect(ultimateShape("关羽", "跳斩")).toBe("leap");
+    expect(ultimateShape("张翼", "跳斩")).toBe("leap");
+    expect(ultimateShape("黄忠", "火箭烈")).toBe("fire-rain");
+    expect(ultimateShape("马超", "晕眩")).toBe("stun");
+    expect(ultimateShape("关平", "大喝")).toBe("shockwave");
+  });
 });

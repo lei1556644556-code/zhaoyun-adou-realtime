@@ -5,10 +5,12 @@ import {
   type ActivePropId, type BattleBuffKind, type BattleEvent, type CombatEffectEvent, type EnemyState, type HeroRarity, type MatchSnapshot, type PlayerBattleState, type PlayerSlot,
 } from "@adou/shared";
 import { allImageAssets, enemyImageAsset, HERO_ASSET_KEYS, IMAGE_ASSETS, TROOP_ASSET_KEYS } from "./assets";
-import { battleAttackStyle, EffectEventWindow, ultimateShape } from "../presentation/battleArt";
+import { battleAttackStyle, EffectEventWindow } from "../presentation/battleArt";
+import { CombatVfx, COMBAT_FX_KEYS } from "../presentation/combatVfx";
+import { uiAssetPath } from "../presentation/uiArt";
 import {
   BATTLE_INPUT, BATTLE_LAYOUT, activePropDropTargetAt, battleBuffDropTargetAt, battleDropTargetAt, createPointerGesture, isTapGesture, updatePointerGesture,
-  resolveBattleInspection, worldDragThreshold,
+  resolveBattleInspection, worldDragThreshold, boardTokenHitContains,
   type ActivePropDropPayload, type BattleBuffDropPayload, type BattleInspectSelection, type DragSource, type PointerGesture,
 } from "./battleInteraction";
 
@@ -84,6 +86,7 @@ export class BattleScene extends Phaser.Scene {
   private hudLastEventText: Phaser.GameObjects.Text | null = null;
   private hudBunsText: Phaser.GameObjects.Text | null = null;
   private ultimateBanner: Phaser.GameObjects.Container | null = null;
+  private combatVfx!: CombatVfx;
   private readonly motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
   private pieceDisplayMode: PieceDisplayMode = localStorage.getItem(PIECE_DISPLAY_MODE_KEY) === "text" ? "text" : "image";
 
@@ -91,6 +94,8 @@ export class BattleScene extends Phaser.Scene {
 
   preload() {
     for (const asset of allImageAssets()) this.load.image(asset.key, asset.path);
+    for (const key of ["panel-dark", "panel-light", "recruit-red"]) this.load.image(`ui-${key}`, uiAssetPath(key));
+    for (const key of COMBAT_FX_KEYS) this.load.image(key, uiAssetPath(key));
   }
 
   create() {
@@ -105,6 +110,7 @@ export class BattleScene extends Phaser.Scene {
     this.stateLayer = this.add.container(0, 0).setDepth(7);
     this.propTargetGraphics = this.add.graphics().setDepth(20);
     this.effectsLayer = this.add.container(0, 0).setDepth(80);
+    this.combatVfx = new CombatVfx(this, this.effectsLayer);
     this.dragLayer = this.add.container(0, 0).setDepth(1000);
     this.input.on("pointermove", this.onPointerMove, this);
     this.input.on("pointerup", this.onPointerUp, this);
@@ -149,6 +155,7 @@ export class BattleScene extends Phaser.Scene {
       this.onBattleBuffDragCancel();
       this.clearEnemyVisuals();
       this.ultimateBanner = null;
+      this.combatVfx.destroy();
       this.playedEffectIds.clear();
     });
   }
@@ -542,14 +549,10 @@ export class BattleScene extends Phaser.Scene {
 
   private drawBackdrop() {
     const paper = this.add.graphics();
-    paper.fillStyle(0xf5f0df, 1).fillRect(0, 0, WIDTH, HEIGHT);
+    paper.fillStyle(0x162b39, 1).fillRect(0, 0, WIDTH, HEIGHT);
     paper.fillStyle(0xc6d7c1, 1).fillRect(0, MAP_TOP, WIDTH, 800);
-    paper.fillStyle(0xe8e1cf, 1).fillRect(0, 1000, WIDTH, HEIGHT - 1000);
-    paper.fillStyle(0x264a3d, 0.12);
-    for (let i = 0; i < 34; i += 1) {
-      const x = (i * 97) % WIDTH; const y = (i * 53) % HEIGHT;
-      paper.fillCircle(x, y, 2 + (i % 4));
-    }
+    this.add.nineslice(320, 100, "ui-panel-dark", undefined, WIDTH, 200, 54, 54, 54, 54);
+    this.add.nineslice(320, 1193, "ui-panel-dark", undefined, WIDTH, 386, 48, 48, 48, 48);
   }
 
   private onSnapshot(snapshot: MatchSnapshot, slot: PlayerSlot) {
@@ -561,10 +564,18 @@ export class BattleScene extends Phaser.Scene {
     else this.syncEnemies(previous);
     if (this.battleBuffDrag) this.drawBattleBuffTargets();
     this.playBattleEvents(snapshot.events ?? []);
+    this.combatVfx.syncPhantoms(snapshot, this.slot, this.motionPreference.matches);
     // The canvas exists before preload/create and the first authoritative
     // snapshot finish. Only expose it after interactive pieces have rendered,
     // otherwise a player's first click can land on an inert loading canvas.
-    this.game.canvas.classList.add("is-battle-ready");
+    if (!this.game.canvas.classList.contains("is-battle-ready")) {
+      // Newly interactive objects join Phaser's input list on the next update.
+      // Exposing the canvas earlier intermittently drops the very first click.
+      this.events.once(Phaser.Scenes.Events.POST_UPDATE, () => {
+        this.scale.refresh();
+        this.game.canvas.classList.add("is-battle-ready");
+      });
+    }
     if (previous && previousRoom === snapshot.roomId) this.playSynthesisDiff(previous.players[slot], snapshot.players[slot]);
   }
 
@@ -755,15 +766,14 @@ export class BattleScene extends Phaser.Scene {
   private drawHud(mine: PlayerBattleState, opponent: PlayerBattleState) {
     if (!this.snapshot) return;
     const add = (object: Phaser.GameObjects.GameObject) => { this.stateLayer.add(object); return object; };
-    add(this.add.rectangle(320, 100, 640, 200, 0x203d35, 1));
     const trim = this.add.graphics();
     trim.lineStyle(1, 0xd4b878, 0.55).lineBetween(22, 47, 618, 47).lineBetween(22, 150, 618, 150);
     trim.lineStyle(3, 0xd4b878, 0.85).lineBetween(0, 197, 640, 197);
     add(trim);
-    add(this.add.text(24, 15, `${MAP_LAYOUTS[this.snapshot.mapIndex]?.name ?? "巨鹿"} · 战场`, {
+    add(this.add.text(58, 18, `${MAP_LAYOUTS[this.snapshot.mapIndex]?.name ?? "巨鹿"} · 战场`, {
       fontFamily: '"KaiTi", serif', fontSize: "24px", color: "#efdfb5", fontStyle: "bold",
     }));
-    add(this.add.text(616, 22, "守护阿斗 · 列阵迎敌", {
+    add(this.add.text(582, 22, "守护阿斗 · 列阵迎敌", {
       fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "15px", color: "#afc5b6",
     }).setOrigin(1, 0));
     add(this.add.text(26, 66, "敌方阿斗", { fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "18px", color: "#c0cdbd" }));
@@ -773,7 +783,8 @@ export class BattleScene extends Phaser.Scene {
     add(this.add.rectangle(26, 132, 176, 6, 0x112a24).setOrigin(0, 0.5));
     add(this.add.rectangle(26, 132, 176 * Phaser.Math.Clamp(opponent.hp / Math.max(1, opponent.maxHp), 0, 1), 6, 0xd89572).setOrigin(0, 0.5));
     const seconds = mine.phase === "preparing" ? Math.max(0, Math.ceil(mine.prepareMs / 1000)) : mine.wave;
-    add(this.add.circle(320, 100, 44, 0x2e5144, 1).setStrokeStyle(2, 0xd9b975, 1));
+    add(this.add.circle(320, 100, 44, 0x233f55, 1).setStrokeStyle(3, 0xd9b975, 1));
+    add(this.add.circle(320, 100, 38, 0x162d40, 1).setStrokeStyle(1, 0x957e51, .8));
     add(this.add.text(320, 80, mine.phase === "preparing" ? "备战" : "波次", { fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "15px", color: "#c5d4bc" }).setOrigin(0.5));
     add(this.add.text(320, 111, String(seconds), { fontFamily: '"Arial", sans-serif', fontSize: "35px", color: "#fff3c7", fontStyle: "bold" }).setOrigin(0.5));
     add(this.add.text(612, 69, `第 ${mine.wave} / ${GAME_CONFIG.maxWaves} 波`, { fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "21px", color: "#efdfb5", fontStyle: "bold" }).setOrigin(1, 0));
@@ -786,7 +797,7 @@ export class BattleScene extends Phaser.Scene {
       fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "20px", color: "#fff3ce", fontStyle: "bold",
     }).setOrigin(0.5));
     this.hudLastEventText = add(this.add.text(620, 1014, mine.lastEvent, {
-      fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "15px", color: "#5f655f", align: "right",
+      fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "15px", color: "#bdcbd0", align: "right",
       wordWrap: { width: 370 },
     }).setOrigin(1, 0)) as Phaser.GameObjects.Text;
   }
@@ -1014,14 +1025,7 @@ export class BattleScene extends Phaser.Scene {
     const mirror = event.slot !== this.slot;
     const x = ((mirror ? GAME_CONFIG.columns - event.x : event.x)) * CELL;
     const y = MAP_TOP + ((mirror ? GAME_CONFIG.rows - event.y : event.y)) * CELL;
-    const arrow = this.add.rectangle(x, y - 150, 5, 64, 0x8a4c2d, 1).setStrokeStyle(2, 0xffe7a3, 1).setRotation(0.12);
-    this.effectsLayer.add(arrow);
-    this.tweens.add({ targets: arrow, y, duration: 130, ease: "Cubic.easeIn", onComplete: () => {
-      arrow.destroy();
-      const ring = this.add.circle(x, y, 18, 0xf3ad43, 0.28).setStrokeStyle(5, 0xffe7a3, 1);
-      this.effectsLayer.add(ring);
-      this.tweens.add({ targets: ring, scale: 4, alpha: 0, duration: 360, onComplete: () => ring.destroy() });
-    }});
+    this.combatVfx.rain({ x, y }, this.motionPreference.matches);
   }
 
   private playBossSkill(event: Extract<BattleEvent, { type: "boss-skill" }>) {
@@ -1045,76 +1049,14 @@ export class BattleScene extends Phaser.Scene {
           x: ((mirror ? GAME_CONFIG.columns - 1 - event.sourceX : event.sourceX) + 0.5) * CELL,
           y: MAP_TOP + ((mirror ? GAME_CONFIG.rows - 1 - event.sourceY : event.sourceY) + 0.5) * CELL,
         };
-    const targetPath = pathPoint(this.snapshot.mapIndex, event.targetProgress);
-    const target = {
+    const enemy = this.snapshot.players[event.slot].enemies.find(candidate => candidate.id === event.targetId);
+    const targetPath = enemy ? enemyPathPoint(this.snapshot.mapIndex, enemy) : pathPoint(this.snapshot.mapIndex, event.targetProgress);
+    const visible = this.enemyVisuals.get(`${event.slot}:${event.targetId}`)?.root;
+    const target = visible ? { x: visible.x, y: visible.y } : {
       x: ((mirror ? GAME_CONFIG.columns - 1 - targetPath.x : targetPath.x) + 0.5) * CELL,
       y: MAP_TOP + ((mirror ? GAME_CONFIG.rows - 1 - targetPath.y : targetPath.y) + 0.5) * CELL,
     };
-    const style = this.attackStyle(event.unitKind);
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const angle = Phaser.Math.Angle.Between(source.x, source.y, target.x, target.y);
-    const sourceFlash = this.add.circle(source.x, source.y, event.special ? 22 : 14, style.color, 0.28).setStrokeStyle(4, style.accent, 0.92);
-    this.effectsLayer.add(sourceFlash);
-    this.tweens.add({ targets: sourceFlash, scale: 1.8, alpha: 0, duration: reducedMotion ? 80 : 220, onComplete: () => sourceFlash.destroy() });
-
-    const projectile = this.add.container(source.x, source.y).setRotation(angle);
-    if (style.variant === "arrow") {
-      projectile.add([
-        this.add.rectangle(-2, 0, event.special ? 46 : 34, event.special ? 5 : 3, 0x7b4028, 1),
-        this.add.triangle(18, 0, -7, -7, 9, 0, -7, 7, style.accent, 1),
-        this.add.triangle(-20, 0, -5, -8, 7, 0, -5, 0, 0xe7e3cf, 0.9),
-        this.add.triangle(-20, 0, -5, 8, 7, 0, -5, 0, 0xe7e3cf, 0.9),
-      ]);
-    } else if (style.variant === "spear") {
-      projectile.add([
-        this.add.ellipse(-13, 0, event.special ? 68 : 48, event.special ? 18 : 11, style.color, 0.24),
-        this.add.rectangle(-4, 0, event.special ? 62 : 44, event.special ? 7 : 4, style.accent, 1),
-        this.add.triangle(27, 0, -12, -10, 14, 0, -12, 10, 0xffffff, 1),
-      ]);
-    } else if (style.variant === "charge") {
-      projectile.add([
-        this.add.ellipse(-3, 14, event.special ? 64 : 49, 16, 0x3c2b26, 0.42),
-        this.add.circle(0, 0, event.special ? 28 : 22, style.color, 0.72).setStrokeStyle(4, style.accent, 1),
-        this.add.triangle(6, 0, -18, -17, 22, 0, -18, 17, style.accent, 0.95),
-        this.add.rectangle(-19, -10, event.special ? 22 : 16, 5, 0xffe6b0, 0.9),
-        this.add.rectangle(-19, 10, event.special ? 22 : 16, 5, 0xffe6b0, 0.9),
-      ]);
-    } else {
-      const crescent = this.add.graphics();
-      crescent.lineStyle(event.special ? 14 : 10, style.accent, 1).beginPath().arc(0, 0, event.special ? 28 : 21, -1.2, 1.2).strokePath();
-      projectile.add([this.add.circle(0, 0, event.special ? 24 : 17, style.color, 0.32), crescent]);
-    }
-    this.effectsLayer.add(projectile);
-
-    if (!reducedMotion && style.variant === "charge") {
-      for (let index = 1; index <= 5; index += 1) {
-        const t = index / 6;
-        const dust = this.add.circle(Phaser.Math.Linear(source.x, target.x, t), Phaser.Math.Linear(source.y, target.y, t) + 14, 8 + (index % 2) * 4, 0xc8aa78, 0.42);
-        this.effectsLayer.add(dust);
-        dust.setScale(0.4);
-        this.tweens.add({ targets: dust, scale: 1.8, alpha: 0, delay: index * 24, duration: 260, onComplete: () => dust.destroy() });
-      }
-    }
-    if (!reducedMotion && style.variant === "spear") {
-      const thrustTrails = event.unitKind === "赵云" && event.hitCount >= 5 ? 5 : 3;
-      for (let index = 0; index < thrustTrails; index += 1) {
-        const after = this.add.ellipse(source.x, source.y, 34 - index * 6, 8 - index, style.color, 0.24).setRotation(angle);
-        this.effectsLayer.add(after);
-        this.tweens.add({
-          targets: after, x: target.x, y: target.y, alpha: 0, delay: 20 + index * 28,
-          duration: style.duration + index * 28, onComplete: () => after.destroy(),
-        });
-      }
-    }
-    this.tweens.add({
-      targets: projectile, x: target.x, y: target.y,
-      duration: reducedMotion ? 70 : style.duration, ease: "Quad.easeIn",
-      onComplete: () => {
-        projectile.destroy();
-        this.playAttackWake(source, target, event, style, reducedMotion);
-        this.playImpactEffect(target.x, target.y, event, style, angle, reducedMotion);
-      },
-    });
+    this.combatVfx.attack(event, source, target, this.motionPreference.matches);
   }
 
   private playBattleBuffEvent(event: Extract<BattleEvent, { type: "battle-buff-dropped" | "battle-buff-used" }>) {
@@ -1165,38 +1107,15 @@ export class BattleScene extends Phaser.Scene {
     }});
   }
 
-  private playAttackWake(
-    source: { x: number; y: number },
-    target: { x: number; y: number },
-    event: CombatEffectEvent,
-    style: ReturnType<BattleScene["attackStyle"]>,
-    reducedMotion: boolean,
-  ) {
-    const wake = this.add.graphics();
-    wake.lineStyle(event.special ? 4 : 1.5, style.accent, event.special ? 0.4 : 0.18);
-    wake.beginPath().moveTo(source.x, source.y).lineTo(target.x, target.y).strokePath();
-    wake.setBlendMode(Phaser.BlendModes.ADD);
-    this.effectsLayer.add(wake);
-    this.tweens.add({
-      targets: wake, alpha: 0, duration: reducedMotion ? 70 : event.special ? 300 : 150,
-      onComplete: () => wake.destroy(),
-    });
-    const hitFlash = this.add.circle(target.x, target.y, event.special ? 32 : 19, 0xffffff, event.special ? 0.48 : 0.25)
-      .setBlendMode(Phaser.BlendModes.ADD);
-    this.effectsLayer.add(hitFlash);
-    this.tweens.add({
-      targets: hitFlash, scale: event.special ? 2.2 : 1.55, alpha: 0,
-      duration: reducedMotion ? 80 : event.special ? 300 : 180, onComplete: () => hitFlash.destroy(),
-    });
-  }
 
   private playGeneralSkillEvent(event: Extract<BattleEvent, { type: "general-skill" }>) {
     if (!this.snapshot) return;
     const mirror = event.slot !== this.slot;
     const source = this.effectCellPoint(event.sourceCell, event.secondaryCell, mirror);
     const enemy = this.snapshot.players[event.slot].enemies.find((candidate) => candidate.id === event.targetId);
-    const path = enemy ? pathPoint(this.snapshot.mapIndex, enemy.progress) : null;
-    const target = path ? {
+    const path = enemy ? enemyPathPoint(this.snapshot.mapIndex, enemy) : null;
+    const visible = this.enemyVisuals.get(`${event.slot}:${event.targetId}`)?.root;
+    const target = visible ? { x: visible.x, y: visible.y } : path ? {
       x: ((mirror ? GAME_CONFIG.columns - 1 - path.x : path.x) + 0.5) * CELL,
       y: MAP_TOP + ((mirror ? GAME_CONFIG.rows - 1 - path.y : path.y) + 0.5) * CELL,
     } : { x: WIDTH / 2, y: MAP_TOP + 400 };
@@ -1240,132 +1159,9 @@ export class BattleScene extends Phaser.Scene {
       }),
     });
 
-    const seal = this.add.circle(source.x, source.y, 34, style.color, 0.2).setStrokeStyle(7, style.accent, 0.95)
-      .setBlendMode(Phaser.BlendModes.ADD);
-    this.effectsLayer.add(seal);
-    this.tweens.add({
-      targets: seal, scale: 2.6, rotation: Math.PI, alpha: 0,
-      duration: reducedMotion ? 100 : 520, ease: "Cubic.easeOut", onComplete: () => seal.destroy(),
-    });
-
-    const shape = ultimateShape(kind, skillName);
-    const artworkKey = shape === "shockwave" ? "fx-art-shockwave" : shape === "crescent" ? "fx-art-crescent"
-      : shape === "thrust" ? "fx-art-thrust" : "fx-art-impact";
-    const artPoint = shape === "shockwave" ? source : target;
-    this.playPaintedEffect(artworkKey, artPoint.x, artPoint.y, shape === "shockwave" ? 228 : 168,
-      Phaser.Math.Angle.Between(source.x, source.y, target.x, target.y), reducedMotion);
-    const burstCount = reducedMotion ? 1 : shape === "volley" ? 7 : shape === "shockwave" ? 3 : 4;
-    const angle = Phaser.Math.Angle.Between(source.x, source.y, target.x, target.y);
-    for (let index = 0; index < burstCount; index += 1) {
-      const stroke = this.add.graphics();
-      const color = index % 2 ? style.color : style.accent;
-      if (shape === "shockwave") {
-        stroke.lineStyle(5 - index, color, .85).strokeCircle(0, 0, 25 + index * 17);
-        stroke.setPosition(source.x, source.y);
-      } else if (shape === "crescent") {
-        stroke.lineStyle(9 - index, color, .9).beginPath().arc(0, 0, 28 + index * 7, -1.25, 1.15).strokePath();
-        stroke.setPosition(target.x, target.y).setRotation(angle - .6);
-      } else {
-        const length = shape === "volley" ? 40 : shape === "charge" ? 46 : 82;
-        stroke.lineStyle(index % 2 ? 3 : 5, color, .85).lineBetween(-length, 0, 0, 0);
-        stroke.fillStyle(style.accent, .95).fillTriangle(8, 0, -9, -5, -9, 5);
-        stroke.setPosition(shape === "volley" ? target.x - 55 + index * 13 : source.x,
-          shape === "volley" ? target.y - 100 - (index % 3) * 15 : source.y);
-        stroke.setRotation(shape === "volley" ? 1.04 : angle + (index - 1.5) * .08);
-      }
-      this.effectsLayer.add(stroke);
-      this.tweens.add({
-        targets: stroke,
-        x: shape === "shockwave" ? source.x : target.x + (shape === "volley" ? (index - 3) * 13 : 0),
-        y: shape === "shockwave" ? source.y : target.y,
-        scale: reducedMotion ? 1 : shape === "shockwave" ? 2.4 : shape === "crescent" ? 1.55 : 1,
-        alpha: 0, delay: reducedMotion ? 0 : index * 55, duration: reducedMotion ? 120 : shape === "shockwave" ? 480 : 360,
-        ease: shape === "volley" ? "Quad.easeIn" : "Cubic.easeOut", onComplete: () => stroke.destroy(),
-      });
-    }
+    this.combatVfx.cast(kind, skillName, source, target, reducedMotion);
   }
 
-  private playImpactEffect(
-    x: number,
-    y: number,
-    event: CombatEffectEvent,
-    style: ReturnType<BattleScene["attackStyle"]>,
-    angle: number,
-    reducedMotion: boolean,
-  ) {
-    this.playPaintedEffect("fx-art-impact", x, y, event.special ? 112 : 60, angle, reducedMotion);
-    const ring = this.add.circle(x, y, event.special ? 25 : 15, style.color, 0.18).setStrokeStyle(event.special ? 7 : 4, style.accent, 1);
-    this.effectsLayer.add(ring);
-    this.tweens.add({
-      targets: ring, scale: event.special ? 2.1 : 1.65, alpha: 0,
-      duration: reducedMotion ? 100 : 330, ease: "Cubic.easeOut", onComplete: () => ring.destroy(),
-    });
-
-    if (style.variant === "slash") {
-      const slash = this.add.graphics().setPosition(x, y).setRotation(angle - 0.7);
-      slash.lineStyle(event.special ? 12 : 8, style.accent, 0.95).beginPath().arc(0, 0, event.special ? 37 : 28, -1.05, 1.05).strokePath();
-      this.effectsLayer.add(slash);
-      this.tweens.add({ targets: slash, rotation: slash.rotation + 1.4, scale: 1.35, alpha: 0, duration: reducedMotion ? 90 : 280, onComplete: () => slash.destroy() });
-    } else if (style.variant === "arrow") {
-      for (let index = -1; index <= 1; index += 1) {
-        const arrow = this.add.triangle(x + index * 8, y + index * 4, -9, -5, 10, 0, -9, 5, style.accent, 0.92).setRotation(angle + index * 0.18);
-        this.effectsLayer.add(arrow);
-        this.tweens.add({ targets: arrow, alpha: 0, y: arrow.y + 12, delay: 100, duration: reducedMotion ? 90 : 330, onComplete: () => arrow.destroy() });
-      }
-    } else if (style.variant === "spear") {
-      const pierce = this.add.ellipse(x, y, event.special ? 104 : 76, event.special ? 25 : 17, style.accent, 0.62).setRotation(angle);
-      const core = this.add.circle(x, y, event.special ? 18 : 12, 0xffffff, 0.9);
-      this.effectsLayer.add([pierce, core]);
-      this.tweens.add({ targets: pierce, scaleX: 1.7, scaleY: 0.1, alpha: 0, duration: reducedMotion ? 90 : 260, onComplete: () => pierce.destroy() });
-      this.tweens.add({ targets: core, scale: 2.4, alpha: 0, duration: reducedMotion ? 90 : 220, onComplete: () => core.destroy() });
-    } else if (style.variant === "charge") {
-      for (let index = 0; index < (reducedMotion ? 3 : 7); index += 1) {
-        const puff = this.add.circle(x + (index - 3) * 6, y + 10 + (index % 3) * 4, 9 + (index % 2) * 5, index % 2 ? 0xd0b27d : 0x8f6847, 0.58);
-        this.effectsLayer.add(puff);
-        this.tweens.add({
-          targets: puff, x: puff.x + (index - 3) * 8, y: puff.y - 20 - (index % 3) * 8,
-          scale: 1.8, alpha: 0, duration: reducedMotion ? 100 : 310 + index * 18, onComplete: () => puff.destroy(),
-        });
-      }
-    }
-
-    const particleCount = reducedMotion ? 0 : this.effectsLayer.length > 64 ? 0 : event.special ? 6 : 3;
-    for (let index = 0; index < particleCount; index += 1) {
-      const particleAngle = (Math.PI * 2 * index / particleCount) + (event.id.length % 5) * 0.13;
-      const distance = (event.special ? 42 : 27) + (index % 3) * 7;
-      const particle = this.add.circle(x, y, event.special ? 5 : 3.5, index % 2 ? style.color : style.accent, 1);
-      this.effectsLayer.add(particle);
-      this.tweens.add({
-        targets: particle, x: x + Math.cos(particleAngle) * distance, y: y + Math.sin(particleAngle) * distance,
-        scale: 0.2, alpha: 0, duration: reducedMotion ? 100 : 300 + index * 12,
-        ease: "Quad.easeOut", onComplete: () => particle.destroy(),
-      });
-    }
-
-    const roundedDamage = Math.max(1, Math.round(event.damage * 10) / 10);
-    const damageLabel = `${event.special ? "绝技 " : "−"}${roundedDamage}${event.hitCount > 1 ? ` ×${event.hitCount}` : ""}`;
-    const damageText = this.add.text(x, y - 19, damageLabel, {
-      fontFamily: '"Microsoft YaHei", sans-serif', fontSize: event.special ? "27px" : "20px",
-      color: event.special ? "#fff0a8" : "#ffffff", fontStyle: "bold", stroke: "#6d2822", strokeThickness: 5,
-    }).setOrigin(0.5);
-    this.effectsLayer.add(damageText);
-    this.tweens.add({
-      targets: damageText, y: y - (event.special ? 70 : 53), alpha: 0,
-      duration: reducedMotion ? 180 : event.special ? 720 : 520, ease: "Cubic.easeOut", onComplete: () => damageText.destroy(),
-    });
-  }
-
-  private playPaintedEffect(key: string, x: number, y: number, size: number, angle: number, reducedMotion: boolean) {
-    if (!this.textures.exists(key)) return;
-    const art = this.add.image(x, y, key).setDisplaySize(size, size).setRotation(angle)
-      .setAlpha(reducedMotion ? .48 : .85).setBlendMode(Phaser.BlendModes.ADD);
-    this.effectsLayer.add(art);
-    const scale = art.scaleX;
-    this.tweens.add({
-      targets: art, scale: scale * (reducedMotion ? 1 : 1.4), alpha: 0,
-      duration: reducedMotion ? 110 : 400, ease: "Cubic.easeOut", onComplete: () => art.destroy(),
-    });
-  }
 
   private attackStyle(kind: string) {
     return battleAttackStyle(kind);
@@ -1391,7 +1187,7 @@ export class BattleScene extends Phaser.Scene {
     add(this.add.image(50, CAMP_Y + 44, IMAGE_ASSETS.ui.camp.key).setDisplaySize(72, 72));
     for (let index = 0; index < GAME_CONFIG.reserveSize; index += 1) {
       const x = CAMP_X + index * CAMP_CELL + CAMP_CELL / 2;
-      add(this.add.image(x, CAMP_Y + CAMP_CELL / 2, IMAGE_ASSETS.tiles.paper.key).setDisplaySize(CAMP_CELL - 6, CAMP_CELL - 6));
+      add(this.add.image(x, CAMP_Y + CAMP_CELL / 2, "ui-panel-light").setDisplaySize(CAMP_CELL - 6, CAMP_CELL - 6));
       add(this.add.rectangle(x, CAMP_Y + CAMP_CELL / 2, CAMP_CELL - 6, CAMP_CELL - 6, 0xffffff, 0)
         .setStrokeStyle(2, 0x756955, 0.62));
     }
@@ -1425,19 +1221,19 @@ export class BattleScene extends Phaser.Scene {
       add(token);
     }
     const enough = mine.buns + mine.reserve.length >= mine.recruitCost;
-    const button = this.add.rectangle(320, 1222, 264, 112, enough ? 0xb96549 : 0x9a8f83, 1)
-      .setStrokeStyle(5, 0xe7c57d, 1).setInteractive({ useHandCursor: enough });
+    const button = this.add.nineslice(320, 1222, "ui-recruit-red", undefined, 264, 112, 32, 32, 32, 32)
+      .setTint(enough ? 0xffffff : 0x8b9198).setInteractive({ useHandCursor: enough });
     if (enough) button.on("pointerdown", (pointer: Phaser.Input.Pointer) => this.beginRecruitPointer(pointer));
     add(button);
     add(this.add.text(320, 1202, "征 兵", { fontFamily: '"KaiTi", serif', fontSize: "42px", color: "#fff4d1", fontStyle: "bold" }).setOrigin(0.5));
     add(this.add.image(286, 1246, IMAGE_ASSETS.ui.bun.key).setDisplaySize(36, 36));
     add(this.add.text(312, 1245, String(mine.recruitCost), { fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "23px", color: "#ffe8aa", fontStyle: "bold" }).setOrigin(0, 0.5));
-    add(this.add.text(514, 1182, "馒头", { fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "17px", color: "#736957" }).setOrigin(0.5));
-    this.hudBunsText = add(this.add.text(514, 1210, String(mine.buns), { fontFamily: '"Arial", sans-serif', fontSize: "36px", color: "#85513b", fontStyle: "bold" }).setOrigin(0.5)) as Phaser.GameObjects.Text;
+    add(this.add.text(514, 1182, "军 粮", { fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "17px", color: "#b5c7cd" }).setOrigin(0.5));
+    this.hudBunsText = add(this.add.text(514, 1215, String(mine.buns), { fontFamily: '"Arial", sans-serif', fontSize: "36px", color: "#efd7a0", fontStyle: "bold" }).setOrigin(0.5)) as Phaser.GameObjects.Text;
     add(this.add.text(320, 1312, mine.reserve.length
       ? "白格布阵；营地也可移动/合成"
       : "白格布阵，绿地用铲子；点击征兵获得五枚",
-    { fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "17px", color: "#716d63", align: "center", wordWrap: { width: 590 } }).setOrigin(0.5, 0));
+    { fontFamily: '"Microsoft YaHei", sans-serif', fontSize: "17px", color: "#b5c7cd", align: "center", wordWrap: { width: 550 } }).setOrigin(0.5, 0));
   }
 
   private drawUnits(player: PlayerBattleState, mirror: boolean, draggable: boolean) {
@@ -1559,7 +1355,7 @@ export class BattleScene extends Phaser.Scene {
   private enableInspect(container: Phaser.GameObjects.Container, kind: string, level: number, selection?: BattleInspectSelection) {
     container.setInteractive(
       new Phaser.Geom.Circle(container.width / 2, container.height / 2, BATTLE_INPUT.tokenHitRadius),
-      Phaser.Geom.Circle.Contains,
+      boardTokenHitContains,
     );
     if (container.input) container.input.cursor = "pointer";
     container.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
@@ -1580,7 +1376,7 @@ export class BattleScene extends Phaser.Scene {
     container.setData({ sourceType, sourceId, kind, partIndex });
     container.setInteractive(
       new Phaser.Geom.Circle(container.width / 2, container.height / 2, BATTLE_INPUT.tokenHitRadius),
-      Phaser.Geom.Circle.Contains,
+      sourceType === "reserve" ? Phaser.Geom.Circle.Contains : boardTokenHitContains,
     );
     if (container.input) container.input.cursor = "grab";
     if (sourceType === "generalPart" && partIndex === undefined) {

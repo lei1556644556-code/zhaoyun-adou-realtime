@@ -117,16 +117,6 @@ button { touch-action: manipulation; }
 .account-strip .account-economy strong { color: #95503d; font-size: 14px; }
 
 .battle-shell { --game-width: 640px; max-width: 1080px; margin: 0 auto; }
-body:has(#battle-shell:not([hidden])) {
-  background: linear-gradient(rgba(15,32,29,.76), rgba(14,29,27,.9)), url('/assets/backgrounds/mountain-pass.webp') center / cover fixed;
-}
-.battle-shell .playfield-card { border-color: var(--battle-bronze); border-radius: 9px; box-shadow: 0 0 0 4px #23382f, 0 0 0 5px #a58854, 0 25px 70px #091813a6; }
-.battle-shell .battle-toolbar { border-color: #b89c63; background: linear-gradient(120deg, #f2e8ce, #dcd3b9); box-shadow: inset 0 1px #fff7df, 0 8px 24px #081a1455; }
-.battle-shell .tactics-panel { border-radius: 4px 4px 16px 16px; border-top: 4px solid var(--battle-bronze); background: linear-gradient(135deg, #f6efd9, #e2d9be); }
-.battle-shell .event-box { background: #314f42; border-color: #c4a260; box-shadow: inset 0 1px #ffffff12; }
-.battle-shell .event-box strong { color: #fff0ca; }
-.battle-shell .event-box span { color: #b8c8b7; }
-.battle-shell .battle-skill-dock { background: linear-gradient(100deg, #f3ead3, #e6d8b8); }
 .battle-toolbar { min-height: 52px; display: flex; align-items: center; gap: 18px; margin-bottom: 10px; padding: 8px 14px; border: 1px solid rgba(226,202,150,.4); border-radius: 10px; background: rgba(248,242,226,.96); box-shadow: 0 10px 30px rgba(0,0,0,.18); }
 .battle-toolbar > div:first-child { display: flex; flex-direction: column; }
 .battle-toolbar > div:first-child b { color: #365a4d; font-size: 16px; }

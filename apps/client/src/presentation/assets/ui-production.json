@@ -1,0 +1,617 @@
+{
+  "panel-dark": {
+    "path": "assets/ui-production/panel-dark.webp",
+    "width": 384,
+    "height": 384,
+    "bytes": 16560,
+    "source": "panels-web-v1.png",
+    "sourceHash": "5536f4731be6c149c073dbda1d847830a49f7a49b00a77a48f29458b43d7d57c",
+    "bounds": [
+      39,
+      119,
+      600,
+      652
+    ],
+    "alpha": true
+  },
+  "panel-light": {
+    "path": "assets/ui-production/panel-light.webp",
+    "width": 384,
+    "height": 384,
+    "bytes": 20694,
+    "source": "panels-web-v1.png",
+    "sourceHash": "5536f4731be6c149c073dbda1d847830a49f7a49b00a77a48f29458b43d7d57c",
+    "bounds": [
+      25,
+      119,
+      587,
+      651
+    ],
+    "alpha": true
+  },
+  "mode-blue": {
+    "path": "assets/ui-production/mode-blue.webp",
+    "width": 384,
+    "height": 260,
+    "bytes": 19928,
+    "source": "buttons-web-v2.png",
+    "sourceHash": "873eb7552d21258334c287e2a1a047192d033579b2e5c8155ae02c5f2760df32",
+    "bounds": [
+      51,
+      211,
+      589,
+      574
+    ],
+    "alpha": true
+  },
+  "mode-red": {
+    "path": "assets/ui-production/mode-red.webp",
+    "width": 384,
+    "height": 259,
+    "bytes": 18222,
+    "source": "buttons-web-v2.png",
+    "sourceHash": "873eb7552d21258334c287e2a1a047192d033579b2e5c8155ae02c5f2760df32",
+    "bounds": [
+      37,
+      211,
+      577,
+      574
+    ],
+    "alpha": true
+  },
+  "button-blue": {
+    "path": "assets/ui-production/button-blue.webp",
+    "width": 384,
+    "height": 80,
+    "bytes": 7006,
+    "source": "buttons-web-v2.png",
+    "sourceHash": "873eb7552d21258334c287e2a1a047192d033579b2e5c8155ae02c5f2760df32",
+    "bounds": [
+      47,
+      67,
+      596,
+      177
+    ],
+    "alpha": true
+  },
+  "button-red": {
+    "path": "assets/ui-production/button-red.webp",
+    "width": 384,
+    "height": 80,
+    "bytes": 6562,
+    "source": "buttons-web-v2.png",
+    "sourceHash": "873eb7552d21258334c287e2a1a047192d033579b2e5c8155ae02c5f2760df32",
+    "bounds": [
+      31,
+      67,
+      580,
+      177
+    ],
+    "alpha": true
+  },
+  "recruit-red": {
+    "path": "assets/ui-production/recruit-red.webp",
+    "width": 384,
+    "height": 134,
+    "bytes": 11732,
+    "source": "buttons-web-v2.png",
+    "sourceHash": "873eb7552d21258334c287e2a1a047192d033579b2e5c8155ae02c5f2760df32",
+    "bounds": [
+      126,
+      66,
+      520,
+      200
+    ],
+    "alpha": true
+  },
+  "button-short": {
+    "path": "assets/ui-production/button-short.webp",
+    "width": 384,
+    "height": 177,
+    "bytes": 13124,
+    "source": "buttons-web-v2.png",
+    "sourceHash": "873eb7552d21258334c287e2a1a047192d033579b2e5c8155ae02c5f2760df32",
+    "bounds": [
+      167,
+      72,
+      447,
+      198
+    ],
+    "alpha": true
+  },
+  "fx-jade": {
+    "path": "assets/ui-production/fx-jade.webp",
+    "width": 256,
+    "height": 326,
+    "bytes": 44824,
+    "source": "combat-fx-web-v2.png",
+    "sourceHash": "929024467d92203ffe21173a4ecb5941e26d5d0114b759bf29300be237f6938e",
+    "bounds": [
+      49,
+      171,
+      402,
+      622
+    ],
+    "alpha": true
+  },
+  "fx-silver": {
+    "path": "assets/ui-production/fx-silver.webp",
+    "width": 256,
+    "height": 119,
+    "bytes": 18912,
+    "source": "combat-fx-web-v2.png",
+    "sourceHash": "929024467d92203ffe21173a4ecb5941e26d5d0114b759bf29300be237f6938e",
+    "bounds": [
+      20,
+      348,
+      448,
+      544
+    ],
+    "alpha": true
+  },
+  "fx-holy": {
+    "path": "assets/ui-production/fx-holy.webp",
+    "width": 256,
+    "height": 444,
+    "bytes": 51212,
+    "source": "combat-fx-web-v2.png",
+    "sourceHash": "929024467d92203ffe21173a4ecb5941e26d5d0114b759bf29300be237f6938e",
+    "bounds": [
+      31,
+      149,
+      314,
+      644
+    ],
+    "alpha": true
+  },
+  "fx-fire": {
+    "path": "assets/ui-production/fx-fire.webp",
+    "width": 256,
+    "height": 117,
+    "bytes": 19152,
+    "source": "combat-fx-web-v2.png",
+    "sourceHash": "929024467d92203ffe21173a4ecb5941e26d5d0114b759bf29300be237f6938e",
+    "bounds": [
+      44,
+      147,
+      411,
+      312
+    ],
+    "alpha": true
+  },
+  "fx-dust": {
+    "path": "assets/ui-production/fx-dust.webp",
+    "width": 256,
+    "height": 184,
+    "bytes": 25988,
+    "source": "combat-fx-web-v2.png",
+    "sourceHash": "929024467d92203ffe21173a4ecb5941e26d5d0114b759bf29300be237f6938e",
+    "bounds": [
+      25,
+      63,
+      413,
+      341
+    ],
+    "alpha": true
+  },
+  "fx-thunder": {
+    "path": "assets/ui-production/fx-thunder.webp",
+    "width": 256,
+    "height": 240,
+    "bytes": 42202,
+    "source": "combat-fx-web-v2.png",
+    "sourceHash": "929024467d92203ffe21173a4ecb5941e26d5d0114b759bf29300be237f6938e",
+    "bounds": [
+      17,
+      56,
+      368,
+      385
+    ],
+    "alpha": true
+  },
+  "prop-0": {
+    "path": "assets/ui-production/prop-0.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 5072,
+    "source": "props-a-web-v1.png",
+    "sourceHash": "16dc88901bb961bd9647fca872dc51576a3ff7fd25f1c1e06069e341cf7d109f",
+    "bounds": [
+      69,
+      73,
+      389,
+      400
+    ],
+    "alpha": true
+  },
+  "prop-1": {
+    "path": "assets/ui-production/prop-1.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 7510,
+    "source": "props-a-web-v1.png",
+    "sourceHash": "16dc88901bb961bd9647fca872dc51576a3ff7fd25f1c1e06069e341cf7d109f",
+    "bounds": [
+      8,
+      38,
+      390,
+      404
+    ],
+    "alpha": true
+  },
+  "prop-2": {
+    "path": "assets/ui-production/prop-2.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 6124,
+    "source": "props-a-web-v1.png",
+    "sourceHash": "16dc88901bb961bd9647fca872dc51576a3ff7fd25f1c1e06069e341cf7d109f",
+    "bounds": [
+      38,
+      66,
+      371,
+      398
+    ],
+    "alpha": true
+  },
+  "prop-3": {
+    "path": "assets/ui-production/prop-3.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 9334,
+    "source": "props-a-web-v1.png",
+    "sourceHash": "16dc88901bb961bd9647fca872dc51576a3ff7fd25f1c1e06069e341cf7d109f",
+    "bounds": [
+      63,
+      43,
+      413,
+      374
+    ],
+    "alpha": true
+  },
+  "prop-4": {
+    "path": "assets/ui-production/prop-4.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 11074,
+    "source": "props-a-web-v1.png",
+    "sourceHash": "16dc88901bb961bd9647fca872dc51576a3ff7fd25f1c1e06069e341cf7d109f",
+    "bounds": [
+      29,
+      36,
+      362,
+      379
+    ],
+    "alpha": true
+  },
+  "prop-5": {
+    "path": "assets/ui-production/prop-5.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 6912,
+    "source": "props-a-web-v1.png",
+    "sourceHash": "16dc88901bb961bd9647fca872dc51576a3ff7fd25f1c1e06069e341cf7d109f",
+    "bounds": [
+      45,
+      22,
+      346,
+      364
+    ],
+    "alpha": true
+  },
+  "prop-6": {
+    "path": "assets/ui-production/prop-6.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 8432,
+    "source": "props-a-web-v1.png",
+    "sourceHash": "16dc88901bb961bd9647fca872dc51576a3ff7fd25f1c1e06069e341cf7d109f",
+    "bounds": [
+      37,
+      5,
+      414,
+      376
+    ],
+    "alpha": true
+  },
+  "prop-7": {
+    "path": "assets/ui-production/prop-7.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 5620,
+    "source": "props-a-web-v1.png",
+    "sourceHash": "16dc88901bb961bd9647fca872dc51576a3ff7fd25f1c1e06069e341cf7d109f",
+    "bounds": [
+      25,
+      66,
+      351,
+      346
+    ],
+    "alpha": true
+  },
+  "prop-8": {
+    "path": "assets/ui-production/prop-8.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 7494,
+    "source": "props-a-web-v1.png",
+    "sourceHash": "16dc88901bb961bd9647fca872dc51576a3ff7fd25f1c1e06069e341cf7d109f",
+    "bounds": [
+      10,
+      20,
+      373,
+      335
+    ],
+    "alpha": true
+  },
+  "prop-9": {
+    "path": "assets/ui-production/prop-9.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 6142,
+    "source": "props-b-web-v1.png",
+    "sourceHash": "2ca0aa6c096f29db15a268b66c2247471e0972d5ec21a43fe76ab0e8abb559d3",
+    "bounds": [
+      71,
+      36,
+      373,
+      399
+    ],
+    "alpha": true
+  },
+  "prop-10": {
+    "path": "assets/ui-production/prop-10.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 5766,
+    "source": "props-b-web-v1.png",
+    "sourceHash": "2ca0aa6c096f29db15a268b66c2247471e0972d5ec21a43fe76ab0e8abb559d3",
+    "bounds": [
+      57,
+      57,
+      365,
+      390
+    ],
+    "alpha": true
+  },
+  "prop-11": {
+    "path": "assets/ui-production/prop-11.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 8562,
+    "source": "props-b-web-v1.png",
+    "sourceHash": "2ca0aa6c096f29db15a268b66c2247471e0972d5ec21a43fe76ab0e8abb559d3",
+    "bounds": [
+      62,
+      70,
+      389,
+      399
+    ],
+    "alpha": true
+  },
+  "prop-12": {
+    "path": "assets/ui-production/prop-12.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 7782,
+    "source": "props-b-web-v1.png",
+    "sourceHash": "2ca0aa6c096f29db15a268b66c2247471e0972d5ec21a43fe76ab0e8abb559d3",
+    "bounds": [
+      45,
+      27,
+      407,
+      400
+    ],
+    "alpha": true
+  },
+  "prop-13": {
+    "path": "assets/ui-production/prop-13.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 7194,
+    "source": "props-b-web-v1.png",
+    "sourceHash": "2ca0aa6c096f29db15a268b66c2247471e0972d5ec21a43fe76ab0e8abb559d3",
+    "bounds": [
+      33,
+      22,
+      391,
+      380
+    ],
+    "alpha": true
+  },
+  "prop-14": {
+    "path": "assets/ui-production/prop-14.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 6440,
+    "source": "props-b-web-v1.png",
+    "sourceHash": "2ca0aa6c096f29db15a268b66c2247471e0972d5ec21a43fe76ab0e8abb559d3",
+    "bounds": [
+      29,
+      62,
+      391,
+      392
+    ],
+    "alpha": true
+  },
+  "prop-15": {
+    "path": "assets/ui-production/prop-15.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 7942,
+    "source": "props-b-web-v1.png",
+    "sourceHash": "2ca0aa6c096f29db15a268b66c2247471e0972d5ec21a43fe76ab0e8abb559d3",
+    "bounds": [
+      49,
+      44,
+      385,
+      357
+    ],
+    "alpha": true
+  },
+  "prop-16": {
+    "path": "assets/ui-production/prop-16.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 5960,
+    "source": "props-b-web-v1.png",
+    "sourceHash": "2ca0aa6c096f29db15a268b66c2247471e0972d5ec21a43fe76ab0e8abb559d3",
+    "bounds": [
+      60,
+      23,
+      389,
+      359
+    ],
+    "alpha": true
+  },
+  "prop-17": {
+    "path": "assets/ui-production/prop-17.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 7128,
+    "source": "props-b-web-v1.png",
+    "sourceHash": "2ca0aa6c096f29db15a268b66c2247471e0972d5ec21a43fe76ab0e8abb559d3",
+    "bounds": [
+      65,
+      19,
+      376,
+      363
+    ],
+    "alpha": true
+  },
+  "prop-18": {
+    "path": "assets/ui-production/prop-18.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 4906,
+    "source": "props-c-web-v1.png",
+    "sourceHash": "a8ec5e3bacffaf03ab6b57296d14d8b490f70dda41a0cd63fe8bd77070420775",
+    "bounds": [
+      60,
+      180,
+      389,
+      382
+    ],
+    "alpha": true
+  },
+  "prop-19": {
+    "path": "assets/ui-production/prop-19.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 4504,
+    "source": "props-c-web-v1.png",
+    "sourceHash": "a8ec5e3bacffaf03ab6b57296d14d8b490f70dda41a0cd63fe8bd77070420775",
+    "bounds": [
+      77,
+      65,
+      369,
+      409
+    ],
+    "alpha": true
+  },
+  "prop-20": {
+    "path": "assets/ui-production/prop-20.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 7158,
+    "source": "props-c-web-v1.png",
+    "sourceHash": "a8ec5e3bacffaf03ab6b57296d14d8b490f70dda41a0cd63fe8bd77070420775",
+    "bounds": [
+      70,
+      57,
+      357,
+      400
+    ],
+    "alpha": true
+  },
+  "prop-21": {
+    "path": "assets/ui-production/prop-21.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 6082,
+    "source": "props-c-web-v1.png",
+    "sourceHash": "a8ec5e3bacffaf03ab6b57296d14d8b490f70dda41a0cd63fe8bd77070420775",
+    "bounds": [
+      60,
+      44,
+      386,
+      348
+    ],
+    "alpha": true
+  },
+  "prop-22": {
+    "path": "assets/ui-production/prop-22.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 7468,
+    "source": "props-c-web-v1.png",
+    "sourceHash": "a8ec5e3bacffaf03ab6b57296d14d8b490f70dda41a0cd63fe8bd77070420775",
+    "bounds": [
+      59,
+      29,
+      402,
+      348
+    ],
+    "alpha": true
+  },
+  "prop-23": {
+    "path": "assets/ui-production/prop-23.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 6162,
+    "source": "props-c-web-v1.png",
+    "sourceHash": "a8ec5e3bacffaf03ab6b57296d14d8b490f70dda41a0cd63fe8bd77070420775",
+    "bounds": [
+      73,
+      38,
+      357,
+      363
+    ],
+    "alpha": true
+  },
+  "prop-24": {
+    "path": "assets/ui-production/prop-24.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 6916,
+    "source": "props-c-web-v1.png",
+    "sourceHash": "a8ec5e3bacffaf03ab6b57296d14d8b490f70dda41a0cd63fe8bd77070420775",
+    "bounds": [
+      49,
+      18,
+      406,
+      372
+    ],
+    "alpha": true
+  },
+  "gold": {
+    "path": "assets/ui-production/gold.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 7670,
+    "source": "props-c-web-v1.png",
+    "sourceHash": "a8ec5e3bacffaf03ab6b57296d14d8b490f70dda41a0cd63fe8bd77070420775",
+    "bounds": [
+      55,
+      63,
+      365,
+      349
+    ],
+    "alpha": true
+  },
+  "stamina": {
+    "path": "assets/ui-production/stamina.webp",
+    "width": 128,
+    "height": 128,
+    "bytes": 7292,
+    "source": "props-c-web-v1.png",
+    "sourceHash": "a8ec5e3bacffaf03ab6b57296d14d8b490f70dda41a0cd63fe8bd77070420775",
+    "bounds": [
+      33,
+      21,
+      385,
+      367
+    ],
+    "alpha": true
+  }
+}

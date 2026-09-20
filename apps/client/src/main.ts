@@ -1,4 +1,6 @@
 import "./styles.css";
+import "./presentation/ui-theme.css";
+import { propIcon, uiAssetPath, uiIcon } from "./presentation/uiArt";
 import {
   ACTIVE_PROP_IDS, BATTLE_BUFFS, BOSS_CONFIGS, GAME_CONFIG, GENERAL_EXPERIENCE, GENERAL_LEVEL_ATTACK, GENERAL_LEVEL_SPEED, GENERALS, HERO_PAIRS, MAP_LAYOUTS,
   PASSIVE_PROP_IDS, PROPS, PROP_RARITY_COLORS, PROP_RARITY_NAMES, SOLDIER_LEVEL_ATTACK,
@@ -30,11 +32,11 @@ if (!app) throw new Error("Missing #app");
 app.innerHTML = `
   <main class="site-shell">
     <section class="auth-screen" id="auth-screen">
-      <div class="auth-art" aria-hidden="true"><img src="assets/backgrounds/lobby-zhaoyun-adou.webp" alt="" /></div>
+      <div class="auth-art" aria-hidden="true"><img src="assets/backgrounds/lobby-zhaoyun-adou.webp" alt="" /><div class="world-title"><span>合字成将 · 一字定乾坤</span><b>赵云<br>与阿斗</b><small>列阵迎敌，守住最后一道城门。</small></div></div>
       <div class="auth-panel">
-        <p class="eyebrow">云端战令 · 跨设备续战</p>
-        <h1>赵云与阿斗</h1>
-        <p class="auth-lead">创建你的战场账号。密码由 Supabase Auth 加密保管，游戏进度只对当前账号开放。</p>
+        <p class="eyebrow">${uiIcon("shield")} 常山军令</p>
+        <h1>将军，请入阵</h1>
+        <p class="auth-lead">登录战令，继续你的守城征途。<br>电脑与手机共享进度。</p>
         <div class="auth-tabs" role="tablist" aria-label="账号操作">
           <button class="is-active" id="auth-login-tab" type="button" role="tab" aria-selected="true">登录</button>
           <button id="auth-register-tab" type="button" role="tab" aria-selected="false">创建账号</button>
@@ -55,27 +57,24 @@ app.innerHTML = `
     <section class="lobby" id="lobby" hidden>
       <div class="lobby-art" aria-hidden="true"><img src="assets/backgrounds/lobby-zhaoyun-adou.webp" alt="" /></div>
       <div class="lobby-copy">
-        <p class="eyebrow">1.0.9 规则复刻 · 新增实时对战</p>
-        <h1><span>合字成将 · 护住阿斗</span>赵云与阿斗</h1>
-        <div class="account-strip"><div><span>当前战令</span><strong id="player-name">未登录</strong></div><div class="account-economy"><span>金币</span><strong id="account-gold">0</strong></div><div class="account-economy"><span>体力</span><strong id="account-stamina">30/30</strong></div><div class="account-economy"><span>今日战绩</span><strong id="account-record">0胜 0负</strong></div><i id="cloud-status">云端同步中</i><button id="logout" type="button">退出账号</button></div>
+        <div class="account-strip"><div class="account-identity">${uiIcon("shield")}<span>将军战令</span><strong id="player-name">未登录</strong></div><div class="account-economy"><img src="${uiAssetPath("gold")}" alt="" /><span>金币</span><strong id="account-gold">0</strong></div><div class="account-economy"><img src="${uiAssetPath("stamina")}" alt="" /><span>体力</span><strong id="account-stamina">30/30</strong></div><div class="account-economy"><span>今日战绩</span><strong id="account-record">0胜 0负</strong></div><i id="cloud-status">云端同步中</i><button id="logout" type="button">退出账号</button></div>
+        <div class="lobby-title"><p class="eyebrow">${uiIcon("flag")} 合字成将 · 列阵守城</p><h1>赵云<span>与</span>阿斗</h1><p>一字招贤，一阵破敌。<br>和好友一起，守住阿斗。</p></div>
+        <div class="command-menu"><div class="command-heading"><span>军 令 台</span><small>选择出征方式</small></div>
+        <div class="primary-actions">
+          <button class="btn btn-primary mode-card" id="practice">${uiIcon("sword")}<span><b>人机对战</b><small>整军演武 · 随时开战</small></span><em>›</em></button>
+          <button class="btn btn-accent mode-card" id="quick">${uiIcon("crossed")}<span><b>随机匹配</b><small>棋逢对手 · 实时交锋</small></span><em>›</em></button>
+        </div>
+        <div class="room-actions">
+          <button class="btn btn-quiet" id="create-room">${uiIcon("gate")} 创建房间</button>
+          <div class="join-row"><input class="text-input room-code-input" id="room-code" maxlength="6" placeholder="输入6位房号" aria-label="房间号" /><button class="btn btn-quiet" id="join-room">加入</button></div>
+        </div>
+        <p class="lobby-note" id="lobby-note">创建房间邀请好友，双方准备后开战。</p></div>
         <details class="prop-armory" id="prop-armory">
-          <summary><span>原版道具装配</span><b id="prop-loadout-count">主动 0/2 · 被动 0/6</b></summary>
+          <summary><span>${uiIcon("chest")} 道具整备</span><b id="prop-loadout-count">主动 0/2 · 被动 0/6</b><em>展开军械库 ＋</em></summary>
           <p>只显示今天已获得的道具。原版道具每日零点清空；每局结算后进入商店，可用金币购买或直接领取原广告奖励。</p>
           <h3>主动道具（最多2件）</h3><div class="prop-picker" id="active-prop-picker"></div>
           <h3>被动道具（最多6件）</h3><div class="prop-picker" id="passive-prop-picker"></div>
         </details>
-        <div class="primary-actions">
-          <button class="btn btn-primary" id="practice">人机对战</button>
-          <button class="btn btn-accent" id="quick">随机匹配</button>
-        </div>
-        <div class="room-actions">
-          <button class="btn btn-quiet" id="create-room">创建房间</button>
-          <div class="join-row">
-            <input class="text-input room-code-input" id="room-code" maxlength="6" placeholder="输入6位房号" aria-label="房间号" />
-            <button class="btn btn-quiet" id="join-room">加入</button>
-          </div>
-        </div>
-        <p class="lobby-note" id="lobby-note">创建房间后把6位房号发给好友，也可以直接随机匹配。</p>
       </div>
     </section>
 
@@ -105,7 +104,7 @@ app.innerHTML = `
             <div class="match-ready-card">
               <p class="eyebrow">真人对战 · 开战确认</p>
               <h2 id="match-ready-title">双方准备后开战</h2>
-              <p>先确认网络和阵容。任何一方未进入或未准备，权威服务器都不会开始倒计时。</p>
+              <p>邀请好友入阵，双方准备后自动开战。<br>等待期间不会开始倒计时。</p>
               <div class="ready-roster" aria-live="polite">
                 <div id="ready-player-0"><span>玩家一</span><strong>等待进入</strong><i>未准备</i></div>
                 <div id="ready-player-1"><span>玩家二</span><strong>等待进入</strong><i>未准备</i></div>
@@ -133,7 +132,8 @@ app.innerHTML = `
           </div>
         </section>
         <aside class="tactics-panel">
-          <p class="eyebrow">战局状态</p>
+         <details class="tactics-disclosure" open><summary>${uiIcon("flag")} 战场军情 <span>收起 / 展开</span></summary><div class="tactics-content">
+          <p class="eyebrow">列阵守城</p>
           <h2 id="map-title">巨鹿</h2>
           <dl class="battle-data">
             <div><dt>当前波次</dt><dd id="wave">准备</dd></div>
@@ -154,6 +154,7 @@ app.innerHTML = `
               <li>棕路行军，白格布阵，绿地禁行。</li>
             </ol>
           </details>
+         </div></details>
         </aside>
       </div>
       <section class="unit-inspector" id="unit-inspector" aria-labelledby="unit-inspector-name" hidden>
@@ -179,10 +180,11 @@ app.innerHTML = `
       </section>
       <section class="postgame-overlay" id="postgame-overlay" role="dialog" aria-modal="true" aria-labelledby="postgame-title" hidden>
         <article class="postgame-card">
+          <div class="result-emblem" aria-hidden="true">${uiIcon("shield")}</div>
           <p class="eyebrow" id="postgame-eyebrow">战斗结算</p>
-          <h2 id="postgame-title">守城成功</h2>
+          <h2 id="postgame-title" tabindex="-1">守城成功</h2>
           <div id="result-pane" class="result-pane">
-            <div class="gold-reward"><span>本局金币</span><strong id="result-gold">20</strong></div>
+            <div class="gold-reward"><img src="${uiAssetPath("gold")}" alt="" /><span>本局金币</span><strong id="result-gold">20</strong></div>
             <p>原版胜利获得20金币、失败获得5金币；广告翻倍在网页版本改为直接领取。</p>
             <div class="postgame-actions"><button class="btn btn-quiet" id="claim-normal" type="button">领取金币</button><button class="btn btn-accent" id="claim-double" type="button">直接领取双倍（原广告）</button></div>
           </div>
@@ -199,6 +201,8 @@ app.innerHTML = `
   </main>`;
 
 const lobby = get<HTMLElement>("lobby");
+const militaryReport = document.querySelector<HTMLDetailsElement>(".tactics-disclosure")!;
+militaryReport.open = !window.matchMedia("(max-width: 880px)").matches;
 const authScreen = get<HTMLElement>("auth-screen");
 const battleShell = get<HTMLElement>("battle-shell");
 const lobbyNote = get<HTMLElement>("lobby-note");
@@ -309,7 +313,7 @@ function renderPropPicker() {
     const prop = PROPS[id]!;
     const color = PROP_RARITY_COLORS[prop.rarity];
     return `<button class="prop-card${selected ? " is-selected" : ""}" type="button" data-prop-id="${id}" style="--prop-color:${color}" aria-pressed="${selected}">
-      <span><i>${prop.name.slice(0, 1)}</i><strong>${prop.name}</strong><em>${PROP_RARITY_NAMES[prop.rarity]}</em></span>
+      <span><i>${propIcon(id)}</i><strong>${prop.name}</strong><em>${PROP_RARITY_NAMES[prop.rarity]}</em></span>
       <small>${prop.intro}</small><b>${propCooldownLabel(prop.cooldownMs)}${id === 22 ? ` · 已升至${level}级` : ""}</b>
     </button>`;
   };
@@ -357,7 +361,7 @@ function renderActiveProps() {
       supply.type = "button";
       supply.dataset.claimShovels = "";
       supply.style.setProperty("--prop-color", "#e99431");
-      supply.innerHTML = "<i>铲</i><b></b><small>直接领取·原广告</small>";
+      supply.innerHTML = `<i>${propIcon(0)}</i><b></b><small>免费补给</small>`;
       buttons.push(supply);
     }
     if (bulldozerReady) {
@@ -365,7 +369,7 @@ function renderActiveProps() {
       bulldozer.type = "button";
       bulldozer.dataset.claimBulldozer = "";
       bulldozer.style.setProperty("--prop-color", "#c46c3d");
-      bulldozer.innerHTML = "<i>车</i><b>推土车</b><small>直接出动·原广告</small>";
+      bulldozer.innerHTML = `<i>${propIcon(1)}</i><b>推土车</b><small>免费出动</small>`;
       buttons.push(bulldozer);
     }
     for (const id of active) {
@@ -375,7 +379,7 @@ function renderActiveProps() {
       button.dataset.useProp = String(id);
       button.style.setProperty("--prop-color", PROP_RARITY_COLORS[prop.rarity]);
       button.setAttribute("aria-describedby", "prop-target-hint");
-      button.innerHTML = `<i>${prop.name[0]}</i><b>${prop.name}</b><small></small>`;
+      button.innerHTML = `<i>${propIcon(id)}</i><b>${prop.name}</b><small></small>`;
       buttons.push(button);
     }
     if (buttons.length === 0) {
@@ -775,7 +779,7 @@ function battlefieldDimensions() {
   const verticalPadding = styles ? parseFloat(styles.paddingTop) + parseFloat(styles.paddingBottom) : 0;
   const singleColumn = viewportWidth <= 880;
   const shellWidth = Math.min(1080, viewportWidth - horizontalPadding);
-  const maxWidth = Math.max(180, Math.min(640, singleColumn ? shellWidth : shellWidth - 340 - 16));
+  const maxWidth = Math.max(180, Math.min(640, singleColumn ? shellWidth : shellWidth - 248 - 20));
   const skillDock = document.getElementById("battle-skill-dock");
   const availableHeight = Math.max(390, viewportHeight - verticalPadding - (toolbar?.offsetHeight ?? 52) - (skillDock?.offsetHeight ?? 0) - 10);
   const fitWidth = Math.min(maxWidth, availableHeight * GAME_CONFIG.designWidth / GAME_CONFIG.designHeight);
@@ -1147,12 +1151,12 @@ function renderShop() {
       : offer.id === 22 ? ownedLevel(22) >= 3 : ownedLevel(offer.id) > 0;
     const disabled = Boolean(offer.claimed || unavailable || (!offer.freeByAd && economy.gold < price));
     const action = offer.claimed ? "已获得" : unavailable ? "已满级/已持有" : offer.freeByAd ? "直接领取（原广告）" : `${price} 金币购买`;
-    return `<article class="shop-offer" style="--prop-color:${PROP_RARITY_COLORS[prop.rarity]}"><i>${prop.name[0]}</i><span>${PROP_RARITY_NAMES[prop.rarity]}</span><h3>${prop.name}${offer.id === 22 ? ` · 下一级${Math.min(3, ownedLevel(22) + 1)}` : ""}</h3><p>${prop.intro}</p><button type="button" data-buy-offer="${index}" ${disabled ? "disabled" : ""}>${action}</button></article>`;
+    return `<article class="shop-offer" style="--prop-color:${PROP_RARITY_COLORS[prop.rarity]}"><i>${propIcon(offer.id)}</i><span>${PROP_RARITY_NAMES[prop.rarity]}</span><h3>${prop.name}${offer.id === 22 ? ` · 下一级${Math.min(3, ownedLevel(22) + 1)}` : ""}</h3><p>${prop.intro}</p><button type="button" data-buy-offer="${index}" ${disabled ? "disabled" : ""}>${action}</button></article>`;
   }).join("");
   get("lottery-slots").innerHTML = pending.lotteryIds.map((id, index) => {
     const prop = PROPS[id]!;
     const won = pending.lotteryUsed && pending.lotteryWinnerId === id;
-    return `<span class="${won ? "is-winner" : ""}" style="--prop-color:${PROP_RARITY_COLORS[prop.rarity]}" data-lottery-index="${index}">${prop.name}</span>`;
+    return `<span class="${won ? "is-winner" : ""}" style="--prop-color:${PROP_RARITY_COLORS[prop.rarity]}" data-lottery-index="${index}">${propIcon(id)}${prop.name}</span>`;
   }).join("");
   get<HTMLButtonElement>("lottery-draw").disabled = pending.lotteryUsed || pending.lotteryIds.length === 0;
   get("lottery-draw").textContent = pending.lotteryUsed
@@ -1168,16 +1172,19 @@ function showPostgame() {
   overlay.hidden = false;
   if (economy.pendingResult) {
     const pending = economy.pendingResult;
+    overlay.dataset.outcome = pending.won ? "victory" : "defeat";
     resultPane.hidden = false; shopPane.hidden = true;
     get("postgame-eyebrow").textContent = "战斗结算";
     get("postgame-title").textContent = pending.won ? "守城成功" : "阿斗失守";
     get("result-gold").textContent = String(pending.baseReward);
   } else if (economy.pendingShop) {
+    overlay.dataset.outcome = "shop";
     resultPane.hidden = true; shopPane.hidden = false;
     get("postgame-eyebrow").textContent = "战后商店";
     get("postgame-title").textContent = "选取今日道具";
     renderShop();
   } else overlay.hidden = true;
+  if (!overlay.hidden) get("postgame-title").focus({ preventScroll: true });
 }
 
 function beginResult(next: MatchSnapshot) {
@@ -1400,6 +1407,17 @@ get<HTMLButtonElement>("match-ready").addEventListener("click", async () => {
   }
 });
 document.addEventListener("keydown", (event) => {
+  const resultDialog = get("postgame-overlay");
+  if (event.key === "Tab" && !resultDialog.hidden) {
+    const controls = [...resultDialog.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")]
+      .filter(button => button.getClientRects().length > 0);
+    const first = controls[0], last = controls.at(-1);
+    if (first && last && (!controls.includes(document.activeElement as HTMLButtonElement)
+      || (event.shiftKey && document.activeElement === first) || (!event.shiftKey && document.activeElement === last))) {
+      event.preventDefault(); (event.shiftKey ? last : first).focus();
+    }
+    return;
+  }
   if (event.key !== "Escape") return;
   if (activePropPointer) {
     const pointerId = activePropPointer.gesture.pointerId;

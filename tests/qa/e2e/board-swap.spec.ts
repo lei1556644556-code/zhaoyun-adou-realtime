@@ -22,6 +22,9 @@ test("uses the release cell for an off-center Lv.2/Lv.3 cavalry swap", async ({ 
   // 从来源棋子右缘起拖、在目标棋子左侧松手，复现截图里的斜向短拖。
   const source = await designPoint(page, 239, 800);
   const target = await designPoint(page, 245, 800);
+  await page.mouse.click(source.x, source.y);
+  await expect(page.locator("#unit-inspector-level")).toHaveText("Lv.2 / 5");
+  await page.locator("#unit-inspector-close").click();
   await page.mouse.move(source.x, source.y);
   await page.mouse.down();
   await page.mouse.move(source.x + 18, source.y, { steps: 2 });

@@ -135,6 +135,7 @@ export async function openRestoredBattle(page: Page) {
   await expect(page.locator("#battle-shell")).toBeVisible();
   await expect(page.locator("#mode-label")).toContainText("已恢复");
   await expect(page.locator("#game canvas")).toBeVisible();
+  await expect(page.locator("#game canvas")).toHaveClass(/is-battle-ready/);
 }
 
 export async function designPoint(page: Page, x: number, y: number) {
