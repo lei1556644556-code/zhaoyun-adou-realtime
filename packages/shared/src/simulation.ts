@@ -98,6 +98,16 @@ export function normalizeMatchSnapshot(snapshot: MatchSnapshotInput): MatchSnaps
       if (floor > 0) item.experience ??= floor;
     }
     for (const enemy of player.enemies) ensureEnemyMovement(normalized.mapIndex, enemy);
+    for (const phantom of player.zhaoPhantoms) {
+      if (phantom.turnPathIndex !== undefined) continue;
+      const path = expandedPath(normalized.mapIndex);
+      const target = zhaoTargetNode(normalized.mapIndex, player, path);
+      if (phantom.launchMs <= 0) phantom.pathIndex = Math.max(0,
+        Math.min(path.length - 1, phantom.pathIndex + phantom.direction));
+      phantom.turnPathIndex = phantom.direction < 0 ? 0
+        : Math.max(1, phantom.pathIndex, target ?? zhaoPointNode(path, phantom));
+      phantom.moveAccumulatorMs = 0;
+    }
   }
   if (incoming.rulesetVersion !== undefined && incoming.rulesetVersion !== RULESET_VERSION) {
     throw new RangeError(`不支持的规则版本：${String(incoming.rulesetVersion)}`);
@@ -1643,19 +1653,40 @@ function scheduleHolySword(
   }
 }
 
+function zhaoPointNode(path: Array<{ x: number; y: number }>, point: { x: number; y: number }) {
+  const x = Math.floor(point.x + .5), y = Math.floor(point.y + .5);
+  let closest = 0, distance = Infinity;
+  for (let index = 0; index < path.length; index++) {
+    const candidate = path[index]!;
+    const next = Math.abs(candidate.x - x) + Math.abs(candidate.y - y);
+    if (next < distance) { distance = next; closest = index; }
+  }
+  return closest;
+}
+
+function zhaoTargetNode(mapIndex: number, player: PlayerBattleState, path: Array<{ x: number; y: number }>) {
+  let result: number | undefined;
+  for (const enemy of player.enemies) if (enemy.hp > 0) {
+    const index = zhaoPointNode(path, enemyPathPoint(mapIndex, enemy));
+    if (result === undefined || index > result) result = index;
+  }
+  return result;
+}
+
 function scheduleZhaoPhantom(snapshot: MatchSnapshot, player: PlayerBattleState, unit: UnitState, damageValue: number) {
   const target = [...player.enemies].filter((enemy) => enemy.hp > 0).sort((a, b) => b.progress - a.progress)[0];
-  if (!target) return;
+  if (!target) return false;
   const path = expandedPath(snapshot.mapIndex);
-  const pathIndex = Math.max(1, Math.min(path.length - 1, target.pathIndex ?? Math.floor(target.progress * (path.length - 1))));
+  const pathIndex = zhaoTargetNode(snapshot.mapIndex, player, path)!;
   const point = path[pathIndex]!;
   emitGeneralSkill(snapshot, player, unit, GENERAL_SKILLS.赵云.name, target.id);
   player.zhaoPhantoms ??= [];
   player.zhaoPhantoms.push({
     id: `zhao-phantom-${unit.id}-${snapshot.tick}`, unitId: unit.id, unitKind: "赵云",
-    x: point.x, y: point.y, pathIndex, direction: -1, roundTrips: 0,
+    x: point.x, y: point.y, pathIndex, direction: -1, turnPathIndex: 0, moveAccumulatorMs: 0, roundTrips: 0,
     pulseMs: GENERAL_SKILLS.赵云.pulseMs, launchMs: 500, damage: damageValue, hitEnemyIds: [],
   });
+  return true;
 }
 
 function tickGeneralImpacts(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: number) {
@@ -1698,28 +1729,40 @@ function tickZhaoPhantoms(snapshot: MatchSnapshot, player: PlayerBattleState, de
   const path = expandedPath(snapshot.mapIndex);
   const remaining: ZhaoPhantomState[] = [];
   for (const phantom of player.zhaoPhantoms ?? []) {
+    const movingMs = Math.max(0, deltaMs - phantom.launchMs);
     phantom.launchMs = Math.max(0, phantom.launchMs - deltaMs);
-    if (phantom.launchMs > 0) { remaining.push(phantom); continue; }
-    let distanceCells = GENERAL_SKILLS.赵云.phantomSpeedPxPerSec * deltaMs / 1_000 / ORIGINAL_CELL_PX;
-    while (distanceCells > 0 && phantom.roundTrips < GENERAL_SKILLS.赵云.roundTrips) {
-      const nextIndex = phantom.pathIndex + phantom.direction;
-      if (nextIndex < 0) { phantom.direction = 1; phantom.hitEnemyIds = []; continue; }
-      if (nextIndex >= path.length) {
-        phantom.roundTrips += 1; phantom.hitEnemyIds = [];
-        if (phantom.roundTrips >= GENERAL_SKILLS.赵云.roundTrips) break;
-        phantom.direction = -1; continue;
-      }
-      const next = path[nextIndex]!;
+    if (movingMs === 0) { remaining.push(phantom); continue; }
+    // Original hn.wO/MO/AO: 5px arrival tolerance and one node transition
+    // per frame. Run at the reference 60Hz inside the deterministic 10Hz tick,
+    // not with a 30px jump that can overshoot and oscillate around a waypoint.
+    const frameMs = 1_000 / 60;
+    phantom.moveAccumulatorMs = (phantom.moveAccumulatorMs ?? 0) + movingMs;
+    const turn = (returning: boolean) => {
+      const node = zhaoTargetNode(snapshot.mapIndex, player, path) ?? zhaoPointNode(path, phantom);
+      phantom.direction = returning ? -1 : 1;
+      phantom.pathIndex = returning ? node : 0;
+      phantom.turnPathIndex = returning ? 0 : Math.max(1, node);
+      phantom.hitEnemyIds = [];
+    };
+    while (phantom.moveAccumulatorMs + 1e-8 >= frameMs && phantom.roundTrips < GENERAL_SKILLS.赵云.roundTrips) {
+      phantom.moveAccumulatorMs = Math.max(0, phantom.moveAccumulatorMs - frameMs);
+      const next = path[phantom.pathIndex]!;
       const segment = Math.hypot(next.x - phantom.x, next.y - phantom.y);
-      if (segment <= distanceCells) {
-        phantom.x = next.x; phantom.y = next.y; phantom.pathIndex = nextIndex; distanceCells -= segment;
+      if (segment <= 5 / ORIGINAL_CELL_PX) {
+        if (phantom.direction < 0) {
+          if (phantom.pathIndex > phantom.turnPathIndex!) phantom.pathIndex--;
+          if (phantom.pathIndex <= phantom.turnPathIndex!) turn(false);
+        } else if (phantom.pathIndex === phantom.turnPathIndex) {
+          phantom.roundTrips++;
+          if (phantom.roundTrips < GENERAL_SKILLS.赵云.roundTrips) turn(true);
+        } else phantom.pathIndex++;
       } else {
+        const distanceCells = GENERAL_SKILLS.赵云.phantomSpeedPxPerSec / 60 / ORIGINAL_CELL_PX;
         phantom.x += (next.x - phantom.x) / segment * distanceCells;
         phantom.y += (next.y - phantom.y) / segment * distanceCells;
-        distanceCells = 0;
       }
     }
-    phantom.pulseMs -= deltaMs;
+    phantom.pulseMs -= movingMs;
     if (phantom.pulseMs <= 0 && phantom.roundTrips < GENERAL_SKILLS.赵云.roundTrips) {
       phantom.pulseMs += GENERAL_SKILLS.赵云.pulseMs;
       const targets = player.enemies.filter((enemy) => enemy.hp > 0 && !enemyHiddenBySmoke(snapshot, player, enemy)
@@ -1910,9 +1953,10 @@ function attack(snapshot: MatchSnapshot, player: PlayerBattleState, deltaMs: num
       effect.special = true;
     }
     if (unit.kind === "赵云" && unit.attackCount >= GENERAL_SKILLS.赵云.attacks) {
-      scheduleZhaoPhantom(snapshot, player, unit, attackValue);
-      effect.special = true;
-      unit.attackCount = 0;
+      if (scheduleZhaoPhantom(snapshot, player, unit, attackValue)) {
+        effect.special = true;
+        unit.attackCount = 0;
+      }
     }
     if (unit.kind === "刘备" && unit.attackCount >= GENERAL_SKILLS.刘备.attacks) {
       scheduleHolySword(snapshot, player, unit, attackValue, target);

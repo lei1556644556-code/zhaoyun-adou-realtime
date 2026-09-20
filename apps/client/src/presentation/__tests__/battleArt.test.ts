@@ -15,6 +15,13 @@ describe("battle art, independent from rules", () => {
     expect(battleAttackStyle("刘备").variant).toBe("slash");
     expect(battleAttackStyle("unknown")).toEqual(battleAttackStyle("刀"));
   });
+  it("plays reused event IDs in a new match but not overlapping checkpoints in the same match", () => {
+    const window = new EffectEventWindow();
+    expect(window.accept("event-1", "演武场:11")).toBe(true);
+    expect(window.accept("event-1", "演武场:11")).toBe(false);
+    expect(window.accept("event-1", "演武场:12")).toBe(true);
+    expect(window.accept("event-1", "演武场:12")).toBe(false);
+  });
   it("distinguishes shockwave, volley, crescent, thrust and charge", () => {
     expect(ultimateShape("张飞", "大喝")).toBe("shockwave");
     expect(ultimateShape("黄忠", "箭雨")).toBe("volley");

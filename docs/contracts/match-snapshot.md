@@ -72,5 +72,7 @@ expect(a).toEqual(b);
 
 ## 未决问题
 
+- 2026-09-20 赵云路线状态增加可缺省 `turnPathIndex` / `moveAccumulatorMs`，保留原位迁移旧全路线幻影；新 `pathIndex` 是下一目标节点。细则见 [战斗热修合同](combat-effects-hotfix-2026-09-20.md)。共享实现不依赖渲染帧率，修复前后的程序通过 `0.6.1` 联机握手隔离。
+
 - 武将的延迟投射物、连续斩击与赵云路线幻影保存在玩家快照的 `pendingGeneralImpacts` / `zhaoPhantoms`，技能期间的普攻锁保存在 `generalSkillLockMs`；恢复后必须继续由权威 Tick 推进，客户端不得自行补算。
 - 05 模块需要按 `snapshotVersion` 做云存档迁移和不兼容版本提示。

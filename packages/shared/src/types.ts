@@ -129,7 +129,7 @@ export interface PendingGeneralImpactState {
   stunMs?: number;
 }
 
-/** 赵云幻影沿敌方完整路线往返的确定性运行时状态。 */
+/** 赵云幻影在出生侧与动态敌群节点之间往返的确定性状态。 */
 export interface ZhaoPhantomState {
   id: string;
   unitId: string;
@@ -138,6 +138,10 @@ export interface ZhaoPhantomState {
   y: number;
   pathIndex: number;
   direction: -1 | 1;
+  /** 本段折返点；缺省表示旧的全路线往返存档，规范化时迁移。 */
+  turnPathIndex?: number;
+  /** 原包 60 Hz 移动步进的余量，与渲染帧率无关。 */
+  moveAccumulatorMs?: number;
   roundTrips: number;
   pulseMs: number;
   launchMs: number;

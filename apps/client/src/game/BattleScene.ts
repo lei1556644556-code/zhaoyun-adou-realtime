@@ -83,6 +83,7 @@ export class BattleScene extends Phaser.Scene {
   private mapSignature = "";
   private staticRenderSignature = "";
   private enemyVisuals = new Map<string, EnemyVisual>();
+  private lastEnemyPositions = new Map<string, { x: number; y: number }>();
   private hudLastEventText: Phaser.GameObjects.Text | null = null;
   private hudBunsText: Phaser.GameObjects.Text | null = null;
   private ultimateBanner: Phaser.GameObjects.Container | null = null;
@@ -558,6 +559,16 @@ export class BattleScene extends Phaser.Scene {
   private onSnapshot(snapshot: MatchSnapshot, slot: PlayerSlot) {
     const previous = this.snapshot;
     const previousRoom = this.snapshot?.roomId;
+    if (previous && (previousRoom !== snapshot.roomId || previous.seed !== snapshot.seed || this.slot !== slot)) {
+      this.combatVfx.destroy();
+      this.tweens.killTweensOf(this.effectsLayer.getAll());
+      this.effectsLayer.removeAll(true);
+      this.clearEnemyVisuals();
+    }
+    this.lastEnemyPositions.clear();
+    if (previousRoom === snapshot.roomId && previous?.seed === snapshot.seed) {
+      for (const [key, visual] of this.enemyVisuals) this.lastEnemyPositions.set(key, {x:visual.root.x,y:visual.root.y});
+    }
     this.snapshot = snapshot;
     this.slot = slot;
     if (!this.activePointer || this.isDragging) this.renderState(previous, false);
@@ -1005,7 +1016,7 @@ export class BattleScene extends Phaser.Scene {
   private playBattleEvents(events: BattleEvent[]) {
     let ordinaryAttacks = 0;
     for (const event of events) {
-      if (!this.playedEffectIds.accept(event.id)) continue;
+      if (!this.playedEffectIds.accept(event.id, `${this.snapshot?.roomId}:${this.snapshot?.seed}`)) continue;
       // Cosmetic admission only: authoritative damage/state always comes from the snapshot.
       // Mark skipped events consumed so busy snapshots cannot build a delayed FX backlog.
       if (event.type === "attack") {
@@ -1051,7 +1062,8 @@ export class BattleScene extends Phaser.Scene {
         };
     const enemy = this.snapshot.players[event.slot].enemies.find(candidate => candidate.id === event.targetId);
     const targetPath = enemy ? enemyPathPoint(this.snapshot.mapIndex, enemy) : pathPoint(this.snapshot.mapIndex, event.targetProgress);
-    const visible = this.enemyVisuals.get(`${event.slot}:${event.targetId}`)?.root;
+    const visible = this.enemyVisuals.get(`${event.slot}:${event.targetId}`)?.root
+      ?? this.lastEnemyPositions.get(`${event.slot}:${event.targetId}`);
     const target = visible ? { x: visible.x, y: visible.y } : {
       x: ((mirror ? GAME_CONFIG.columns - 1 - targetPath.x : targetPath.x) + 0.5) * CELL,
       y: MAP_TOP + ((mirror ? GAME_CONFIG.rows - 1 - targetPath.y : targetPath.y) + 0.5) * CELL,
@@ -1114,7 +1126,8 @@ export class BattleScene extends Phaser.Scene {
     const source = this.effectCellPoint(event.sourceCell, event.secondaryCell, mirror);
     const enemy = this.snapshot.players[event.slot].enemies.find((candidate) => candidate.id === event.targetId);
     const path = enemy ? enemyPathPoint(this.snapshot.mapIndex, enemy) : null;
-    const visible = this.enemyVisuals.get(`${event.slot}:${event.targetId}`)?.root;
+    const visible = this.enemyVisuals.get(`${event.slot}:${event.targetId}`)?.root
+      ?? this.lastEnemyPositions.get(`${event.slot}:${event.targetId}`);
     const target = visible ? { x: visible.x, y: visible.y } : path ? {
       x: ((mirror ? GAME_CONFIG.columns - 1 - path.x : path.x) + 0.5) * CELL,
       y: MAP_TOP + ((mirror ? GAME_CONFIG.rows - 1 - path.y : path.y) + 0.5) * CELL,
@@ -1494,7 +1507,14 @@ export class BattleScene extends Phaser.Scene {
     for (const [key, visual] of this.enemyVisuals) {
       if (wanted.has(key)) continue;
       this.tweens.killTweensOf(visual.root);
-      visual.root.destroy(true);
+      const killed = this.snapshot.events.some(event => event.type === "enemy-defeated" && `${event.slot}:${event.enemyId}` === key);
+      if (killed) {
+        // The enemy is already gone from gameplay. Only its non-interactive
+        // death image lingers briefly so the attack can visibly connect.
+        visual.root.disableInteractive();
+        visual.healthBar.setVisible(false); visual.statusText.setVisible(false);
+        this.tweens.add({targets:visual.root,alpha:0,delay:260,duration:180,onComplete:()=>visual.root.destroy(true)});
+      } else visual.root.destroy(true);
       this.enemyVisuals.delete(key);
     }
   }

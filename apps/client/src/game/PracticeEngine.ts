@@ -19,7 +19,17 @@ export class PracticeEngine extends EventTarget {
     this.timer = window.setInterval(() => {
       stepMatch(this.snapshot, 1000 / GAME_CONFIG.tickHz);
       this.botTimer += 1000 / GAME_CONFIG.tickHz;
-      if (this.botTimer >= 550) { this.botTimer = 0; this.botMove(); }
+      if (this.botTimer >= 550) {
+        this.botTimer = 0;
+        const battleEvents = this.snapshot.events;
+        this.botMove();
+        // A successful bot command starts its own transition. Preserve combat
+        // from this same tick before publishing once to the renderer.
+        if (this.snapshot.events !== battleEvents) {
+          this.snapshot.events = [...battleEvents, ...this.snapshot.events];
+          this.snapshot.combatEvents = this.snapshot.events.filter(event => event.type === "attack");
+        }
+      }
       this.emit();
     }, 1000 / GAME_CONFIG.tickHz);
   }

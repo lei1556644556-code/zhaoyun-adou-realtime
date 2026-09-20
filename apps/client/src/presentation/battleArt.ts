@@ -27,8 +27,10 @@ export function ultimateShape(kind: string, skillName: string) {
 /** Keep recent IDs across snapshot overlap; never clear the entire window mid-battle. */
 export class EffectEventWindow {
   private readonly ids = new Set<string>();
+  private scope = "";
   constructor(private readonly capacity = 2048) {}
-  accept(id: string) {
+  accept(id: string, scope = "") {
+    if (scope !== this.scope) { this.ids.clear(); this.scope = scope; }
     if (this.ids.has(id)) return false;
     this.ids.add(id);
     if (this.ids.size > this.capacity) this.ids.delete(this.ids.values().next().value!);

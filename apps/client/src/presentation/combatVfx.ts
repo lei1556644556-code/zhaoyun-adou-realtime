@@ -10,14 +10,15 @@ export const COMBAT_FX_KEYS = ["fx-jade", "fx-silver", "fx-holy", "fx-fire", "fx
 /** Cosmetics only. No random simulation, damage, targeting, or network writes. */
 export class CombatVfx {
   private active = 0;
+  private readonly groups = new Set<Phaser.GameObjects.Container>();
   private readonly phantoms = new Map<string, Phaser.GameObjects.Image>();
   constructor(private readonly scene: Phaser.Scene, private readonly layer: Phaser.GameObjects.Container) {}
 
   private group(point: Point) {
     if (this.active >= 36) return null;
     const root = this.scene.add.container(point.x, point.y);
-    this.layer.add(root); this.active++;
-    root.once("destroy", () => { this.active--; });
+    this.layer.add(root); this.active++; this.groups.add(root);
+    root.once("destroy", () => { this.active--; this.groups.delete(root); });
     return root;
   }
   private paint(key: string, width: number, height = width) {
@@ -47,7 +48,7 @@ export class CombatVfx {
     g.fillStyle(0xffffff, .95).fillTriangle(-8, -2, 11, 0, -8, 2);
     root.add(g).setScale(.5);
     this.scene.tweens.add({ targets: root, scale: reduced ? .85 : 1.4, duration: reduced ? 90 : 210, ease: "Cubic.Out" });
-    this.fade(root, reduced ? 100 : 240);
+    this.fade(root, reduced ? 220 : 240);
   }
   private dust(point: Point, scale = 1) {
     const root = this.group(point); if (!root) return;
@@ -85,6 +86,16 @@ export class CombatVfx {
     g.lineStyle(2, style.accent).lineBetween(-24, 0, -32, -7).lineBetween(-24, 0, -32, 7);
     return g;
   }
+  private chargeTrail(style: Style) {
+    const g = this.scene.add.graphics();
+    for (let i = -1; i <= 1; i++) {
+      const y = i * 13;
+      g.lineStyle(i === 0 ? 5 : 3, style.accent, i === 0 ? .95 : .65)
+        .lineBetween(-36, y, 15, y).lineBetween(15, y, 2, y - 7).lineBetween(15, y, 2, y + 7);
+    }
+    g.lineStyle(5, style.color, .65).beginPath().arc(-22, 0, 24, -.9, .9).strokePath();
+    return g;
+  }
   private echo(kind: string, size: number) {
     const key = HERO_ASSET_KEYS[kind] ?? TROOP_ASSET_KEYS[kind as keyof typeof TROOP_ASSET_KEYS];
     return key ? this.paint(key, size) : this.paint("fx-silver", size, size * .3);
@@ -105,8 +116,28 @@ export class CombatVfx {
       }
       this.damage(target, event, reduced);
     };
-    if (reduced) { hit(); return; }
-    if (event.skillName === "圣剑" || event.skillName === "七进七出") { hit(); return; }
+    if (event.skillName === "七进七出") {
+      const pulse = this.group(target);
+      if (pulse) {
+        for (let i = 0; i < (reduced ? 1 : 3); i++) {
+          pulse.add(this.paint("fx-silver", 104, 50).setRotation(angle + (i - 1) * .35));
+        }
+        this.fade(pulse, reduced ? 180 : 220);
+      }
+      hit(); return;
+    }
+    if (reduced) {
+      // Reduced motion removes flourish, not essential attack feedback. A
+      // short, single linear trace still explains why the target takes damage.
+      const root = this.group(source); if (!root) { hit(); return; }
+      root.add(style.variant === "arrow" ? this.arrow(style, event.unitKind === "黄忠")
+        : style.variant === "spear" ? this.paint("fx-silver", 100, 48)
+        : style.variant === "charge" ? this.chargeTrail(style) : this.blade(style, 70)).setRotation(angle);
+      this.scene.tweens.add({ targets: root, x: target.x, y: target.y, duration: 140, ease: "Linear",
+        onComplete: () => { root.destroy(); hit(); } });
+      return;
+    }
+    if (event.skillName === "圣剑") { hit(); return; }
     if (event.skillName === "跳斩") {
       const leap = this.group(source); if (!leap) return;
       leap.add(this.echo(event.unitKind, 104)).setAlpha(.68);
@@ -119,17 +150,18 @@ export class CombatVfx {
     }
 
     // The silhouette and timing carry the identity, not just a recoloured ball.
-    const strikes = event.unitKind === "赵云" ? Math.min(5, Math.max(1, event.hitCount))
+    const requestedStrikes = event.unitKind === "赵云" ? Math.min(5, Math.max(1, event.hitCount))
       : event.unitKind === "刘备" || event.unitKind === "关兴" ? 2 : 1;
+    const strikes = Math.min(requestedStrikes, 36 - this.active);
     for (let i = 0; i < strikes; i++) {
       const root = this.group(source); if (!root) break;
       const offset = (i - (strikes - 1) / 2) * 7;
       root.x += Math.cos(angle + Math.PI / 2) * offset;
       root.y += Math.sin(angle + Math.PI / 2) * offset;
       if (style.variant === "arrow") root.add(this.arrow(style, event.unitKind === "黄忠")).setRotation(angle);
-      else if (style.variant === "spear") root.add(this.paint("fx-silver", heavy ? 132 : 95, heavy ? 43 : 28).setTint(style.accent)).setRotation(angle);
+      else if (style.variant === "spear") root.add(this.paint("fx-silver", heavy ? 132 : 105, heavy ? 64 : 50).setTint(style.accent)).setRotation(angle);
       else if (style.variant === "slash") root.add(this.blade(style, 82)).setRotation(angle - .6);
-      else { root.add(this.echo(event.unitKind, 82).setFlipX(target.x < source.x)); root.setAlpha(.62); this.dust(source, .7); }
+      else { root.add(this.chargeTrail(style)).setRotation(angle); this.dust(source, .7); }
       const windup = style.variant === "slash" ? 65 : style.variant === "arrow" ? 45 : 25;
       root.setScale(.65);
       this.scene.tweens.add({ targets: root, scale: 1, delay: i * 32, duration: windup, onComplete: () => {
@@ -182,8 +214,9 @@ export class CombatVfx {
     }
     if (shape === "phantom") {
       const root = this.group(source); if (!root) return;
-      root.add(this.echo(kind, 116).setTint(0xa3e7ff)).setAlpha(.55);
-      this.scene.tweens.add({ targets: root, y: source.y - 20, alpha: 0, duration: reduced ? 100 : 360, onComplete: () => root.destroy() });
+      root.add(this.paint("fx-silver", 130, 62)).setRotation(angle).setAlpha(.95);
+      this.scene.tweens.add({ targets: root, x: target.x, y: target.y, alpha: 0,
+        duration: reduced ? 140 : 280, ease: "Linear", onComplete: () => root.destroy() });
       return;
     }
     if (shape === "fire-rain" || shape === "volley") {
@@ -217,22 +250,31 @@ export class CombatVfx {
       const y = GAME_CONFIG.mapTop + ((mirror ? GAME_CONFIG.rows - 1 - phantom.y : phantom.y) + .5) * GAME_CONFIG.cellSize;
       let sprite = this.phantoms.get(key);
       if (!sprite) {
-        sprite = this.echo("赵云", 106).setPosition(x, y).setTint(0x99dfff).setAlpha(.64);
+        sprite = this.paint("fx-silver", 100, 48).setPosition(x, y).setAlpha(.85);
         this.layer.add(sprite); this.phantoms.set(key, sprite);
       }
-      if (!reduced && Phaser.Math.Distance.Between(sprite.x, sprite.y, x, y) > 3) {
+      const moving = Phaser.Math.Distance.Between(sprite.x, sprite.y, x, y) > 3;
+      if (moving) sprite.setRotation(Phaser.Math.Angle.Between(sprite.x, sprite.y, x, y));
+      // Long-lived simulation phantoms are not permanent running portraits.
+      // Keep the active skill readable even in reduced motion; omit only trails.
+      sprite.setVisible(phantom.launchMs <= 0 && player.phase === "battle");
+      if (!reduced && moving && phantom.launchMs <= 0 && player.phase === "battle") {
         const trail = this.group(sprite);
-        if (trail) { trail.add(this.echo("赵云", 99).setTint(0x94dfff)); trail.setAlpha(.24); this.fade(trail, 190); }
+        if (trail) {
+          trail.add(this.paint("fx-silver", 84, 40)).setRotation(sprite.rotation).setAlpha(.18);
+          this.fade(trail, 130);
+        }
       }
       this.scene.tweens.killTweensOf(sprite);
-      if (reduced) sprite.setPosition(x, y);
-      else this.scene.tweens.add({ targets: sprite, x, y, duration: 100, ease: "Linear" });
+      this.scene.tweens.add({ targets: sprite, x, y, duration: 100, ease: "Linear" });
     }
     for (const [key, sprite] of this.phantoms) if (!present.has(key)) {
       this.scene.tweens.killTweensOf(sprite); sprite.destroy(); this.phantoms.delete(key);
     }
   }
   destroy() {
+    for (const root of this.groups) { this.scene.tweens.killTweensOf(root); root.destroy(); }
+    this.groups.clear();
     for (const sprite of this.phantoms.values()) { this.scene.tweens.killTweensOf(sprite); sprite.destroy(); }
     this.phantoms.clear();
   }

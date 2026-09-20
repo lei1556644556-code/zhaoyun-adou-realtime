@@ -155,7 +155,7 @@ export const RULE_PROVENANCE = {
 } as const satisfies Record<string, RuleProvenanceEntry>;
 
 export const GAME_CONFIG = {
-  protocolVersion: "0.6.0",
+  protocolVersion: "0.6.1",
   columns: 8,
   rows: 10,
   designWidth: 640,

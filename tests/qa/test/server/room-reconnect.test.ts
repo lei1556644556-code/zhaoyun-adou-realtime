@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { io, type Socket } from "socket.io-client";
 import {
-  GAME_CONFIG, cloneSnapshot, executeCommand,
+  GAME_CONFIG, MATCH_SNAPSHOT_VERSION, RULESET_VERSION, RULES_CONFIG_SCHEMA_VERSION, cloneSnapshot, executeCommand,
   type AppliedCommandPayload, type MatchSnapshot,
 } from "@adou/shared";
 import { repositoryRoot } from "../helpers/contracts";
@@ -24,11 +24,11 @@ async function freePort() {
   });
 }
 
-async function waitForHealth() {
+async function waitForHealth(serverPort = port) {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/health`);
+      const response = await fetch(`http://127.0.0.1:${serverPort}/health`);
       if (response.ok) return;
     } catch { /* server still booting */ }
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -78,6 +78,28 @@ beforeAll(async () => {
 afterAll(() => serverProcess?.kill());
 
 describe("two-client authoritative room transport", () => {
+  it("rejects the pre-fix simulation protocol before authentication", async () => {
+    const authPort = await freePort();
+    const serverRoot = path.join(repositoryRoot, "apps/server");
+    const authServer = spawn(process.execPath, [path.join(serverRoot, "node_modules/tsx/dist/cli.mjs"), "src/index.ts"], {
+      cwd: serverRoot, stdio: ["ignore", "pipe", "pipe"],
+      env: {...process.env, NODE_ENV:"test", HOST:"127.0.0.1", PORT:String(authPort), REQUIRE_AUTH:"true",
+        SOCKET_PATH:"/socket.io", SUPABASE_URL:"https://protocol-test.invalid",
+        SUPABASE_PUBLISHABLE_KEY:"test-only", SUPABASE_SERVICE_ROLE_KEY:""},
+    });
+    try {
+      await waitForHealth(authPort);
+      for (const protocolVersion of ["0.6.0", GAME_CONFIG.protocolVersion]) {
+        const socket = io(`http://127.0.0.1:${authPort}`, {transports:["websocket"],autoConnect:false,reconnection:false,
+          auth:{protocolVersion,rulesetVersion:RULESET_VERSION,rulesSchemaVersion:RULES_CONFIG_SCHEMA_VERSION,
+            snapshotVersion:MATCH_SNAPSHOT_VERSION}});
+        try {
+          const rejection = waitForEvent<Error>(socket,"connect_error");socket.connect();
+          expect((await rejection).message).toContain(protocolVersion === "0.6.0" ? "协议版本不兼容" : "缺少登录凭证");
+        } finally {socket.disconnect();}
+      }
+    } finally {authServer.kill();}
+  });
   it("puts simultaneous quick-match requests into the same room", async () => {
     const first = connect();
     const second = connect();

@@ -33,9 +33,11 @@ describe("realtime catch-up combat events", () => {
     expect(snapshot.stateVersion).toBe(initialVersion + 2);
     expect(snapshot.combatEvents).toHaveLength(1);
     expect(snapshot.combatEvents[0]).toMatchObject({ unitId: "first-tick", targetId: "target", tick: 1 });
+    expect(snapshot.events.filter(event => event.type === "attack")).toEqual(snapshot.combatEvents);
 
     stepMatchBatch(snapshot, 1, 100);
     expect(snapshot.combatEvents).toEqual([]);
+    expect(snapshot.events.filter(event => event.type === "attack")).toEqual([]);
   });
 
   it("preserves event order and unique IDs when consecutive catch-up ticks both attack", () => {
@@ -52,5 +54,15 @@ describe("realtime catch-up combat events", () => {
         { id: "event-2", tick: 2, unitId: "second-tick" },
       ]);
     expect(new Set(snapshot.combatEvents.map((event) => event.id)).size).toBe(2);
+    expect(snapshot.events.filter(event => event.type === "attack")).toEqual(snapshot.combatEvents);
+  });
+  it("retains the killing blow when the monster is gone before publication", () => {
+    const snapshot = battleWithUnits([
+      { id: "killer", kind: "刀", level: 1, cell: cellIndex(2, 7), cooldownMs: 0, attackCount: 0 },
+    ]);
+    snapshot.players[0].enemies[0]!.hp = .1;
+    stepMatchBatch(snapshot, 3, 100);
+    expect(snapshot.players[0].enemies).toEqual([]);
+    expect(snapshot.events.some(event => event.type === "attack" && event.targetId === "target")).toBe(true);
   });
 });
